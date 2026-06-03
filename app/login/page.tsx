@@ -16,14 +16,18 @@ export default function LoginPage() {
 
   async function requestOtp(e?: React.FormEvent) {
     e?.preventDefault();
-    if (!waNumber.trim()) return;
+    const fullWaNumber = `91${waNumber}`;
+    if (waNumber.length !== 10) {
+      toast.error('Enter a valid 10-digit WhatsApp number');
+      return;
+    }
 
     setLoading(true);
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ waNumber: waNumber.trim() }),
+        body: JSON.stringify({ waNumber: fullWaNumber }),
       });
 
       const data = await res.json();
@@ -105,15 +109,20 @@ export default function LoginPage() {
                 <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                 <input
                   type="tel"
-                  placeholder="919876543210"
+                  placeholder="9876543210"
                   value={waNumber}
-                  onChange={e => setWaNumber(e.target.value)}
-                  className="input pl-9"
+                  onChange={e => {
+                    let digits = e.target.value.replace(/\D/g, '');
+                    if (digits.startsWith('91') && digits.length > 10) digits = digits.slice(2);
+                    setWaNumber(digits.slice(0, 10));
+                  }}
+                  className="input pl-16"
                   disabled={loading || !!otpSessionId}
                   autoComplete="tel"
                 />
+                <span className="absolute left-9 top-1/2 -translate-y-1/2 text-sm font-medium text-gray-500">91</span>
               </div>
-              <p className="text-xs text-gray-400 mt-1.5">Enter with country code (e.g. 919876543210)</p>
+              <p className="text-xs text-gray-400 mt-1.5">Enter your 10-digit WhatsApp number. We'll send it as 91{waNumber || 'XXXXXXXXXX'}.</p>
             </div>
 
             {otpSessionId && (
@@ -145,7 +154,7 @@ export default function LoginPage() {
 
             <button
               type="submit"
-              disabled={loading || !waNumber.trim() || (!!otpSessionId && otp.length !== 6)}
+              disabled={loading || waNumber.length !== 10 || (!!otpSessionId && otp.length !== 6)}
               className="btn-primary w-full justify-center py-3"
             >
               {loading ? (
