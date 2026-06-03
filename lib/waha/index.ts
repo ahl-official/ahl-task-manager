@@ -175,7 +175,7 @@ export function msgDailyHighPriorityTasks(input: {
     return [
       `Good morning ${input.name},`,
       ``,
-      `You have no open high-priority tasks for today.`,
+      `You have no open one-time tasks right now.`,
       ``,
       `Portal: ${PORTAL_URL}`,
     ].join('\n');
@@ -188,11 +188,51 @@ export function msgDailyHighPriorityTasks(input: {
   return [
     `Good morning ${input.name},`,
     ``,
-    `*Your top ${input.tasks.length} high-priority tasks today:*`,
+    `*Your first ${input.tasks.length} one-time tasks for today:*`,
     ``,
     ...lines,
     ``,
-    `Reply *DONE task-id* when complete, or open: ${PORTAL_URL}`,
+    `Please check the rest of your tasks on the portal: ${PORTAL_URL}`,
+  ].join('\n');
+}
+
+export function msgChecklistReminder(input: {
+  name: string;
+  category: 'Daily' | 'Weekly' | 'Monthly';
+  tasks: {
+    taskId: string;
+    description: string;
+    status: string;
+  }[];
+}): string {
+  const label = input.category === 'Daily'
+    ? 'daily tasks'
+    : input.category === 'Weekly'
+      ? 'weekly tasks'
+      : 'monthly tasks';
+
+  if (input.tasks.length === 0) {
+    return [
+      `Hi ${input.name},`,
+      ``,
+      `Your ${label} are already marked complete for this period.`,
+      ``,
+      `Portal: ${PORTAL_URL}/portal/checklist?category=${encodeURIComponent(input.category)}`,
+    ].join('\n');
+  }
+
+  const lines = input.tasks.slice(0, 5).map((task, index) =>
+    `${index + 1}. *${task.taskId}* - ${task.description}\n   ${task.status}`
+  );
+
+  return [
+    `Hi ${input.name},`,
+    ``,
+    `Please mark your ${label} complete on the portal:`,
+    ``,
+    ...lines,
+    ``,
+    `Open checklist: ${PORTAL_URL}/portal/checklist?category=${encodeURIComponent(input.category)}`,
   ].join('\n');
 }
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import Link from 'next/link';
 import { Search } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS, PRIORITY_COLORS, PRIORITY_DOT, getDueBadge } from '@/lib/utils';
 import TaskModal from './TaskModal';
@@ -15,6 +16,13 @@ interface Props {
 
 const STATUS_OPTIONS = ['all', 'Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Completed', 'Verified'];
 const CATEGORY_OPTIONS = ['all', 'Daily', 'Weekly', 'Monthly', 'One Time'];
+const CATEGORY_LABELS = {
+  Daily: 'Daily Task',
+  Weekly: 'Weekly Task',
+  Monthly: 'Monthly Task',
+  'One Time': 'One Time Task',
+} as const;
+const RECURRING_CATEGORIES = new Set(['Daily', 'Weekly', 'Monthly']);
 
 export default function TaskListClient({ tasks, role, currentUid, users = [] }: Props) {
   const [search, setSearch]         = useState('');
@@ -59,6 +67,15 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
     pending: filtered.filter(task => task.status === 'Pending Accept').length,
     active: filtered.filter(task => ['In Progress', 'Delay Requested', 'Overdue'].includes(task.status)).length,
     done: filtered.filter(task => ['Completed', 'Verified'].includes(task.status)).length,
+  };
+
+  const openTask = (task: TaskSerialized) => {
+    if (role === 'user' && RECURRING_CATEGORIES.has(task.category)) {
+      window.location.href = `/portal/checklist?category=${encodeURIComponent(task.category)}`;
+      return;
+    }
+
+    setSelected(task);
   };
 
   return (
@@ -131,7 +148,9 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
           className="input py-2 text-sm w-auto"
         >
           {CATEGORY_OPTIONS.map(c => (
-            <option key={c} value={c}>{c === 'all' ? 'All Categories' : c}</option>
+            <option key={c} value={c}>
+              {c === 'all' ? 'All Categories' : CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS]}
+            </option>
           ))}
         </select>
 
@@ -176,14 +195,16 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
                   <tr
                     key={task.taskId}
                     className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer transition-colors"
-                    onClick={() => setSelected(task)}
+                    onClick={() => openTask(task)}
                   >
                     <td className="px-4 py-3">
                       <span className="font-mono text-xs text-brand-600">{task.taskId}</span>
                     </td>
                     <td className="px-4 py-3 max-w-[240px]">
                       <p className="truncate text-gray-800 font-medium">{task.description}</p>
-                      <p className="text-xs text-gray-400">{task.category} · {task.department}</p>
+                      <p className="text-xs text-gray-400">
+                        {CATEGORY_LABELS[task.category]} - {task.department}
+                      </p>
                     </td>
                     <td className="px-4 py-3">
                       <p className="text-gray-700">{task.assignedToName}</p>
@@ -201,12 +222,23 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
                       <span className={cn('badge', due.color)}>{due.label}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <button
-                        onClick={e => { e.stopPropagation(); setSelected(task); }}
-                        className="text-xs text-brand-600 hover:underline font-medium"
-                      >
-                        View
-                      </button>
+                      <div className="flex items-center gap-3">
+                        {role === 'user' && RECURRING_CATEGORIES.has(task.category) && (
+                          <Link
+                            href={`/portal/checklist?category=${encodeURIComponent(task.category)}`}
+                            onClick={e => e.stopPropagation()}
+                            className="text-xs font-medium text-green-600 hover:underline"
+                          >
+                            Checklist
+                          </Link>
+                        )}
+                        <button
+                          onClick={e => { e.stopPropagation(); setSelected(task); }}
+                          className="text-xs text-brand-600 hover:underline font-medium"
+                        >
+                          View
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

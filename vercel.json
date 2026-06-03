@@ -7,6 +7,18 @@
     {
       "path": "/api/reminders/daily-priority",
       "schedule": "30 4 * * *"
+    },
+    {
+      "path": "/api/reminders/checklist/Daily",
+      "schedule": "30 4 * * *"
+    },
+    {
+      "path": "/api/reminders/checklist/Weekly",
+      "schedule": "30 10 * * 6"
+    },
+    {
+      "path": "/api/reminders/checklist/Monthly",
+      "schedule": "30 10 28-31 * *"
     }
   ]
 }

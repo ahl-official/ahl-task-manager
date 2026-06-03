@@ -19,7 +19,8 @@ function isAuthorized(req: NextRequest) {
 
 function taskRank(task: Task) {
   const overdueRank = task.status === 'Overdue' ? 0 : 1;
-  return `${overdueRank}-${task.endDate?.toMillis() ?? Number.MAX_SAFE_INTEGER}-${task.createdAt.toMillis()}`;
+  const priorityRank = task.priority === 'High' ? 0 : task.priority === 'Medium' ? 1 : 2;
+  return `${overdueRank}-${priorityRank}-${task.endDate?.toMillis() ?? Number.MAX_SAFE_INTEGER}-${task.createdAt.toMillis()}`;
 }
 
 export async function GET(req: NextRequest) {
@@ -44,9 +45,8 @@ export async function GET(req: NextRequest) {
         const topTasks = tasks
           .filter(task =>
             task.assignedTo === user.uid &&
-            task.priority === 'High' &&
-            OPEN_STATUSES.has(task.status) &&
-            Boolean(task.endDate)
+            task.category === 'One Time' &&
+            OPEN_STATUSES.has(task.status)
           )
           .sort((a, b) => taskRank(a).localeCompare(taskRank(b)))
           .slice(0, 5);
@@ -58,13 +58,13 @@ export async function GET(req: NextRequest) {
             tasks: topTasks.map(task => ({
               taskId: task.taskId,
               description: task.description,
-              endDate: formatDate(task.endDate?.toDate().toISOString()),
+              endDate: task.endDate ? formatDate(task.endDate.toDate().toISOString()) : 'Not set yet',
               status: task.status,
             })),
           }),
         );
 
-        await adminLog('REMINDER', `Daily high-priority summary sent to ${user.name}`, {
+        await adminLog('REMINDER', `Daily one-time task summary sent to ${user.name}`, {
           uid: user.uid,
           meta: { taskIds: topTasks.map(task => task.taskId) },
         });

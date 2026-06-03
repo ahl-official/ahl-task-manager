@@ -26,6 +26,7 @@ const ADMIN_NAV = [
 
 const USER_NAV = [
   { href: '/portal',             icon: LayoutDashboard, label: 'My Tasks'       },
+  { href: '/portal/checklist',    icon: CheckSquare,     label: 'Checklist'      },
   { href: '/portal/department',  icon: Building2,       label: 'Dept Tasks'     },
   { href: '/portal/revisions',   icon: RefreshCw,       label: 'Revisions'      },
   { href: '/portal/create-task', icon: PlusCircle,      label: 'Create Task'    },
