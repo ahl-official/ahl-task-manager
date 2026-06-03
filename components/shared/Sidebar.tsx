@@ -17,7 +17,7 @@ import type { SessionUser } from '@/types';
 const ADMIN_NAV = [
   { href: '/admin',             icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/admin/tasks',       icon: CheckSquare,     label: 'All Tasks'  },
-  { href: '/portal/checklist',   icon: CheckSquare,     label: 'Checklist'  },
+  { href: '/admin/checklist',    icon: CheckSquare,     label: 'Checklist'  },
   { href: '/admin/calendar',    icon: Calendar,        label: 'Calendar'   },
   { href: '/admin/create-task', icon: PlusCircle,      label: 'Create Task'},
   { href: '/admin/revisions',   icon: RefreshCw,       label: 'Revisions'  },
