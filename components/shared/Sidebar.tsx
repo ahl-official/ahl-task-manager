@@ -16,7 +16,7 @@ import type { SessionUser } from '@/types';
 
 const ADMIN_NAV = [
   { href: '/admin',             icon: LayoutDashboard, label: 'Dashboard' },
-  { href: '/admin/checklist',    icon: ListChecks,      label: 'Checklist'  },
+  { href: '/checklist',          icon: ListChecks,      label: 'Checklist'  },
   { href: '/admin/tasks',       icon: CheckSquare,     label: 'All Tasks'  },
   { href: '/admin/calendar',    icon: Calendar,        label: 'Calendar'   },
   { href: '/admin/create-task', icon: PlusCircle,      label: 'Create Task'},
@@ -27,7 +27,7 @@ const ADMIN_NAV = [
 
 const USER_NAV = [
   { href: '/portal',             icon: LayoutDashboard, label: 'My Tasks'       },
-  { href: '/portal/checklist',    icon: ListChecks,      label: 'Checklist'      },
+  { href: '/checklist',           icon: ListChecks,      label: 'Checklist'      },
   { href: '/portal/department',  icon: Building2,       label: 'Dept Tasks'     },
   { href: '/portal/revisions',   icon: RefreshCw,       label: 'Revisions'      },
   { href: '/portal/create-task', icon: PlusCircle,      label: 'Create Task'    },
@@ -71,7 +71,10 @@ export default function Sidebar({
       {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-0.5">
         {nav.map(({ href, icon: Icon, label }) => {
-          const active = pathname === href || (href !== '/admin' && href !== '/portal' && pathname.startsWith(href));
+          const active =
+            pathname === href ||
+            (href === '/checklist' && pathname.endsWith('/checklist')) ||
+            (href !== '/admin' && href !== '/portal' && href !== '/checklist' && pathname.startsWith(href));
           return (
             <Link
               key={href}
