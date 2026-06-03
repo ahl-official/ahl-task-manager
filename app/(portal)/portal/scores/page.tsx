@@ -1,12 +1,66 @@
 import { getSession } from '@/lib/utils/auth';
-import { adminGetScore } from '@/lib/firebase/scores';
-import { adminGetTasksByAssignee } from '@/lib/firebase/tasks';
+import { adminGetAllScores, adminGetScore } from '@/lib/firebase/scores';
+import { adminGetAllTasks, adminGetTasksByAssignee } from '@/lib/firebase/tasks';
+import { adminGetAllUsers } from '@/lib/firebase/users';
 import { Trophy, TrendingUp, CheckCircle2, Clock, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { filterScoresForSession, filterTasksForSession, filterUsersForSession } from '@/lib/utils/access';
+import ScoresClient from '@/components/shared/ScoresClient';
 
 export default async function PortalScorePage() {
   const session = await getSession();
   if (!session) return null;
+
+  if (session.role === 'leader') {
+    const [scores, tasks, users] = await Promise.all([
+      adminGetAllScores(),
+      adminGetAllTasks(),
+      adminGetAllUsers(),
+    ]);
+    const visibleScores = filterScoresForSession(session, scores);
+    const visibleTasks = filterTasksForSession(session, tasks);
+    const visibleUsers = filterUsersForSession(session, users);
+    const serializedScores = visibleScores.map(score => ({
+      ...score,
+      lastUpdated: score.lastUpdated.toDate().toISOString(),
+    }));
+    const serializedTasks = visibleTasks.map(t => ({
+      ...t,
+      startDate:   t.startDate?.toDate().toISOString() ?? null,
+      endDate:     t.endDate?.toDate().toISOString() ?? null,
+      delayedDate: t.delayedDate?.toDate().toISOString() ?? null,
+      acceptedAt:  t.acceptedAt?.toDate().toISOString() ?? null,
+      completedAt: t.completedAt?.toDate().toISOString() ?? null,
+      verifiedAt:  t.verifiedAt?.toDate().toISOString() ?? null,
+      createdAt:   t.createdAt.toDate().toISOString(),
+      updatedAt:   t.updatedAt.toDate().toISOString(),
+    }));
+    const serializedUsers = visibleUsers.map(user => ({
+      uid: user.uid,
+      name: user.name,
+      department: user.department,
+      role: user.role,
+      isActive: user.isActive,
+    }));
+
+    return (
+      <div className="p-6 space-y-5">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">Team Score</h1>
+          <p className="text-sm text-gray-500 mt-0.5">{session.department} department performance</p>
+        </div>
+        <ScoresClient
+          scores={serializedScores}
+          users={serializedUsers}
+          tasks={serializedTasks}
+          departments={[{ name: session.department }]}
+          currentUid={session.uid}
+          viewerRole="leader"
+          showDepartments
+        />
+      </div>
+    );
+  }
 
   const [score, tasks] = await Promise.all([
     adminGetScore(session.uid),
