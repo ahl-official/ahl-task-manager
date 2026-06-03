@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard, CheckSquare, Users, Calendar,
   BarChart2, RefreshCw, PlusCircle, LogOut, Menu, X,
-  Building2,
+  Building2, ListChecks,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -16,8 +16,8 @@ import type { SessionUser } from '@/types';
 
 const ADMIN_NAV = [
   { href: '/admin',             icon: LayoutDashboard, label: 'Dashboard' },
+  { href: '/admin/checklist',    icon: ListChecks,      label: 'Checklist'  },
   { href: '/admin/tasks',       icon: CheckSquare,     label: 'All Tasks'  },
-  { href: '/admin/checklist',    icon: CheckSquare,     label: 'Checklist'  },
   { href: '/admin/calendar',    icon: Calendar,        label: 'Calendar'   },
   { href: '/admin/create-task', icon: PlusCircle,      label: 'Create Task'},
   { href: '/admin/revisions',   icon: RefreshCw,       label: 'Revisions'  },
@@ -27,7 +27,7 @@ const ADMIN_NAV = [
 
 const USER_NAV = [
   { href: '/portal',             icon: LayoutDashboard, label: 'My Tasks'       },
-  { href: '/portal/checklist',    icon: CheckSquare,     label: 'Checklist'      },
+  { href: '/portal/checklist',    icon: ListChecks,      label: 'Checklist'      },
   { href: '/portal/department',  icon: Building2,       label: 'Dept Tasks'     },
   { href: '/portal/revisions',   icon: RefreshCw,       label: 'Revisions'      },
   { href: '/portal/create-task', icon: PlusCircle,      label: 'Create Task'    },
