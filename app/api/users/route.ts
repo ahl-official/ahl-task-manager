@@ -3,6 +3,7 @@ import { getSession } from '@/lib/utils/auth';
 import { adminGetAllUsers, adminCreateUser, adminGetUserByUid, adminUpdateUser, normalizeWa, waLast10 } from '@/lib/firebase/users';
 import { adminAuth } from '@/lib/firebase/admin';
 import type { AHLUser } from '@/types';
+import { filterUsersForSession } from '@/lib/utils/access';
 
 function normalizeRole(role: string | undefined) {
   return role === 'user' ? 'member' : role;
@@ -13,7 +14,7 @@ export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const users = await adminGetAllUsers();
+  const users = filterUsersForSession(session, await adminGetAllUsers());
   // Strip sensitive fields for non-admins
   const data = session.role === 'admin'
     ? users

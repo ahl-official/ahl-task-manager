@@ -3,19 +3,34 @@ import { getSession } from '@/lib/utils/auth';
 import {
   adminCreateRevision,
   adminDecideRevision,
+  adminGetAllRevisions,
   adminGetPendingRevisionsByHandoff,
   serializeRevision,
 } from '@/lib/firebase/revisions';
-import { adminGetTask, adminUpdateTaskStatus } from '@/lib/firebase/tasks';
+import { adminGetAllTasks, adminGetTask, adminUpdateTaskStatus } from '@/lib/firebase/tasks';
 import { adminLog } from '@/lib/firebase/scores';
 import { sendWhatsApp, msgRevisionRequested, msgRevisionApproved, msgRevisionRejected } from '@/lib/waha';
 import { Timestamp } from 'firebase-admin/firestore';
 import { formatDate } from '@/lib/utils';
+import { filterTasksForSession } from '@/lib/utils/access';
 
 // GET /api/revisions — get pending revisions for handoff user
 export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+  if (session.role === 'admin' || session.role === 'leader') {
+    const [allRevisions, allTasks] = await Promise.all([
+      adminGetAllRevisions(),
+      adminGetAllTasks(),
+    ]);
+    const visibleTaskIds = new Set(filterTasksForSession(session, allTasks).map(task => task.taskId));
+    const revisions = allRevisions.filter(revision =>
+      revision.status === 'pending' &&
+      visibleTaskIds.has(revision.taskId)
+    );
+    return NextResponse.json({ success: true, data: revisions.map(serializeRevision) });
+  }
 
   const revisions = await adminGetPendingRevisionsByHandoff(session.uid);
   return NextResponse.json({ success: true, data: revisions.map(serializeRevision) });

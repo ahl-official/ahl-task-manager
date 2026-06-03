@@ -5,6 +5,7 @@ import { adminIncrementScore, adminLog } from '@/lib/firebase/scores';
 import { sendWhatsApp, msgTaskAccepted, msgTaskCompleted, msgTaskVerified } from '@/lib/waha';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { TaskStatus } from '@/types';
+import { canViewTask } from '@/lib/utils/access';
 
 // GET /api/tasks/[id]
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -14,8 +15,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const task = await adminGetTask(params.id);
   if (!task) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
 
-  const isParticipant = task.assignedTo === session.uid || task.handoffUid === session.uid;
-  if (session.role !== 'admin' && !isParticipant) {
+  if (!canViewTask(session, task)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
   }
 

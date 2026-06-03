@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/utils/auth';
 import { adminGetAllScores, adminGetScore, serializeScore } from '@/lib/firebase/scores';
+import { filterScoresForSession } from '@/lib/utils/access';
 
 // GET /api/scores?uid=...
 export async function GET(req: NextRequest) {
@@ -11,18 +12,13 @@ export async function GET(req: NextRequest) {
   const uid = searchParams.get('uid');
 
   if (uid) {
-    // User can only fetch their own score unless admin
-    if (uid !== session.uid && session.role !== 'admin') {
+    const score = await adminGetScore(uid);
+    if (score && filterScoresForSession(session, [score]).length === 0) {
       return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
     }
-    const score = await adminGetScore(uid);
     return NextResponse.json({ success: true, data: score ? serializeScore(score) : null });
   }
 
-  if (session.role !== 'admin') {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
-  }
-
-  const scores = await adminGetAllScores();
+  const scores = filterScoresForSession(session, await adminGetAllScores());
   return NextResponse.json({ success: true, data: scores.map(serializeScore) });
 }

@@ -72,8 +72,14 @@ export async function adminGetChecklistTasksForCategory(category: TaskCategory) 
     OPEN_STATUSES.has(task.status)
   );
 
+  return adminGetChecklistRowsForTasks(recurring);
+}
+
+export async function adminGetChecklistRowsForTasks(tasks: Task[]) {
   const byUid = new Map<string, Task[]>();
-  recurring.forEach(task => {
+  tasks
+    .filter(task => isRecurringCategory(task.category) && OPEN_STATUSES.has(task.status))
+    .forEach(task => {
     const existing = byUid.get(task.assignedTo) ?? [];
     existing.push(task);
     byUid.set(task.assignedTo, existing);

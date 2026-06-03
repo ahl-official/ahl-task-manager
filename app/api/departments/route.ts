@@ -13,7 +13,10 @@ export async function GET() {
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
   const departments = await adminGetDepartments();
-  return NextResponse.json({ success: true, data: departments.map(serializeDepartment) });
+  const visibleDepartments = session.role === 'admin'
+    ? departments
+    : departments.filter(department => department.name === session.department);
+  return NextResponse.json({ success: true, data: visibleDepartments.map(serializeDepartment) });
 }
 
 export async function POST(req: NextRequest) {

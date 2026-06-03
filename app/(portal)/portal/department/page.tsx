@@ -1,12 +1,14 @@
 import { getSession } from '@/lib/utils/auth';
 import { adminGetAllTasks } from '@/lib/firebase/tasks';
 import TaskListClient from '@/components/shared/TaskListClient';
+import { filterTasksForSession } from '@/lib/utils/access';
 
 export default async function DepartmentTasksPage() {
   const session = await getSession();
   if (!session) return null;
 
-  const tasks = await adminGetAllTasks({ department: session.department });
+  const allTasks = await adminGetAllTasks({ department: session.department });
+  const tasks = filterTasksForSession(session, allTasks);
 
   const serialized = tasks.map(t => ({
     ...t,
@@ -23,8 +25,10 @@ export default async function DepartmentTasksPage() {
   return (
     <div className="p-6">
       <div className="mb-6">
-        <h1 className="text-xl font-semibold text-gray-900">Department Tasks</h1>
-        <p className="text-sm text-gray-500 mt-0.5">{session.department} · {tasks.length} tasks</p>
+        <h1 className="text-xl font-semibold text-gray-900">
+          {session.role === 'leader' ? 'Department Tasks' : 'My Tasks'}
+        </h1>
+        <p className="text-sm text-gray-500 mt-0.5">{session.department} - {tasks.length} tasks</p>
       </div>
       <TaskListClient tasks={serialized} role="user" currentUid={session.uid} />
     </div>

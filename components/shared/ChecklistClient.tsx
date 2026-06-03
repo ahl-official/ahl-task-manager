@@ -13,6 +13,7 @@ interface ChecklistRow {
   periodKey: string;
   completed: boolean;
   label: string;
+  canComplete: boolean;
 }
 
 const CATEGORY_OPTIONS: ChecklistCategory[] = ['Daily', 'Weekly', 'Monthly'];
@@ -146,16 +147,18 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
                 <button
                   type="button"
                   onClick={() => tick(row.task.taskId)}
-                  disabled={row.completed || ticking === row.task.taskId}
+                  disabled={row.completed || !row.canComplete || ticking === row.task.taskId}
                   className={cn(
                     'inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors',
                     row.completed
                       ? 'bg-green-100 text-green-700'
+                      : !row.canComplete
+                        ? 'bg-gray-100 text-gray-500'
                       : 'bg-brand-600 text-white hover:bg-brand-700'
                   )}
                 >
                   {ticking === row.task.taskId ? <Loader2 size={15} className="animate-spin" /> : row.completed ? <CheckCircle2 size={16} /> : <Circle size={16} />}
-                  {row.completed ? 'Completed' : 'Mark Complete'}
+                  {row.completed ? 'Completed' : row.canComplete ? 'Mark Complete' : row.task.assignedToName}
                 </button>
               </div>
             ))}

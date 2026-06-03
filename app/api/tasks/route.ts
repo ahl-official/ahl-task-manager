@@ -15,6 +15,7 @@ import {
 } from '@/lib/waha';
 import { formatDate } from '@/lib/utils';
 import { canAssignTask } from '@/lib/utils/hierarchy';
+import { filterTasksForSession } from '@/lib/utils/access';
 import { adminDb } from '@/lib/firebase/admin';
 import { adminGetUserByUid } from '@/lib/firebase/users';
 
@@ -35,8 +36,9 @@ export async function GET(req: NextRequest) {
   try {
     let tasks;
 
-    if (scope === 'all' && session.role === 'admin') {
+    if (scope === 'all') {
       tasks = await adminGetAllTasks({ status: status as any, department });
+      tasks = filterTasksForSession(session, tasks);
     } else if (scope === 'handoff') {
       tasks = await adminGetTasksByHandoff(session.uid);
     } else {

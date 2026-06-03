@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/utils/auth';
-import { adminGetTask, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetAllTasks, adminGetTask, serializeTask } from '@/lib/firebase/tasks';
 import {
   adminCompleteChecklistTask,
+  adminGetChecklistRowsForTasks,
   adminGetChecklistTasksForUser,
   getCategoryLabel,
   isRecurringCategory,
 } from '@/lib/firebase/checklist';
 import { adminIncrementScore, adminLog } from '@/lib/firebase/scores';
 import type { TaskCategory } from '@/types';
+import { filterTasksForSession } from '@/lib/utils/access';
 
 export async function GET(req: NextRequest) {
   const session = await getSession();
@@ -20,7 +22,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Invalid checklist category' }, { status: 400 });
   }
 
-  const rows = await adminGetChecklistTasksForUser(session.uid, category as TaskCategory | undefined);
+  const rows = session.role === 'admin' || session.role === 'leader'
+    ? (await adminGetChecklistRowsForTasks(
+      filterTasksForSession(
+        session,
+        (await adminGetAllTasks()).filter(task => !category || task.category === category),
+      ),
+    )).flatMap(group => group.tasks)
+    : await adminGetChecklistTasksForUser(session.uid, category as TaskCategory | undefined);
   return NextResponse.json({
     success: true,
     data: rows.map(row => ({
@@ -28,6 +37,7 @@ export async function GET(req: NextRequest) {
       periodKey: row.periodKey,
       completed: row.completed,
       label: getCategoryLabel(row.task.category),
+      canComplete: row.task.assignedTo === session.uid,
     })),
   });
 }

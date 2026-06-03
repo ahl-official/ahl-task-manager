@@ -44,7 +44,9 @@ export default function Sidebar({
   const pathname = usePathname();
   const router   = useRouter();
   const [open, setOpen] = useState(false);
-  const nav = role === 'admin' ? ADMIN_NAV : USER_NAV;
+  const nav = role === 'admin'
+    ? ADMIN_NAV
+    : USER_NAV.filter(item => item.href !== '/portal/department' || session.role === 'leader');
 
   async function handleLogout() {
     await signOut(auth);
