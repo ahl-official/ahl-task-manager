@@ -1,6 +1,6 @@
 import { getSession } from '@/lib/utils/auth';
-import { adminGetPendingRevisionsByHandoff } from '@/lib/firebase/revisions';
-import { adminGetTasksByHandoff } from '@/lib/firebase/tasks';
+import { adminGetRevisionsForUser } from '@/lib/firebase/revisions';
+import { adminGetAllTasks } from '@/lib/firebase/tasks';
 import RevisionsClient from '@/components/shared/RevisionsClient';
 
 export default async function PortalRevisionsPage() {
@@ -8,8 +8,8 @@ export default async function PortalRevisionsPage() {
   if (!session) return null;
 
   const [revisions, tasks] = await Promise.all([
-    adminGetPendingRevisionsByHandoff(session.uid),
-    adminGetTasksByHandoff(session.uid),
+    adminGetRevisionsForUser(session.uid),
+    adminGetAllTasks(),
   ]);
 
   const serializedRevisions = revisions.map(r => ({
@@ -21,8 +21,8 @@ export default async function PortalRevisionsPage() {
 
   const serializedTasks = tasks.map(t => ({
     ...t,
-    startDate:   t.startDate.toDate().toISOString(),
-    endDate:     t.endDate.toDate().toISOString(),
+    startDate:   t.startDate?.toDate().toISOString() ?? null,
+    endDate:     t.endDate?.toDate().toISOString() ?? null,
     delayedDate: t.delayedDate?.toDate().toISOString() ?? null,
     acceptedAt:  t.acceptedAt?.toDate().toISOString() ?? null,
     completedAt: t.completedAt?.toDate().toISOString() ?? null,
@@ -35,9 +35,10 @@ export default async function PortalRevisionsPage() {
     <div className="p-6">
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-gray-900">Revision Requests</h1>
-        <p className="text-sm text-gray-500 mt-0.5">{revisions.length} pending decisions</p>
+        <p className="text-sm text-gray-500 mt-0.5">{revisions.length} submitted or pending requests</p>
       </div>
-      <RevisionsClient revisions={serializedRevisions} tasks={serializedTasks} role="user" />
+      <RevisionsClient revisions={serializedRevisions} tasks={serializedTasks} role="user" currentUid={session.uid} />
     </div>
   );
 }
+

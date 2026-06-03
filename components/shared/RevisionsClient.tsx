@@ -10,9 +10,10 @@ interface Props {
   revisions: any[];
   tasks: TaskSerialized[];
   role: 'admin' | 'user';
+  currentUid?: string;
 }
 
-export default function RevisionsClient({ revisions, tasks, role }: Props) {
+export default function RevisionsClient({ revisions, tasks, role, currentUid }: Props) {
   const [loading, setLoading] = useState<string | null>(null);
 
   const taskMap = Object.fromEntries(tasks.map(t => [t.taskId, t]));
@@ -40,7 +41,7 @@ export default function RevisionsClient({ revisions, tasks, role }: Props) {
     return (
       <div className="card p-12 text-center">
         <CheckCircle2 size={40} className="mx-auto text-green-400 mb-3" />
-        <p className="text-gray-500 font-medium">No pending revision requests</p>
+        <p className="text-gray-500 font-medium">No revision requests</p>
         <p className="text-sm text-gray-400 mt-1">All clear!</p>
       </div>
     );
@@ -50,6 +51,7 @@ export default function RevisionsClient({ revisions, tasks, role }: Props) {
     <div className="space-y-3">
       {revisions.map(rev => {
         const task = taskMap[rev.taskId];
+        const canDecide = rev.status === 'pending' && (role === 'admin' || task?.handoffUid === currentUid);
         return (
           <div key={rev.id} className="card p-5">
             <div className="flex items-start justify-between gap-4">
@@ -97,7 +99,7 @@ export default function RevisionsClient({ revisions, tasks, role }: Props) {
               </div>
 
               {/* Actions */}
-              {rev.status === 'pending' && (
+              {canDecide && (
                 <div className="flex flex-col gap-2 shrink-0">
                   <button
                     onClick={() => decide(rev.id, rev.taskId, 'approved')}
@@ -124,8 +126,12 @@ export default function RevisionsClient({ revisions, tasks, role }: Props) {
                 </div>
               )}
 
-              {rev.status !== 'pending' && (
-                <span className={cn('badge text-xs', rev.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700')}>
+              {!canDecide && (
+                <span className={cn('badge text-xs',
+                  rev.status === 'approved' ? 'bg-green-100 text-green-700' :
+                  rev.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                  'bg-red-100 text-red-700'
+                )}>
                   {rev.status}
                 </span>
               )}

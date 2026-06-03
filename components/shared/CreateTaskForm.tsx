@@ -7,7 +7,7 @@ import { Loader2 } from 'lucide-react';
 import { canAssignTask, describeAssignmentRule, roleLabel } from '@/lib/utils/hierarchy';
 import type { UserRole } from '@/types';
 
-const CATEGORIES = ['Daily', 'Checklist', 'Weekly', 'Delegation', 'FMS'];
+const CATEGORIES = ['Daily', 'Weekly', 'Monthly', 'One Time'];
 const PRIORITIES = ['High', 'Medium', 'Low'];
 
 interface Props {
@@ -25,8 +25,6 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
     assignedTo:  '',
     category:    'Daily',
     priority:    'Medium',
-    startDate:   '',
-    endDate:     '',
     handoffUid:  '',
     notes:       '',
     department:  '',
@@ -46,12 +44,8 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.description || !form.assignedTo || !form.startDate || !form.endDate || !form.handoffUid) {
+    if (!form.description || !form.assignedTo || !form.handoffUid) {
       toast.error('Please fill in all required fields');
-      return;
-    }
-    if (new Date(form.endDate) < new Date(form.startDate)) {
-      toast.error('End date must be after start date');
       return;
     }
 
@@ -146,28 +140,8 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
           </select>
         </div>
 
-        {/* Start date */}
-        <div>
-          <label className="label">Start Date *</label>
-          <input
-            type="date"
-            value={form.startDate}
-            onChange={e => set('startDate', e.target.value)}
-            className="input"
-            required
-          />
-        </div>
-
-        {/* End date */}
-        <div>
-          <label className="label">End / Due Date *</label>
-          <input
-            type="date"
-            value={form.endDate}
-            onChange={e => set('endDate', e.target.value)}
-            className="input"
-            required
-          />
+        <div className="col-span-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
+          The assigned person will set the start and due date when accepting the task.
         </div>
       </div>
 

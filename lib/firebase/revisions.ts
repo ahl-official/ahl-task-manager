@@ -63,6 +63,14 @@ export async function adminGetRevisionsByTask(taskId: string): Promise<RevisionL
     .filter(r => r.taskId === taskId);
 }
 
+export async function adminGetAllRevisions(): Promise<RevisionLog[]> {
+  const snap = await adminDb
+    .collection(COL)
+    .orderBy('createdAt', 'desc')
+    .get();
+  return snap.docs.map(d => d.data() as RevisionLog);
+}
+
 export async function adminGetPendingRevisionsByHandoff(handoffUid: string): Promise<RevisionLog[]> {
   // Get all pending revisions for tasks where this user is handoff
   const snap = await adminDb
@@ -89,6 +97,24 @@ export async function adminGetPendingRevisionsByHandoff(handoffUid: string): Pro
   );
 
   return revisions.filter(r => handoffTaskIds.has(r.taskId));
+}
+
+export async function adminGetRevisionsForUser(uid: string): Promise<RevisionLog[]> {
+  const revisions = await adminGetAllRevisions();
+  const taskIds = Array.from(new Set(revisions.map(r => r.taskId)));
+  if (taskIds.length === 0) return revisions.filter(r => r.requestedBy === uid);
+
+  const taskSnaps = await Promise.all(
+    taskIds.map(id => adminDb.collection('tasks').doc(id).get())
+  );
+
+  const handoffTaskIds = new Set(
+    taskSnaps
+      .filter(s => s.exists && s.data()!.handoffUid === uid)
+      .map(s => s.id)
+  );
+
+  return revisions.filter(r => r.requestedBy === uid || handoffTaskIds.has(r.taskId));
 }
 
 export function serializeRevision(r: RevisionLog): Record<string, unknown> {

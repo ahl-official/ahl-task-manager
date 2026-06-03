@@ -16,8 +16,8 @@ export default async function PortalPage() {
 
   const serialized = tasks.map(t => ({
     ...t,
-    startDate:   t.startDate.toDate().toISOString(),
-    endDate:     t.endDate.toDate().toISOString(),
+    startDate:   t.startDate?.toDate().toISOString() ?? null,
+    endDate:     t.endDate?.toDate().toISOString() ?? null,
     delayedDate: t.delayedDate?.toDate().toISOString() ?? null,
     acceptedAt:  t.acceptedAt?.toDate().toISOString() ?? null,
     completedAt: t.completedAt?.toDate().toISOString() ?? null,
@@ -74,3 +74,4 @@ export default async function PortalPage() {
     </div>
   );
 }
+

@@ -19,18 +19,20 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
   const [showRevision, setShowRevision] = useState(false);
   const [revisionDate, setRevisionDate] = useState('');
   const [revisionReason, setRevisionReason] = useState('');
+  const [acceptStartDate, setAcceptStartDate] = useState('');
+  const [acceptEndDate, setAcceptEndDate] = useState('');
 
   const isAssignee = task.assignedTo === currentUid;
   const isHandoff  = task.handoffUid === currentUid;
   const due        = getDueBadge(task.endDate);
 
-  async function doAction(action: string) {
+  async function doAction(action: string, extra: Record<string, string> = {}) {
     setLoading(action);
     try {
       const res = await fetch(`/api/tasks/${task.taskId}`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ action }),
+        body:    JSON.stringify({ action, ...extra }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -145,10 +147,48 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
           {/* ── Actions ── */}
           <div className="border-t border-gray-100 pt-4 space-y-3">
             {/* Assignee actions */}
-            {(isAssignee || role === 'admin') && (
+            {isAssignee && (
               <div className="flex gap-2 flex-wrap">
                 {task.status === 'Pending Accept' && (
-                  <ActionButton label="Accept Task" onClick={() => doAction('accept')} loading={loading === 'accept'} color="blue" />
+                  <div className="w-full rounded-xl bg-blue-50 p-3">
+                    <p className="mb-2 text-xs font-semibold text-blue-800">Accept and set timeline</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div>
+                        <label className="label text-blue-700">Start Date</label>
+                        <input
+                          type="date"
+                          value={acceptStartDate}
+                          onChange={e => setAcceptStartDate(e.target.value)}
+                          className="input"
+                          min={new Date().toISOString().split('T')[0]}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-blue-700">Due Date</label>
+                        <input
+                          type="date"
+                          value={acceptEndDate}
+                          onChange={e => setAcceptEndDate(e.target.value)}
+                          className="input"
+                          min={acceptStartDate || new Date().toISOString().split('T')[0]}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <ActionButton
+                        label="Accept Task"
+                        onClick={() => {
+                          if (!acceptStartDate || !acceptEndDate) {
+                            toast.error('Set start and due date before accepting');
+                            return;
+                          }
+                          doAction('accept', { startDate: acceptStartDate, endDate: acceptEndDate });
+                        }}
+                        loading={loading === 'accept'}
+                        color="blue"
+                      />
+                    </div>
+                  </div>
                 )}
                 {['In Progress', 'Delay Requested'].includes(task.status) && (
                   <ActionButton label="Mark Complete" onClick={() => doAction('complete')} loading={loading === 'complete'} color="green" />
@@ -162,7 +202,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
             )}
 
             {/* ── Date Management ── */}
-            {(isAssignee || role === 'admin') && ['In Progress', 'Pending Accept'].includes(task.status) && (
+            {isAssignee && task.status === 'In Progress' && task.endDate && (
               <div className="bg-orange-50 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-xs font-semibold text-orange-800 flex items-center gap-1.5">

@@ -21,7 +21,7 @@ export interface AHLUser {
 
 // ─── Task ───────────────────────────────────────────────────────────────────
 
-export type TaskCategory = 'Daily' | 'Checklist' | 'Weekly' | 'Delegation' | 'FMS';
+export type TaskCategory = 'Daily' | 'Weekly' | 'Monthly' | 'One Time';
 export type TaskPriority = 'High' | 'Medium' | 'Low';
 export type TaskStatus =
   | 'Pending Accept'
@@ -48,8 +48,8 @@ export interface Task {
   priority: TaskPriority;
   status: TaskStatus;
   department: string;
-  startDate: FirestoreTimestamp;
-  endDate: FirestoreTimestamp;
+  startDate: FirestoreTimestamp | null;
+  endDate: FirestoreTimestamp | null;
   delayedDate: FirestoreTimestamp | null;
   delayReason: string | null;
   revisionStatus: RevisionStatus;
@@ -66,8 +66,8 @@ export interface TaskSerialized extends Omit<Task,
   'startDate' | 'endDate' | 'delayedDate' | 'acceptedAt' |
   'completedAt' | 'verifiedAt' | 'createdAt' | 'updatedAt'
 > {
-  startDate: string;
-  endDate: string;
+  startDate: string | null;
+  endDate: string | null;
   delayedDate: string | null;
   acceptedAt: string | null;
   completedAt: string | null;
@@ -81,8 +81,8 @@ export interface CreateTaskInput {
   assignedTo: string;   // uid
   category: TaskCategory;
   priority: TaskPriority;
-  startDate: string;    // ISO
-  endDate: string;      // ISO
+  startDate?: string;   // ISO, set when assignee accepts
+  endDate?: string;     // ISO, set when assignee accepts
   handoffUid: string;
   notes?: string;
   department: string;

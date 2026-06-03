@@ -32,8 +32,8 @@ export function serializeTask(task: Task): Record<string, unknown> {
   const tsToIso = (ts: { toDate: () => Date } | null) => ts ? ts.toDate().toISOString() : null;
   return {
     ...task,
-    startDate:   task.startDate.toDate().toISOString(),
-    endDate:     task.endDate.toDate().toISOString(),
+    startDate:   tsToIso(task.startDate),
+    endDate:     tsToIso(task.endDate),
     delayedDate: tsToIso(task.delayedDate),
     acceptedAt:  tsToIso(task.acceptedAt),
     completedAt: tsToIso(task.completedAt),
@@ -82,8 +82,8 @@ export async function adminCreateTask(
     priority:       input.priority,
     status:         'Pending Accept',
     department:     assignee.department,
-    startDate:      AdminTimestamp.fromDate(new Date(input.startDate)),
-    endDate:        AdminTimestamp.fromDate(new Date(input.endDate)),
+    startDate:      input.startDate ? AdminTimestamp.fromDate(new Date(input.startDate)) : null,
+    endDate:        input.endDate ? AdminTimestamp.fromDate(new Date(input.endDate)) : null,
     delayedDate:    null,
     delayReason:    null,
     revisionStatus: 'none',
@@ -163,6 +163,7 @@ export async function adminGetOverdueTasks(): Promise<Task[]> {
   return snap.docs
     .map(d => d.data() as Task)
     .filter(t =>
+      t.endDate &&
       t.endDate.toMillis() < now.toMillis() &&
       ['Pending Accept', 'In Progress'].includes(t.status)
     );
@@ -180,6 +181,7 @@ export async function adminGetTasksDueWithinHours(hours: number): Promise<Task[]
   return snap.docs
     .map(d => d.data() as Task)
     .filter(t =>
+      t.endDate &&
       t.endDate.toMillis() >= from.toMillis() &&
       t.endDate.toMillis() <= to.toMillis() &&
       ['Pending Accept', 'In Progress'].includes(t.status)

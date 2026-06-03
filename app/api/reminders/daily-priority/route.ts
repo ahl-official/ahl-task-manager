@@ -19,7 +19,7 @@ function isAuthorized(req: NextRequest) {
 
 function taskRank(task: Task) {
   const overdueRank = task.status === 'Overdue' ? 0 : 1;
-  return `${overdueRank}-${task.endDate.toMillis()}-${task.createdAt.toMillis()}`;
+  return `${overdueRank}-${task.endDate?.toMillis() ?? Number.MAX_SAFE_INTEGER}-${task.createdAt.toMillis()}`;
 }
 
 export async function GET(req: NextRequest) {
@@ -45,7 +45,8 @@ export async function GET(req: NextRequest) {
           .filter(task =>
             task.assignedTo === user.uid &&
             task.priority === 'High' &&
-            OPEN_STATUSES.has(task.status)
+            OPEN_STATUSES.has(task.status) &&
+            Boolean(task.endDate)
           )
           .sort((a, b) => taskRank(a).localeCompare(taskRank(b)))
           .slice(0, 5);
@@ -57,7 +58,7 @@ export async function GET(req: NextRequest) {
             tasks: topTasks.map(task => ({
               taskId: task.taskId,
               description: task.description,
-              endDate: formatDate(task.endDate.toDate().toISOString()),
+              endDate: formatDate(task.endDate?.toDate().toISOString()),
               status: task.status,
             })),
           }),

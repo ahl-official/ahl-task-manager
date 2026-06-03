@@ -34,6 +34,7 @@ export default function CalendarClient({ tasks, users }: Props) {
   function getTasksForDay(day: Date) {
     return filteredTasks.filter(task => {
       const date = task.delayedDate ?? task.endDate;
+      if (!date) return false;
       return isSameDay(new Date(date), day);
     });
   }

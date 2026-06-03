@@ -31,7 +31,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const task = await adminGetTask(params.id);
   if (!task) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
 
-  const { action } = await req.json();
+  const { action, startDate, endDate } = await req.json();
   const now = Timestamp.now();
 
   try {
@@ -39,7 +39,17 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (task.assignedTo !== session.uid) {
         return NextResponse.json({ success: false, error: 'Only assignee can accept' }, { status: 403 });
       }
-      await adminUpdateTaskStatus(params.id, 'In Progress', { acceptedAt: now });
+      if (!startDate || !endDate) {
+        return NextResponse.json({ success: false, error: 'Start date and due date are required when accepting' }, { status: 400 });
+      }
+      if (new Date(endDate) < new Date(startDate)) {
+        return NextResponse.json({ success: false, error: 'Due date must be after start date' }, { status: 400 });
+      }
+      await adminUpdateTaskStatus(params.id, 'In Progress', {
+        acceptedAt: now,
+        startDate: Timestamp.fromDate(new Date(startDate)),
+        endDate: Timestamp.fromDate(new Date(endDate)),
+      });
       await adminLog('TASK_ACCEPTED', `${params.id} accepted by ${session.name}`, {
         taskId: params.id, uid: session.uid,
       });
@@ -54,9 +64,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
       // Check on-time vs late
       const endDate = task.delayedDate ?? task.endDate;
-      if (now.toMillis() <= endDate.toMillis()) {
+      if (endDate && now.toMillis() <= endDate.toMillis()) {
         await adminIncrementScore(session.uid, 'onTimeCount');
-      } else {
+      } else if (endDate) {
         await adminIncrementScore(session.uid, 'lateCount');
       }
 

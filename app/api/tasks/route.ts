@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
     await adminIncrementScore(task.assignedTo, 'tasksAssigned');
 
     // WA notifications
-    const endDateStr = formatDate(task.endDate.toDate().toISOString());
+    const endDateStr = task.endDate ? formatDate(task.endDate.toDate().toISOString()) : 'Set by assignee on accept';
 
     await sendWhatsApp(
       task.assignedToWa,

@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
           msgReminder({
             taskId:      task.taskId,
             description: task.description,
-            endDate:     formatDate(task.endDate.toDate().toISOString()),
+            endDate:     formatDate(task.endDate?.toDate().toISOString()),
             urgency:     'overdue',
           }),
           task.taskId,
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
           msgReminder({
             taskId:      task.taskId,
             description: task.description,
-            endDate:     formatDate(task.endDate.toDate().toISOString()),
+            endDate:     formatDate(task.endDate?.toDate().toISOString()),
             urgency:     '48h',
           }),
           task.taskId,
@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
           msgReminder({
             taskId:      task.taskId,
             description: task.description,
-            endDate:     formatDate(task.endDate.toDate().toISOString()),
+            endDate:     formatDate(task.endDate?.toDate().toISOString()),
             urgency:     '24h',
           }),
           task.taskId,
@@ -105,7 +105,7 @@ export async function GET(req: NextRequest) {
           msgReminder({
             taskId:      task.taskId,
             description: task.description,
-            endDate:     formatDate(task.endDate.toDate().toISOString()),
+            endDate:     formatDate(task.endDate?.toDate().toISOString()),
             urgency:     'today',
           }),
           task.taskId,

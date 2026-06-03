@@ -24,10 +24,11 @@ export function formatDateTime(iso: string | null | undefined): string {
   }
 }
 
-export function getDueBadge(endDate: string): {
+export function getDueBadge(endDate: string | null | undefined): {
   label: string;
   color: string;
 } {
+  if (!endDate) return { label: 'Date pending', color: 'bg-gray-100 text-gray-600' };
   const d = new Date(endDate);
   if (isPast(d) && !isToday(d)) return { label: 'Overdue', color: 'bg-red-100 text-red-700' };
   if (isToday(d))                return { label: 'Due Today', color: 'bg-orange-100 text-orange-700' };

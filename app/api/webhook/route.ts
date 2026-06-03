@@ -129,9 +129,7 @@ async function handleAccept(from: string, uid: string, name: string, taskId: str
     await sendWhatsApp(from, `ℹ️ Task ${taskId} is already ${task.status}.`); return;
   }
 
-  await adminUpdateTaskStatus(taskId, 'In Progress', { acceptedAt: Timestamp.now() });
-  await sendWhatsApp(from, msgTaskAccepted({ taskId, assignedToName: name }));
-  await adminLog('TASK_ACCEPTED', `${taskId} accepted via WA by ${name}`, { taskId, uid });
+  await sendWhatsApp(from, `Please accept *${taskId}* in the portal so you can set the start date and due date before work begins.`);
 }
 
 async function handleDone(from: string, uid: string, name: string, taskId: string) {
@@ -149,9 +147,9 @@ async function handleDone(from: string, uid: string, name: string, taskId: strin
   await adminIncrementScore(uid, 'tasksCompleted');
 
   const endDate = task.delayedDate ?? task.endDate;
-  if (now.toMillis() <= endDate.toMillis()) {
+  if (endDate && now.toMillis() <= endDate.toMillis()) {
     await adminIncrementScore(uid, 'onTimeCount');
-  } else {
+  } else if (endDate) {
     await adminIncrementScore(uid, 'lateCount');
   }
 
@@ -187,8 +185,9 @@ async function handleStatus(from: string, uid: string) {
   }
 
   const lines = open.map(t =>
-    `• *${t.taskId}* — ${t.description.slice(0, 50)} [${t.status}] Due: ${formatDate(t.endDate.toDate().toISOString())}`
+    `• *${t.taskId}* — ${t.description.slice(0, 50)} [${t.status}] Due: ${formatDate(t.endDate?.toDate().toISOString())}`
   );
 
   await sendWhatsApp(from, [`📋 *Your Open Tasks (${open.length}):*`, '', ...lines].join('\n'));
 }
+
