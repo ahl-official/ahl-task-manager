@@ -102,13 +102,79 @@ export default function ScoresClient({
     };
   }
 
+  function sameDepartment(left?: string, right?: string) {
+    return (left ?? '').trim().toLowerCase() === (right ?? '').trim().toLowerCase();
+  }
+
+  function scoreForIdentity(identity: { uid: string; name: string; department: string }) {
+    const existing = scoreMap[identity.uid];
+    const rows = tasks.filter(task => task.assignedTo === identity.uid);
+    const completedRows = rows.filter(task => ['Completed', 'Verified'].includes(task.status));
+    const onTimeRows = completedRows.filter(task => {
+      if (!task.completedAt) return false;
+      const due = task.delayedDate ?? task.endDate;
+      return due ? new Date(task.completedAt).getTime() <= new Date(due).getTime() : true;
+    });
+    const lateRows = rows.filter(task => {
+      if (task.status === 'Overdue') return true;
+      if (!task.completedAt) return false;
+      const due = task.delayedDate ?? task.endDate;
+      return due ? new Date(task.completedAt).getTime() > new Date(due).getTime() : false;
+    });
+    const assigned = Math.max(existing?.tasksAssigned ?? rows.length, rows.length);
+    const onTime = Math.max(existing?.onTimeCount ?? 0, onTimeRows.length);
+    const monthlyScore = assigned > 0
+      ? Math.min(100, Math.max(0, Math.round((onTime / assigned) * 100)))
+      : Math.min(100, Math.max(0, existing?.monthlyScore ?? 0));
+
+    return {
+      uid: identity.uid,
+      name: identity.name || existing?.name || 'Unknown',
+      department: identity.department || existing?.department || '',
+      waNumber: existing?.waNumber ?? '',
+      tasksAssigned: assigned,
+      tasksCompleted: Math.max(existing?.tasksCompleted ?? 0, completedRows.length),
+      onTimeCount: onTime,
+      lateCount: Math.max(existing?.lateCount ?? 0, lateRows.length),
+      monthlyScore,
+      lastUpdated: existing?.lastUpdated ?? null,
+    };
+  }
+
   const departmentBlocks = departments.map(department => {
-    const departmentUsers = activeUsers.filter(user => user.department === department);
-    const departmentScores = normalizedScores.filter(score => score.department === department);
-    const userIds = new Set([
-      ...departmentUsers.map(user => user.uid),
-      ...departmentScores.map(score => score.uid),
-    ]);
+    const identities = new Map<string, { uid: string; name: string; department: string; role?: string; isActive?: boolean }>();
+
+    activeUsers
+      .filter(user => sameDepartment(user.department, department))
+      .forEach(user => identities.set(user.uid, user));
+
+    tasks
+      .filter(task => sameDepartment(task.department, department))
+      .forEach(task => {
+        if (!identities.has(task.assignedTo)) {
+          identities.set(task.assignedTo, {
+            uid: task.assignedTo,
+            name: task.assignedToName,
+            department: task.department,
+          });
+        }
+      });
+
+    normalizedScores
+      .filter(score => sameDepartment(score.department, department))
+      .forEach(score => {
+        if (!identities.has(score.uid)) {
+          identities.set(score.uid, {
+            uid: score.uid,
+            name: score.name,
+            department: score.department,
+          });
+        }
+      });
+
+    const departmentUsers = Array.from(identities.values());
+    const departmentScores = departmentUsers.map(user => scoreForIdentity(user));
+    const userIds = new Set(departmentUsers.map(user => user.uid));
     const departmentTasks = tasks.filter(task => userIds.has(task.assignedTo));
     const averageScore = departmentScores.length
       ? Math.round(departmentScores.reduce((sum, score) => sum + (score.monthlyScore ?? 0), 0) / departmentScores.length)
