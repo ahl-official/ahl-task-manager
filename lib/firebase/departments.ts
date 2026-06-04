@@ -1,5 +1,6 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
+import { handleFirestoreReadError } from './errors';
 
 const COL = 'departments';
 
@@ -22,12 +23,17 @@ export interface Department {
 }
 
 export async function adminGetDepartments(): Promise<Department[]> {
-  const snap = await adminDb.collection(COL).orderBy('name').get();
-  const custom = snap.docs.map(d => d.data() as Department);
+  try {
+    const snap = await adminDb.collection(COL).orderBy('name').get();
+    const custom = snap.docs.map(d => d.data() as Department);
 
-  return custom
-    .filter(d => d.isActive)
-    .sort((a, b) => a.name.localeCompare(b.name));
+    return custom
+      .filter(d => d.isActive)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch (err) {
+    handleFirestoreReadError('adminGetDepartments', err);
+    return [];
+  }
 }
 
 export async function adminCreateDepartment(name: string): Promise<Department> {

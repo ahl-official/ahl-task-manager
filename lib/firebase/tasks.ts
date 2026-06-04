@@ -7,6 +7,7 @@ import { db } from './client';
 import { adminDb } from './admin';
 import type { Task, TaskStatus, CreateTaskInput } from '@/types';
 import { adminGetUserByUid } from './users';
+import { handleFirestoreReadError } from './errors';
 
 const COL      = 'tasks';
 const COUNTERS = 'counters';
@@ -127,41 +128,56 @@ export async function adminGetTask(taskId: string): Promise<Task | null> {
 }
 
 export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
-  const snap = await adminDb
-    .collection(COL)
-    .orderBy('createdAt', 'desc')
-    .get();
-  return snap.docs
-    .map(d => d.data() as Task)
-    .filter(t => t.assignedTo === uid);
+  try {
+    const snap = await adminDb
+      .collection(COL)
+      .orderBy('createdAt', 'desc')
+      .get();
+    return snap.docs
+      .map(d => d.data() as Task)
+      .filter(t => t.assignedTo === uid);
+  } catch (err) {
+    handleFirestoreReadError(`adminGetTasksByAssignee(${uid})`, err);
+    return [];
+  }
 }
 
 export async function adminGetTasksByHandoff(uid: string): Promise<Task[]> {
-  const snap = await adminDb
-    .collection(COL)
-    .orderBy('createdAt', 'desc')
-    .get();
-  return snap.docs
-    .map(d => d.data() as Task)
-    .filter(t => t.handoffUid === uid);
+  try {
+    const snap = await adminDb
+      .collection(COL)
+      .orderBy('createdAt', 'desc')
+      .get();
+    return snap.docs
+      .map(d => d.data() as Task)
+      .filter(t => t.handoffUid === uid);
+  } catch (err) {
+    handleFirestoreReadError(`adminGetTasksByHandoff(${uid})`, err);
+    return [];
+  }
 }
 
 export async function adminGetAllTasks(filters?: {
   status?: TaskStatus;
   department?: string;
 }): Promise<Task[]> {
-  const snap = await adminDb.collection(COL).orderBy('createdAt', 'desc').get();
-  let tasks = snap.docs.map(d => d.data() as Task);
+  try {
+    const snap = await adminDb.collection(COL).orderBy('createdAt', 'desc').get();
+    let tasks = snap.docs.map(d => d.data() as Task);
 
-  if (filters?.status) {
-    tasks = tasks.filter(t => t.status === filters.status);
+    if (filters?.status) {
+      tasks = tasks.filter(t => t.status === filters.status);
+    }
+
+    if (filters?.department) {
+      tasks = tasks.filter(t => t.department === filters.department);
+    }
+
+    return tasks;
+  } catch (err) {
+    handleFirestoreReadError('adminGetAllTasks', err);
+    return [];
   }
-
-  if (filters?.department) {
-    tasks = tasks.filter(t => t.department === filters.department);
-  }
-
-  return tasks;
 }
 
 export async function adminGetOverdueTasks(): Promise<Task[]> {

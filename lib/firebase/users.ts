@@ -6,6 +6,7 @@ import { Timestamp as AdminTimestamp } from 'firebase-admin/firestore';
 import { db } from './client';
 import { adminDb } from './admin';
 import type { AHLUser } from '@/types';
+import { handleFirestoreReadError } from './errors';
 
 const COL = 'users';
 
@@ -87,8 +88,13 @@ export async function adminGetUserByUid(uid: string): Promise<AHLUser | null> {
 }
 
 export async function adminGetAllUsers(): Promise<AHLUser[]> {
-  const snap = await adminDb.collection(COL).orderBy('name').get();
-  return snap.docs.map(d => d.data() as AHLUser);
+  try {
+    const snap = await adminDb.collection(COL).orderBy('name').get();
+    return snap.docs.map(d => d.data() as AHLUser);
+  } catch (err) {
+    handleFirestoreReadError('adminGetAllUsers', err);
+    return [];
+  }
 }
 
 export async function adminCreateUser(user: Omit<AHLUser, 'createdAt' | 'updatedAt'>): Promise<void> {

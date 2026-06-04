@@ -1,6 +1,7 @@
 import { Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
 import type { AHLUser, UserScore, AppLog, LogType } from '@/types';
+import { handleFirestoreReadError } from './errors';
 
 // ─── Scores ─────────────────────────────────────────────────────────────────
 
@@ -88,23 +89,28 @@ export async function adminIncrementScore(
 }
 
 export async function adminGetAllScores(): Promise<UserScore[]> {
-  const [scoreSnap, userSnap] = await Promise.all([
-    adminDb.collection(SCORES).get(),
-    adminDb.collection('users').get(),
-  ]);
-  const users = userSnap.docs.map(doc => doc.data() as AHLUser);
-  const usersByUid = new Map(users.map(user => [user.uid, user]));
-  const scoresByUid = new Map(scoreSnap.docs.map(doc => [doc.id, doc.data() as UserScore]));
+  try {
+    const [scoreSnap, userSnap] = await Promise.all([
+      adminDb.collection(SCORES).get(),
+      adminDb.collection('users').get(),
+    ]);
+    const users = userSnap.docs.map(doc => doc.data() as AHLUser);
+    const usersByUid = new Map(users.map(user => [user.uid, user]));
+    const scoresByUid = new Map(scoreSnap.docs.map(doc => [doc.id, doc.data() as UserScore]));
 
-  const hydrated = users
-    .filter(user => user.isActive)
-    .map(user => normalizeScore(scoresByUid.get(user.uid) ?? { uid: user.uid }, user));
+    const hydrated = users
+      .filter(user => user.isActive)
+      .map(user => normalizeScore(scoresByUid.get(user.uid) ?? { uid: user.uid }, user));
 
-  scoreSnap.docs.forEach(doc => {
-    if (!usersByUid.has(doc.id)) hydrated.push(normalizeScore(doc.data() as UserScore));
-  });
+    scoreSnap.docs.forEach(doc => {
+      if (!usersByUid.has(doc.id)) hydrated.push(normalizeScore(doc.data() as UserScore));
+    });
 
-  return hydrated.sort((a, b) => b.monthlyScore - a.monthlyScore);
+    return hydrated.sort((a, b) => b.monthlyScore - a.monthlyScore);
+  } catch (err) {
+    handleFirestoreReadError('adminGetAllScores', err);
+    return [];
+  }
 }
 
 export async function adminGetScore(uid: string): Promise<UserScore | null> {
