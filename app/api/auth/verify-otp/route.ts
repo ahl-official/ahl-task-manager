@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { adminAuth } from '@/lib/firebase/admin';
 import { verifyOtpSession } from '@/lib/firebase/otp';
 import { adminLog } from '@/lib/firebase/scores';
+import { isFirestoreQuotaError } from '@/lib/firebase/errors';
 
 // POST /api/auth/verify-otp
 // Body: { sessionId: string, otp: string }
@@ -45,7 +46,12 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: any) {
     console.error('Verify OTP error', err);
+    if (isFirestoreQuotaError(err)) {
+      return NextResponse.json({
+        success: false,
+        error: 'Firebase quota is exhausted right now. Please try again after quota resets or billing is enabled.',
+      }, { status: 503 });
+    }
     return NextResponse.json({ success: false, error: err.message ?? 'OTP verification failed' }, { status: 401 });
   }
 }
-

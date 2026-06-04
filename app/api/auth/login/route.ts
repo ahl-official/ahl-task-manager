@@ -3,6 +3,7 @@ import { adminGetUserByWa } from '@/lib/firebase/users';
 import { adminLog } from '@/lib/firebase/scores';
 import { createOtpSession, generateOtp } from '@/lib/firebase/otp';
 import { sendWhatsApp, msgLoginOtp } from '@/lib/waha';
+import { isFirestoreQuotaError } from '@/lib/firebase/errors';
 
 // POST /api/auth/login
 // Body: { waNumber: string }
@@ -35,6 +36,12 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error('Login error', err);
+    if (isFirestoreQuotaError(err)) {
+      return NextResponse.json({
+        success: false,
+        error: 'Firebase quota is exhausted right now. Please try again after quota resets or billing is enabled.',
+      }, { status: 503 });
+    }
     return NextResponse.json({ success: false, error: 'Login failed' }, { status: 500 });
   }
 }
