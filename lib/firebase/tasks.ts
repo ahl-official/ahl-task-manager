@@ -48,7 +48,7 @@ export function serializeTask(task: Task): Record<string, unknown> {
 export async function adminCreateTask(
   input: CreateTaskInput,
   creatorUid: string,
-  creatorFallback?: { name: string },
+  creatorFallback?: { name: string; waNumber?: string; department?: string },
 ): Promise<Task> {
   const [taskId, creator, assignee, handoff] = await Promise.all([
     generateTaskId(),
@@ -61,7 +61,17 @@ export async function adminCreateTask(
     throw new Error(`Selected assignee was not found: ${input.assignedTo}`);
   }
 
-  if (!handoff) {
+  const fallbackHandoff = input.handoffUid === creatorUid && creatorFallback
+    ? {
+      uid: creatorUid,
+      name: creatorFallback.name,
+      waNumber: creatorFallback.waNumber ?? '',
+      department: creatorFallback.department ?? '',
+    }
+    : null;
+  const handoffUser = handoff ?? (input.handoffUid === creatorUid ? creator : null) ?? fallbackHandoff;
+
+  if (!handoffUser) {
     throw new Error(`Selected checker was not found: ${input.handoffUid}`);
   }
 
@@ -75,9 +85,9 @@ export async function adminCreateTask(
     assignedToWa:   assignee.waNumber,
     createdBy:      creator?.uid ?? creatorUid,
     createdByName:  creatorName,
-    handoffUid:     handoff.uid,
-    handoffName:    handoff.name,
-    handoffWa:      handoff.waNumber,
+    handoffUid:     handoffUser.uid,
+    handoffName:    handoffUser.name,
+    handoffWa:      handoffUser.waNumber,
     category:       input.category,
     priority:       input.priority,
     status:         'Pending Accept',

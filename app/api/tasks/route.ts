@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   try {
     const body = await req.json();
+    body.handoffUid = body.handoffUid || session.uid;
     const [creator, assignee] = await Promise.all([
       adminGetUserByUid(session.uid),
       adminGetUserByUid(body.assignedTo),
@@ -85,7 +86,11 @@ export async function POST(req: NextRequest) {
       }, { status: 403 });
     }
 
-    const task = await adminCreateTask(body, session.uid, { name: session.name });
+    const task = await adminCreateTask(body, session.uid, {
+      name: session.name,
+      waNumber: session.waNumber,
+      department: session.department,
+    });
 
     // Score: tasks assigned
     await adminIncrementScore(task.assignedTo, 'tasksAssigned');

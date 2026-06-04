@@ -20,12 +20,16 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const assignableUsers = users.filter(user => canAssignTask(currentUser as any, user as any));
+  const checkerUsers = [
+    { ...currentUser, isActive: true },
+    ...users.filter(user => user.uid !== currentUser.uid),
+  ];
   const [form, setForm] = useState({
     description: '',
     assignedTo:  '',
     category:    'Daily',
     priority:    'Medium',
-    handoffUid:  '',
+    handoffUid:  currentUser.uid,
     notes:       '',
     department:  '',
   });
@@ -109,11 +113,13 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
             className="input"
             required
           >
-            <option value="">Select checker…</option>
-            {users.map(u => (
-              <option key={u.uid} value={u.uid}>{u.name} ({roleLabel(u.role)})</option>
+            {checkerUsers.map(u => (
+              <option key={u.uid} value={u.uid}>
+                {u.name}{u.uid === currentUser.uid ? ' (You)' : ''} ({roleLabel(u.role)})
+              </option>
             ))}
           </select>
+          <p className="mt-1 text-[11px] text-gray-400">Defaults to the person assigning this task.</p>
         </div>
 
         {/* Category */}
