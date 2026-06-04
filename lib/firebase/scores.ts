@@ -1,10 +1,45 @@
 import { Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
-import type { UserScore, AppLog, LogType } from '@/types';
+import type { AHLUser, UserScore, AppLog, LogType } from '@/types';
 
 // ─── Scores ─────────────────────────────────────────────────────────────────
 
 const SCORES = 'scores';
+
+function blankScoreForUser(user: AHLUser): UserScore {
+  return {
+    uid: user.uid,
+    name: user.name,
+    department: user.department,
+    waNumber: user.waNumber,
+    tasksAssigned: 0,
+    tasksCompleted: 0,
+    onTimeCount: 0,
+    lateCount: 0,
+    monthlyScore: 0,
+    lastUpdated: Timestamp.now(),
+  };
+}
+
+function normalizeScore(score: Partial<UserScore>, user?: AHLUser): UserScore {
+  const tasksAssigned = Number(score.tasksAssigned ?? 0);
+  const onTimeCount = Number(score.onTimeCount ?? 0);
+  const denominator = Math.max(tasksAssigned, 1);
+  const monthlyScore = Math.min(100, Math.max(0, Math.round((onTimeCount / denominator) * 100)));
+
+  return {
+    uid: score.uid ?? user?.uid ?? '',
+    name: user?.name ?? score.name ?? '',
+    department: user?.department ?? score.department ?? '',
+    waNumber: user?.waNumber ?? score.waNumber ?? '',
+    tasksAssigned,
+    tasksCompleted: Number(score.tasksCompleted ?? 0),
+    onTimeCount,
+    lateCount: Number(score.lateCount ?? 0),
+    monthlyScore,
+    lastUpdated: score.lastUpdated ?? Timestamp.now(),
+  };
+}
 
 export async function adminIncrementScore(
   uid: string,
@@ -13,48 +48,73 @@ export async function adminIncrementScore(
   const ref = adminDb.collection(SCORES).doc(uid);
   const snap = await ref.get();
 
-  if (!snap.exists) {
-    // Initialize score doc if missing
-    const userSnap = await adminDb.collection('users').doc(uid).get();
-    const user = userSnap.data();
+  const userSnap = await adminDb.collection('users').doc(uid).get();
+  const user = userSnap.data() as AHLUser | undefined;
+
+  if (!snap.exists && user) await ref.set(blankScoreForUser(user));
+  if (!snap.exists && !user) {
     await ref.set({
       uid,
-      name:           user?.name ?? '',
-      department:     user?.department ?? '',
-      waNumber:       user?.waNumber ?? '',
-      tasksAssigned:  0,
+      name: '',
+      department: '',
+      waNumber: '',
+      tasksAssigned: 0,
       tasksCompleted: 0,
-      onTimeCount:    0,
-      lateCount:      0,
-      monthlyScore:   0,
-      lastUpdated:    Timestamp.now(),
+      onTimeCount: 0,
+      lateCount: 0,
+      monthlyScore: 0,
+      lastUpdated: Timestamp.now(),
     });
   }
 
   await ref.update({
     [field]:     FieldValue.increment(1),
+    ...(user ? {
+      name: user.name,
+      department: user.department,
+      waNumber: user.waNumber,
+    } : {}),
     lastUpdated: Timestamp.now(),
   });
 
   // Recalculate monthlyScore
   const updated = await ref.get();
   const data = updated.data()!;
-  const assigned  = data.tasksAssigned || 1;
-  const completed = data.tasksCompleted || 0;
-  const onTime    = data.onTimeCount || 0;
-  const score     = Math.round((onTime / assigned) * 100);
+  const assigned = Math.max(Number(data.tasksAssigned ?? 0), 1);
+  const onTime = Number(data.onTimeCount ?? 0);
+  const score = Math.min(100, Math.max(0, Math.round((onTime / assigned) * 100)));
 
   await ref.update({ monthlyScore: score });
 }
 
 export async function adminGetAllScores(): Promise<UserScore[]> {
-  const snap = await adminDb.collection(SCORES).orderBy('monthlyScore', 'desc').get();
-  return snap.docs.map(d => d.data() as UserScore);
+  const [scoreSnap, userSnap] = await Promise.all([
+    adminDb.collection(SCORES).get(),
+    adminDb.collection('users').get(),
+  ]);
+  const users = userSnap.docs.map(doc => doc.data() as AHLUser);
+  const usersByUid = new Map(users.map(user => [user.uid, user]));
+  const scoresByUid = new Map(scoreSnap.docs.map(doc => [doc.id, doc.data() as UserScore]));
+
+  const hydrated = users
+    .filter(user => user.isActive)
+    .map(user => normalizeScore(scoresByUid.get(user.uid) ?? { uid: user.uid }, user));
+
+  scoreSnap.docs.forEach(doc => {
+    if (!usersByUid.has(doc.id)) hydrated.push(normalizeScore(doc.data() as UserScore));
+  });
+
+  return hydrated.sort((a, b) => b.monthlyScore - a.monthlyScore);
 }
 
 export async function adminGetScore(uid: string): Promise<UserScore | null> {
-  const snap = await adminDb.collection(SCORES).doc(uid).get();
-  return snap.exists ? snap.data() as UserScore : null;
+  const [scoreSnap, userSnap] = await Promise.all([
+    adminDb.collection(SCORES).doc(uid).get(),
+    adminDb.collection('users').doc(uid).get(),
+  ]);
+  const user = userSnap.exists ? userSnap.data() as AHLUser : undefined;
+  if (scoreSnap.exists) return normalizeScore(scoreSnap.data() as UserScore, user);
+  return user ? blankScoreForUser(user) : null;
 }
 
 export function serializeScore(s: UserScore): Record<string, unknown> {

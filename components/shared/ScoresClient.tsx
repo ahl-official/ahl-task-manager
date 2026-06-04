@@ -40,18 +40,49 @@ export default function ScoresClient({
   const [filter, setFilter] = useState<TaskFilter>('all');
   const [selectedTask, setSelectedTask] = useState<TaskSerialized | null>(null);
 
+  const activeUsers = users.filter(user => user.isActive !== false);
   const scoreMap = useMemo(() =>
     Object.fromEntries(scores.map(score => [score.uid, score])),
     [scores],
   );
+  const normalizedScores = useMemo(() => {
+    const rows = activeUsers.length
+      ? activeUsers.map(user => ({
+        uid: user.uid,
+        name: user.name,
+        department: user.department,
+        waNumber: scoreMap[user.uid]?.waNumber ?? '',
+        tasksAssigned: scoreMap[user.uid]?.tasksAssigned ?? 0,
+        tasksCompleted: scoreMap[user.uid]?.tasksCompleted ?? 0,
+        onTimeCount: scoreMap[user.uid]?.onTimeCount ?? 0,
+        lateCount: scoreMap[user.uid]?.lateCount ?? 0,
+        monthlyScore: Math.min(100, Math.max(0, scoreMap[user.uid]?.monthlyScore ?? 0)),
+        lastUpdated: scoreMap[user.uid]?.lastUpdated ?? null,
+      }))
+      : scores.map(score => ({
+        ...score,
+        monthlyScore: Math.min(100, Math.max(0, score.monthlyScore ?? 0)),
+      }));
 
-  const activeUsers = users.filter(user => user.isActive !== false);
+    const knownIds = new Set(rows.map(row => row.uid));
+    scores.forEach(score => {
+      if (!knownIds.has(score.uid)) {
+        rows.push({
+          ...score,
+          monthlyScore: Math.min(100, Math.max(0, score.monthlyScore ?? 0)),
+        });
+      }
+    });
+
+    return rows;
+  }, [activeUsers, scoreMap, scores]);
+
   const departments = useMemo(() => {
     const fromUsers = activeUsers.map(user => user.department).filter(Boolean);
-    const fromScores = scores.map(score => score.department).filter(Boolean);
+    const fromScores = normalizedScores.map(score => score.department).filter(Boolean);
     const fromSaved = initialDepartments.map(department => department.name).filter(Boolean);
     return Array.from(new Set([...fromSaved, ...fromUsers, ...fromScores])).sort((a, b) => a.localeCompare(b));
-  }, [activeUsers, initialDepartments, scores]);
+  }, [activeUsers, initialDepartments, normalizedScores]);
 
   function userTasks(uid: string, nextFilter: TaskFilter = filter) {
     const rows = tasks.filter(task => task.assignedTo === uid);
@@ -73,7 +104,7 @@ export default function ScoresClient({
 
   const departmentBlocks = departments.map(department => {
     const departmentUsers = activeUsers.filter(user => user.department === department);
-    const departmentScores = scores.filter(score => score.department === department);
+    const departmentScores = normalizedScores.filter(score => score.department === department);
     const userIds = new Set([
       ...departmentUsers.map(user => user.uid),
       ...departmentScores.map(score => score.uid),
@@ -102,7 +133,7 @@ export default function ScoresClient({
     ? departmentBlocks.find(block => block.name === selectedDepartment)
     : null;
 
-  const sortedScores = [...scores].sort((a, b) => (b.monthlyScore ?? 0) - (a.monthlyScore ?? 0));
+  const sortedScores = [...normalizedScores].sort((a, b) => (b.monthlyScore ?? 0) - (a.monthlyScore ?? 0));
 
   if (!showDepartments) {
     return (
