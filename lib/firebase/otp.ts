@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomInt } from 'crypto';
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
 import { adminGetUserByUid } from './users';
@@ -16,6 +16,17 @@ function hashOtp(sessionId: string, otp: string): string {
   return createHash('sha256')
     .update(`${sessionId}:${otp}:${getOtpSecret()}`)
     .digest('hex');
+}
+
+function signPayload(payload: string): string {
+  return createHmac('sha256', getOtpSecret()).update(payload).digest('base64url');
+}
+
+function verifySignature(payload: string, signature: string): boolean {
+  const expected = signPayload(payload);
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
 export function generateOtp(): string {
@@ -42,7 +53,60 @@ export async function createOtpSession(user: AHLUser, otp: string): Promise<{ se
   return { sessionId, expiresAt: expiresAtDate.toISOString() };
 }
 
+export function createStatelessOtpSession(user: AHLUser, otp: string): { sessionId: string; expiresAt: string } {
+  const sessionId = randomBytes(24).toString('hex');
+  const expiresAtDate = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+  const payload = Buffer.from(JSON.stringify({
+    id: sessionId,
+    uid: user.uid,
+    name: user.name,
+    role: user.role,
+    department: user.department,
+    waNumber: user.waNumber,
+    waNumberLast10: user.waNumberLast10,
+    otpHash: hashOtp(sessionId, otp),
+    expiresAt: expiresAtDate.toISOString(),
+  })).toString('base64url');
+
+  return {
+    sessionId: `stateless.${payload}.${signPayload(payload)}`,
+    expiresAt: expiresAtDate.toISOString(),
+  };
+}
+
+export function verifyStatelessOtpSession(sessionToken: string, otp: string): AHLUser | null {
+  const [, payload, signature] = sessionToken.split('.');
+  if (!payload || !signature || !verifySignature(payload, signature)) return null;
+
+  const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  if (new Date(data.expiresAt).getTime() < Date.now()) {
+    throw new Error('OTP expired. Please request a new code.');
+  }
+
+  if (data.otpHash !== hashOtp(data.id, otp)) {
+    throw new Error('Invalid OTP.');
+  }
+
+  return {
+    uid: data.uid,
+    name: data.name,
+    role: data.role,
+    department: data.department,
+    waNumber: data.waNumber,
+    waNumberLast10: data.waNumberLast10,
+    isActive: true,
+    createdAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+  };
+}
+
 export async function verifyOtpSession(sessionId: string, otp: string): Promise<AHLUser> {
+  if (sessionId.startsWith('stateless.')) {
+    const user = verifyStatelessOtpSession(sessionId, otp);
+    if (!user) throw new Error('Invalid OTP session. Please request a new code.');
+    return user;
+  }
+
   const ref = adminDb.collection(COL).doc(sessionId);
   const snap = await ref.get();
 
@@ -84,4 +148,3 @@ export async function verifyOtpSession(sessionId: string, otp: string): Promise<
 
   return user;
 }
-
