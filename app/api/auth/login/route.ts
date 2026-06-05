@@ -15,6 +15,12 @@ function waLast10(raw: string) {
   return normalizeWa(raw).slice(-10);
 }
 
+function firstValidPhone(...values: unknown[]) {
+  return values
+    .map(value => normalizeWa(String(value ?? '')))
+    .find(value => value.length >= 10) ?? '';
+}
+
 async function findAuthUserByWa(waNumber: string): Promise<AHLUser | null> {
   const targetLast10 = waLast10(waNumber);
   let nextPageToken: string | undefined;
@@ -23,17 +29,29 @@ async function findAuthUserByWa(waNumber: string): Promise<AHLUser | null> {
     const page = await adminAuth.listUsers(1000, nextPageToken);
     const match = page.users.find(user => {
       const claims = user.customClaims ?? {};
-      return waLast10(String(claims.waNumber ?? '')) === targetLast10;
+      const candidates = [
+        claims.waNumber,
+        claims.waNumberLast10,
+        user.phoneNumber,
+        user.displayName,
+      ];
+      return candidates.some(value => {
+        const normalized = normalizeWa(String(value ?? ''));
+        return normalized.length >= 10
+          ? normalized.slice(-10) === targetLast10
+          : normalized === targetLast10;
+      });
     });
 
     if (match) {
       const claims = match.customClaims ?? {};
+      const matchedWaNumber = firstValidPhone(claims.waNumber, match.phoneNumber, match.displayName, waNumber);
       return {
         uid: match.uid,
         name: String(claims.name ?? match.displayName ?? ''),
         role: (claims.role as AHLUser['role']) ?? 'intern',
         department: String(claims.department ?? ''),
-        waNumber: normalizeWa(String(claims.waNumber ?? waNumber)),
+        waNumber: matchedWaNumber,
         waNumberLast10: targetLast10,
         isActive: true,
         createdAt: { toDate: () => new Date() } as AHLUser['createdAt'],
