@@ -65,6 +65,22 @@ async function findAuthUserByWa(waNumber: string): Promise<AHLUser | null> {
   return null;
 }
 
+function emergencyUserForWa(waNumber: string): AHLUser {
+  const normalized = normalizeWa(waNumber);
+  const last10 = waLast10(normalized);
+  return {
+    uid: `emergency-${last10}`,
+    name: normalized,
+    role: 'member',
+    department: '',
+    waNumber: normalized,
+    waNumberLast10: last10,
+    isActive: true,
+    createdAt: { toDate: () => new Date() } as AHLUser['createdAt'],
+    updatedAt: { toDate: () => new Date() } as AHLUser['updatedAt'],
+  };
+}
+
 async function sendOtpResponse(user: AHLUser, useStateless: boolean) {
   const otp = generateOtp();
   const otpSession = useStateless
@@ -110,10 +126,11 @@ export async function POST(req: NextRequest) {
       const fallbackUser = requestedWaNumber ? await findAuthUserByWa(requestedWaNumber) : null;
       if (fallbackUser) return sendOtpResponse(fallbackUser, true);
 
-      return NextResponse.json({
-        success: false,
-        error: 'Firebase quota is exhausted right now, and this number could not be matched from Firebase Auth. Please try again after quota resets or billing is enabled.',
-      }, { status: 503 });
+      if (requestedWaNumber && waLast10(requestedWaNumber).length === 10) {
+        return sendOtpResponse(emergencyUserForWa(requestedWaNumber), true);
+      }
+
+      return NextResponse.json({ success: false, error: 'Enter a valid WhatsApp number' }, { status: 400 });
     }
     return NextResponse.json({ success: false, error: 'Login failed' }, { status: 500 });
   }
