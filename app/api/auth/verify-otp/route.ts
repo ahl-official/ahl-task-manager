@@ -29,7 +29,9 @@ export async function POST(req: NextRequest) {
       name:       user.name,
     });
 
-    await adminLog('INBOUND_WA', `OTP login verified: ${user.name}`, { uid: user.uid });
+    if (!sessionId.startsWith('stateless.')) {
+      await adminLog('INBOUND_WA', `OTP login verified: ${user.name}`, { uid: user.uid });
+    }
 
     return NextResponse.json({
       success: true,

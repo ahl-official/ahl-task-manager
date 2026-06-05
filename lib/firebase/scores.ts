@@ -114,13 +114,18 @@ export async function adminGetAllScores(): Promise<UserScore[]> {
 }
 
 export async function adminGetScore(uid: string): Promise<UserScore | null> {
-  const [scoreSnap, userSnap] = await Promise.all([
-    adminDb.collection(SCORES).doc(uid).get(),
-    adminDb.collection('users').doc(uid).get(),
-  ]);
-  const user = userSnap.exists ? userSnap.data() as AHLUser : undefined;
-  if (scoreSnap.exists) return normalizeScore(scoreSnap.data() as UserScore, user);
-  return user ? blankScoreForUser(user) : null;
+  try {
+    const [scoreSnap, userSnap] = await Promise.all([
+      adminDb.collection(SCORES).doc(uid).get(),
+      adminDb.collection('users').doc(uid).get(),
+    ]);
+    const user = userSnap.exists ? userSnap.data() as AHLUser : undefined;
+    if (scoreSnap.exists) return normalizeScore(scoreSnap.data() as UserScore, user);
+    return user ? blankScoreForUser(user) : null;
+  } catch (err) {
+    handleFirestoreReadError(`adminGetScore(${uid})`, err);
+    return null;
+  }
 }
 
 export function serializeScore(s: UserScore): Record<string, unknown> {
