@@ -219,12 +219,27 @@ export async function adminGetTask(taskId: string): Promise<Task | null> {
 
 export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
   try {
-    const snap = await adminDb
-      .collection(COL)
-      .where('assignedTo', '==', uid)
-      .limit(DEFAULT_TASK_READ_LIMIT)
-      .get();
-    return sortNewestFirst(snap.docs.map(d => normalizeTaskDoc(d.id, d.data())));
+    const user = await adminGetUserByUid(uid);
+    const queries: Query[] = [
+      adminDb.collection(COL).where('assignedTo', '==', uid).limit(DEFAULT_TASK_READ_LIMIT),
+    ];
+
+    if (user?.name) {
+      queries.push(
+        adminDb.collection(COL).where('assignedToName', '==', user.name).limit(DEFAULT_TASK_READ_LIMIT),
+        adminDb.collection(COL).where('name', '==', user.name).limit(DEFAULT_TASK_READ_LIMIT),
+        adminDb.collection(COL).where('Name', '==', user.name).limit(DEFAULT_TASK_READ_LIMIT),
+        adminDb.collection(COL).where('name ', '==', user.name).limit(DEFAULT_TASK_READ_LIMIT),
+      );
+    }
+
+    const snaps = await Promise.all(queries.map(ref => ref.get()));
+    const byId = new Map<string, Task>();
+    snaps.forEach(snap => {
+      snap.docs.forEach(doc => byId.set(doc.id, normalizeTaskDoc(doc.id, doc.data())));
+    });
+
+    return sortNewestFirst(Array.from(byId.values())).slice(0, DEFAULT_TASK_READ_LIMIT);
   } catch (err) {
     handleFirestoreReadError(`adminGetTasksByAssignee(${uid})`, err);
     return [];
@@ -260,10 +275,6 @@ export async function adminGetAllTasks(filters?: {
 
     if (filters?.status) {
       ref = ref.where('status', '==', filters.status);
-    }
-
-    if (!filters?.department && !filters?.status) {
-      ref = ref.orderBy('createdAt', 'desc');
     }
 
     if (!filters?.department && !filters?.status) {
