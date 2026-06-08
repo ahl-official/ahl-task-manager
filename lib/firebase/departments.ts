@@ -1,6 +1,7 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
 import { handleFirestoreReadError } from './errors';
+import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
 
 const COL = 'departments';
 
@@ -24,12 +25,14 @@ export interface Department {
 
 export async function adminGetDepartments(): Promise<Department[]> {
   try {
-    const snap = await adminDb.collection(COL).orderBy('name').get();
-    const custom = snap.docs.map(d => d.data() as Department);
+    return await cachedFirestoreRead('departments:all', 5 * 60 * 1000, async () => {
+      const snap = await adminDb.collection(COL).orderBy('name').get();
+      const custom = snap.docs.map(d => d.data() as Department);
 
-    return custom
-      .filter(d => d.isActive)
-      .sort((a, b) => a.name.localeCompare(b.name));
+      return custom
+        .filter(d => d.isActive)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    });
   } catch (err) {
     handleFirestoreReadError('adminGetDepartments', err);
     return [];
@@ -60,6 +63,7 @@ export async function adminCreateDepartment(name: string): Promise<Department> {
   };
 
   await adminDb.collection(COL).doc(id).set(department);
+  clearFirestoreReadCache('departments:');
   return department;
 }
 
@@ -84,6 +88,10 @@ export async function adminDeleteDepartment(id: string): Promise<void> {
   });
 
   await batch.commit();
+  clearFirestoreReadCache('departments:');
+  clearFirestoreReadCache('users:');
+  clearFirestoreReadCache('scores:');
+  clearFirestoreReadCache('tasks:');
 }
 
 export async function adminClearDepartments(): Promise<void> {
@@ -102,6 +110,10 @@ export async function adminClearDepartments(): Promise<void> {
   });
 
   await batch.commit();
+  clearFirestoreReadCache('departments:');
+  clearFirestoreReadCache('users:');
+  clearFirestoreReadCache('scores:');
+  clearFirestoreReadCache('tasks:');
 }
 
 export function serializeDepartment(department: Department) {

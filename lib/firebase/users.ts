@@ -7,6 +7,7 @@ import { db } from './client';
 import { adminDb } from './admin';
 import type { AHLUser } from '@/types';
 import { handleFirestoreReadError } from './errors';
+import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
 
 const COL = 'users';
 
@@ -89,8 +90,10 @@ export async function adminGetUserByUid(uid: string): Promise<AHLUser | null> {
 
 export async function adminGetAllUsers(): Promise<AHLUser[]> {
   try {
-    const snap = await adminDb.collection(COL).orderBy('name').get();
-    return snap.docs.map(d => d.data() as AHLUser);
+    return await cachedFirestoreRead('users:all', 5 * 60 * 1000, async () => {
+      const snap = await adminDb.collection(COL).orderBy('name').get();
+      return snap.docs.map(d => d.data() as AHLUser);
+    });
   } catch (err) {
     handleFirestoreReadError('adminGetAllUsers', err);
     return [];
@@ -106,6 +109,7 @@ export async function adminCreateUser(user: Omit<AHLUser, 'createdAt' | 'updated
     createdAt: now,
     updatedAt: now,
   });
+  clearFirestoreReadCache('users:');
 }
 
 export async function adminUpdateUser(uid: string, data: Partial<AHLUser>): Promise<void> {
@@ -133,4 +137,8 @@ export async function adminUpdateUser(uid: string, data: Partial<AHLUser>): Prom
     ...updateData,
     updatedAt: AdminTimestamp.now(),
   });
+  clearFirestoreReadCache('users:');
+  clearFirestoreReadCache('scores:');
+  clearFirestoreReadCache('departments:');
+  clearFirestoreReadCache('tasks:');
 }
