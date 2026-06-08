@@ -24,6 +24,13 @@ function normalizeKey(value: unknown) {
     .replace(/^-+|-+$/g, '');
 }
 
+function nameVariants(value: unknown) {
+  const raw = String(value ?? '').trim();
+  const lower = raw.toLowerCase();
+  const title = lower.replace(/\b\w/g, char => char.toUpperCase());
+  return Array.from(new Set([raw, lower, title].filter(Boolean)));
+}
+
 function pick(data: Record<string, any>, keys: string[]) {
   for (const key of keys) {
     if (data[key] !== undefined && data[key] !== null && data[key] !== '') return data[key];
@@ -225,12 +232,14 @@ export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
     ];
 
     if (user?.name) {
-      queries.push(
-        adminDb.collection(COL).where('assignedToName', '==', user.name).limit(DEFAULT_TASK_READ_LIMIT),
-        adminDb.collection(COL).where('name', '==', user.name).limit(DEFAULT_TASK_READ_LIMIT),
-        adminDb.collection(COL).where('Name', '==', user.name).limit(DEFAULT_TASK_READ_LIMIT),
-        adminDb.collection(COL).where('name ', '==', user.name).limit(DEFAULT_TASK_READ_LIMIT),
-      );
+      for (const name of nameVariants(user.name)) {
+        queries.push(
+          adminDb.collection(COL).where('assignedToName', '==', name).limit(DEFAULT_TASK_READ_LIMIT),
+          adminDb.collection(COL).where('name', '==', name).limit(DEFAULT_TASK_READ_LIMIT),
+          adminDb.collection(COL).where('Name', '==', name).limit(DEFAULT_TASK_READ_LIMIT),
+          adminDb.collection(COL).where('name ', '==', name).limit(DEFAULT_TASK_READ_LIMIT),
+        );
+      }
     }
 
     const snaps = await Promise.all(queries.map(ref => ref.get()));

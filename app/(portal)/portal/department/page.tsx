@@ -10,7 +10,7 @@ export default async function DepartmentTasksPage() {
   if (!session) return null;
 
   const [allTasks, allUsers] = await Promise.all([
-    adminGetAllTasks({ department: session.department }),
+    adminGetAllTasks(),
     adminGetAllUsers(),
   ]);
   const visibleUsers = filterUsersForSession(session, allUsers);
