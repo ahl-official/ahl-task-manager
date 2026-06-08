@@ -24,16 +24,34 @@ function normalizeKey(value: unknown) {
     .replace(/^-+|-+$/g, '');
 }
 
-function nameVariants(value: unknown) {
+function fieldKey(value: unknown) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[:]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function nameAliases(value: unknown) {
   const raw = String(value ?? '').trim();
   const lower = raw.toLowerCase();
   const title = lower.replace(/\b\w/g, char => char.toUpperCase());
-  return Array.from(new Set([raw, lower, title].filter(Boolean)));
+  const first = raw.split(/[\s_-]+/).find(Boolean) ?? '';
+  const firstLower = first.toLowerCase();
+  const firstTitle = firstLower.replace(/\b\w/g, char => char.toUpperCase());
+  return Array.from(new Set([raw, lower, title, first, firstLower, firstTitle].filter(Boolean)));
 }
 
 function pick(data: Record<string, any>, keys: string[]) {
+  const normalized = new Map<string, any>();
+  for (const [key, value] of Object.entries(data)) {
+    normalized.set(fieldKey(key), value);
+  }
+
   for (const key of keys) {
     if (data[key] !== undefined && data[key] !== null && data[key] !== '') return data[key];
+    const value = normalized.get(fieldKey(key));
+    if (value !== undefined && value !== null && value !== '') return value;
   }
   return null;
 }
@@ -72,20 +90,20 @@ function normalizeCategory(value: unknown): Task['category'] {
 }
 
 function normalizeTaskDoc(id: string, data: Record<string, any>): Task {
-  const assigneeName = String(pick(data, ['assignedToName', 'name', 'Name', 'name ']) ?? 'Unassigned').trim();
-  const assigneeUid = String(pick(data, ['assignedTo', 'assignedToUid', 'uid']) ?? `import-user-${normalizeKey(assigneeName)}`);
-  const handoffName = String(pick(data, ['handoffName', 'checkerName', 'Checked By Auditor', 'createdByName']) ?? data.createdByName ?? 'Admin').trim();
+  const assigneeName = String(pick(data, ['assignedToName', 'name', 'Name', 'name ', 'To', 'Person Name', 'Doer Name']) ?? 'Unassigned').trim();
+  const assigneeUid = String(pick(data, ['assignedTo', 'assignedToUid', 'uid', 'toUid']) ?? `import-user-${normalizeKey(assigneeName)}`);
+  const handoffName = String(pick(data, ['handoffName', 'checkerName', 'Checked By Auditor', 'createdByName', 'From']) ?? data.createdByName ?? 'Admin').trim();
   const taskId = String(pick(data, ['taskId', 'Task ID', 'TaskID']) ?? id);
-  const createdAt = toTimestamp(pick(data, ['createdAt', 'Task Assgined Date', 'Task Assigned Date', 'First Date', 'firstDate'])) ?? AdminTimestamp.now();
-  const endDate = toTimestamp(pick(data, ['endDate', 'Final Date', 'Target Date', 'finalDate']));
-  const startDate = toTimestamp(pick(data, ['startDate', 'Acutal Start Date', 'Actual Start Date', 'First Date', 'firstDate']));
+  const createdAt = toTimestamp(pick(data, ['createdAt', 'Task Assgined Date', 'Task Assigned Date', 'Task Date', 'First Date', 'firstDate'])) ?? AdminTimestamp.now();
+  const endDate = toTimestamp(pick(data, ['endDate', 'Final Date', 'Target Date', 'First Comitted Date', 'finalDate']));
+  const startDate = toTimestamp(pick(data, ['startDate', 'Acutal Start Date', 'Actual Start Date', 'Task Date', 'First Date', 'firstDate']));
 
   return {
     taskId,
     description: String(pick(data, ['description', 'Task', 'Task Description', 'task']) ?? '').trim(),
     assignedTo: assigneeUid,
     assignedToName: assigneeName,
-    assignedToWa: String(pick(data, ['assignedToWa', 'waNumber', 'Mobile No']) ?? ''),
+    assignedToWa: String(pick(data, ['assignedToWa', 'waNumber', 'Mobile No', 'Phone No', 'Contact no', 'Contact No']) ?? ''),
     createdBy: String(pick(data, ['createdBy', 'fromUid']) ?? 'import'),
     createdByName: String(pick(data, ['createdByName', 'From']) ?? 'Import'),
     handoffUid: String(pick(data, ['handoffUid', 'checkerUid']) ?? 'import-checker'),
@@ -97,10 +115,10 @@ function normalizeTaskDoc(id: string, data: Record<string, any>): Task {
     department: String(pick(data, ['department', 'Department']) ?? ''),
     startDate,
     endDate,
-    delayedDate: toTimestamp(pick(data, ['delayedDate', 'Revision 1', 'Revision 2'])),
+    delayedDate: toTimestamp(pick(data, ['delayedDate', 'Revision 2', 'Revision 1'])),
     delayReason: pick(data, ['delayReason', 'Remarks']) ? String(pick(data, ['delayReason', 'Remarks'])) : null,
     revisionStatus: data.revisionStatus ?? 'none',
-    notes: pick(data, ['notes', 'NOTES ', 'NOTES', 'Remarks']) ? String(pick(data, ['notes', 'NOTES ', 'NOTES', 'Remarks'])) : null,
+    notes: pick(data, ['notes', 'NOTES ', 'NOTES', 'Remarks', 'Date remark']) ? String(pick(data, ['notes', 'NOTES ', 'NOTES', 'Remarks', 'Date remark'])) : null,
     acceptedAt: toTimestamp(data.acceptedAt),
     completedAt: toTimestamp(data.completedAt),
     verifiedAt: toTimestamp(data.verifiedAt),
@@ -232,7 +250,7 @@ export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
     ];
 
     if (user?.name) {
-      for (const name of nameVariants(user.name)) {
+      for (const name of nameAliases(user.name)) {
         queries.push(
           adminDb.collection(COL).where('assignedToName', '==', name).limit(DEFAULT_TASK_READ_LIMIT),
           adminDb.collection(COL).where('name', '==', name).limit(DEFAULT_TASK_READ_LIMIT),
