@@ -1,14 +1,20 @@
 import { getSession } from '@/lib/utils/auth';
 import { adminGetAllTasks } from '@/lib/firebase/tasks';
+import { adminGetAllUsers } from '@/lib/firebase/users';
 import TaskListClient from '@/components/shared/TaskListClient';
-import { filterTasksForSession } from '@/lib/utils/access';
+import { filterTasksForSession, filterUsersForSession } from '@/lib/utils/access';
+import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
 export default async function DepartmentTasksPage() {
   const session = await getSession();
   if (!session) return null;
 
-  const allTasks = await adminGetAllTasks({ department: session.department });
-  const tasks = filterTasksForSession(session, allTasks);
+  const [allTasks, allUsers] = await Promise.all([
+    adminGetAllTasks({ department: session.department }),
+    adminGetAllUsers(),
+  ]);
+  const visibleUsers = filterUsersForSession(session, allUsers);
+  const tasks = filterTasksForSession(session, hydrateTasksWithUsers(allTasks, visibleUsers));
 
   const serialized = tasks.map(t => ({
     ...t,
@@ -30,7 +36,7 @@ export default async function DepartmentTasksPage() {
         </h1>
         <p className="text-sm text-gray-500 mt-0.5">{session.department} - {tasks.length} tasks</p>
       </div>
-      <TaskListClient tasks={serialized} role="user" currentUid={session.uid} />
+      <TaskListClient tasks={serialized} role="user" currentUid={session.uid} users={visibleUsers} />
     </div>
   );
 }

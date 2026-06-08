@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Mic, Square, Wand2 } from 'lucide-react';
 import { canAssignTask, describeAssignmentRule, roleLabel } from '@/lib/utils/hierarchy';
 import type { UserRole } from '@/types';
 
@@ -19,6 +19,10 @@ interface Props {
 export default function CreateTaskForm({ users, currentUser, redirectTo }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [voiceLoading, setVoiceLoading] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const assignableUsers = users.filter(user => canAssignTask(currentUser as any, user as any));
   const checkerUsers = [
     { ...currentUser, isActive: true },
@@ -44,6 +48,70 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
       }
       return next;
     });
+  }
+
+  async function transcribeVoiceNote(audioBlob: Blob) {
+    setVoiceLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'task-note.webm');
+
+      const res = await fetch('/api/voice-notes', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+
+      set('notes', data.data.notes);
+      toast.success('Voice note added to notes');
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to process voice note');
+    } finally {
+      setVoiceLoading(false);
+    }
+  }
+
+  async function startRecording() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      toast.error('Voice recording is not supported in this browser');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = event => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      recorder.onstop = () => {
+        stream.getTracks().forEach(track => track.stop());
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        audioChunksRef.current = [];
+        if (audioBlob.size === 0) {
+          toast.error('No audio was recorded');
+          return;
+        }
+        transcribeVoiceNote(audioBlob);
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch (err) {
+      toast.error('Microphone permission was denied');
+    }
+  }
+
+  function stopRecording() {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') return;
+    recorder.stop();
+    mediaRecorderRef.current = null;
+    setRecording(false);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -153,13 +221,46 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
 
       {/* Notes */}
       <div>
-        <label className="label">Notes (optional)</label>
+        <div className="mb-1 flex items-center justify-between gap-3">
+          <label className="label mb-0">Notes (optional)</label>
+          <div className="flex items-center gap-2">
+            {voiceLoading && (
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-600">
+                <Loader2 size={12} className="animate-spin" />
+                Transcribing
+              </span>
+            )}
+            {recording ? (
+              <button
+                type="button"
+                onClick={stopRecording}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
+              >
+                <Square size={13} />
+                Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={startRecording}
+                disabled={voiceLoading}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+              >
+                {voiceLoading ? <Wand2 size={13} /> : <Mic size={13} />}
+                Voice Note
+              </button>
+            )}
+          </div>
+        </div>
         <textarea
           value={form.notes}
           onChange={e => set('notes', e.target.value)}
           placeholder="Any additional context or instructions..."
           className="input resize-none h-20"
         />
+        <p className="mt-1 text-[11px] text-gray-400">
+          Record a quick note and it will be transcribed, cleaned up, and inserted here.
+        </p>
       </div>
 
       {/* Submit */}

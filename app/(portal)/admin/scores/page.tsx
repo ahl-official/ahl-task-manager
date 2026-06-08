@@ -3,6 +3,7 @@ import { adminGetAllTasks } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminGetDepartments, serializeDepartment } from '@/lib/firebase/departments';
 import ScoresClient from '@/components/shared/ScoresClient';
+import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
 export default async function AdminScoresPage() {
   const [scores, tasks, users, departments] = await Promise.all([
@@ -15,7 +16,9 @@ export default async function AdminScoresPage() {
     ...s,
     lastUpdated: s.lastUpdated.toDate().toISOString(),
   }));
-  const serializedTasks = tasks.map(t => ({
+  const hydratedTasks = hydrateTasksWithUsers(tasks, users);
+
+  const serializedTasks = hydratedTasks.map(t => ({
     ...t,
     startDate:   t.startDate?.toDate().toISOString() ?? null,
     endDate:     t.endDate?.toDate().toISOString() ?? null,

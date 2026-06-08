@@ -1,15 +1,18 @@
 import { adminGetAllRevisions } from '@/lib/firebase/revisions';
 import { getSession } from '@/lib/utils/auth';
 import { adminGetAllTasks } from '@/lib/firebase/tasks';
+import { adminGetAllUsers } from '@/lib/firebase/users';
 import RevisionsClient from '@/components/shared/RevisionsClient';
+import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
 export default async function AdminRevisionsPage() {
   const session = await getSession();
   if (!session) return null;
 
-  const [tasks, allRevisions] = await Promise.all([
+  const [tasks, allRevisions, users] = await Promise.all([
     adminGetAllTasks(),
     adminGetAllRevisions(),
+    adminGetAllUsers(),
   ]);
 
   const revisions = allRevisions.map(r => ({
@@ -19,7 +22,9 @@ export default async function AdminRevisionsPage() {
     createdAt:     r.createdAt?.toDate().toISOString() ?? null,
   }));
 
-  const serializedTasks = tasks.map(t => ({
+  const hydratedTasks = hydrateTasksWithUsers(tasks, users);
+
+  const serializedTasks = hydratedTasks.map(t => ({
     ...t,
     startDate:   t.startDate?.toDate().toISOString() ?? null,
     endDate:     t.endDate?.toDate().toISOString() ?? null,

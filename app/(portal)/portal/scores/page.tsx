@@ -6,6 +6,7 @@ import { Trophy, TrendingUp, CheckCircle2, Clock, AlertTriangle } from 'lucide-r
 import { cn } from '@/lib/utils';
 import { filterScoresForSession, filterTasksForSession, filterUsersForSession } from '@/lib/utils/access';
 import ScoresClient from '@/components/shared/ScoresClient';
+import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
 export default async function PortalScorePage() {
   const session = await getSession();
@@ -18,8 +19,8 @@ export default async function PortalScorePage() {
       adminGetAllUsers(),
     ]);
     const visibleScores = filterScoresForSession(session, scores);
-    const visibleTasks = filterTasksForSession(session, tasks);
     const visibleUsers = filterUsersForSession(session, users);
+    const visibleTasks = filterTasksForSession(session, hydrateTasksWithUsers(tasks, visibleUsers));
     const serializedScores = visibleScores.map(score => ({
       ...score,
       lastUpdated: score.lastUpdated.toDate().toISOString(),

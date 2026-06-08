@@ -3,11 +3,12 @@ import { adminGetAllTasks } from '@/lib/firebase/tasks';
 import { adminGetAllScores } from '@/lib/firebase/scores';
 import { adminGetDepartments, serializeDepartment } from '@/lib/firebase/departments';
 import AdminDashboardClient from '@/components/admin/AdminDashboardClient';
+import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
 export default async function AdminDashboardPage() {
   const [users, tasks, scores, departments] = await Promise.all([
     adminGetAllUsers(),
-    adminGetAllTasks(),
+    adminGetAllTasks({ limit: 750 }),
     adminGetAllScores(),
     adminGetDepartments(),
   ]);
@@ -19,7 +20,9 @@ export default async function AdminDashboardPage() {
     updatedAt: u.updatedAt.toDate().toISOString(),
   }));
 
-  const serializedTasks = tasks.map(t => ({
+  const hydratedTasks = hydrateTasksWithUsers(tasks, users);
+
+  const serializedTasks = hydratedTasks.map(t => ({
     ...t,
     startDate:   t.startDate?.toDate().toISOString() ?? null,
     endDate:     t.endDate?.toDate().toISOString() ?? null,

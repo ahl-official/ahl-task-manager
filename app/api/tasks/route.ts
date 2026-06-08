@@ -32,12 +32,14 @@ export async function GET(req: NextRequest) {
   const scope      = searchParams.get('scope') ?? 'mine';
   const status     = searchParams.get('status') ?? undefined;
   const department = searchParams.get('department') ?? undefined;
+  const limitParam = Number(searchParams.get('limit') ?? '300');
+  const maxResults = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 1000) : 300;
 
   try {
     let tasks;
 
     if (scope === 'all') {
-      tasks = await adminGetAllTasks({ status: status as any, department });
+      tasks = await adminGetAllTasks({ status: status as any, department, limit: maxResults });
       tasks = filterTasksForSession(session, tasks);
     } else if (scope === 'handoff') {
       tasks = await adminGetTasksByHandoff(session.uid);

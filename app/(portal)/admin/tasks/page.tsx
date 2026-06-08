@@ -1,14 +1,17 @@
 import { adminGetAllTasks } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import TaskListClient from '@/components/shared/TaskListClient';
+import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
 export default async function AdminTasksPage() {
   const [tasks, users] = await Promise.all([
-    adminGetAllTasks(),
+    adminGetAllTasks({ limit: 750 }),
     adminGetAllUsers(),
   ]);
 
-  const serialized = tasks.map(t => ({
+  const hydratedTasks = hydrateTasksWithUsers(tasks, users);
+
+  const serialized = hydratedTasks.map(t => ({
     ...t,
     startDate:   t.startDate?.toDate().toISOString() ?? null,
     endDate:     t.endDate?.toDate().toISOString() ?? null,
@@ -31,7 +34,7 @@ export default async function AdminTasksPage() {
     <div className="p-6">
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-gray-900">All Tasks</h1>
-        <p className="text-sm text-gray-500 mt-0.5">{tasks.length} total tasks</p>
+        <p className="text-sm text-gray-500 mt-0.5">Showing latest {tasks.length} tasks</p>
       </div>
       <TaskListClient tasks={serialized} role="admin" currentUid="" users={serializedUsers} />
     </div>

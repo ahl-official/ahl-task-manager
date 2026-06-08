@@ -4,6 +4,7 @@ import { adminGetScore } from '@/lib/firebase/scores';
 import TaskListClient from '@/components/shared/TaskListClient';
 import { Trophy } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
 export default async function PortalPage() {
   const session = await getSession();
@@ -13,8 +14,14 @@ export default async function PortalPage() {
     adminGetTasksByAssignee(session.uid),
     adminGetScore(session.uid),
   ]);
+  const hydratedTasks = hydrateTasksWithUsers(tasks, [{
+    uid: session.uid,
+    name: session.name,
+    department: session.department,
+    waNumber: session.waNumber,
+  }]);
 
-  const serialized = tasks.map(t => ({
+  const serialized = hydratedTasks.map(t => ({
     ...t,
     startDate:   t.startDate?.toDate().toISOString() ?? null,
     endDate:     t.endDate?.toDate().toISOString() ?? null,
@@ -26,10 +33,10 @@ export default async function PortalPage() {
     updatedAt:   t.updatedAt.toDate().toISOString(),
   }));
 
-  const pending    = tasks.filter(t => t.status === 'Pending Accept').length;
-  const inProgress = tasks.filter(t => t.status === 'In Progress').length;
-  const overdue    = tasks.filter(t => t.status === 'Overdue').length;
-  const completed  = tasks.filter(t => ['Completed', 'Verified'].includes(t.status)).length;
+  const pending    = hydratedTasks.filter(t => t.status === 'Pending Accept').length;
+  const inProgress = hydratedTasks.filter(t => t.status === 'In Progress').length;
+  const overdue    = hydratedTasks.filter(t => t.status === 'Overdue').length;
+  const completed  = hydratedTasks.filter(t => ['Completed', 'Verified'].includes(t.status)).length;
 
   return (
     <div className="p-6 space-y-6">

@@ -5,7 +5,7 @@ import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
   isSameDay, isSameMonth, isToday, addMonths, subMonths, getDay,
 } from 'date-fns';
-import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react';
+import { Building2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn, PRIORITY_DOT, STATUS_COLORS } from '@/lib/utils';
 import TaskModal from '@/components/shared/TaskModal';
 import type { TaskSerialized } from '@/types';
@@ -18,6 +18,7 @@ interface Props {
 export default function CalendarClient({ tasks, users }: Props) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedTask, setSelectedTask] = useState<TaskSerialized | null>(null);
+  const [departmentFilter, setDepartmentFilter] = useState('');
   const [userFilter, setUserFilter]     = useState('all');
 
   const days = useMemo(() => {
@@ -26,10 +27,32 @@ export default function CalendarClient({ tasks, users }: Props) {
     return eachDayOfInterval({ start, end });
   }, [currentDate]);
 
-  const filteredTasks = useMemo(() =>
-    userFilter === 'all' ? tasks : tasks.filter(t => t.assignedTo === userFilter),
-    [tasks, userFilter]
+  const departments = useMemo(() =>
+    Array.from(new Set([
+      ...users.map(user => user.department).filter(Boolean),
+      ...tasks.map(task => task.department).filter(Boolean),
+    ])).sort((a, b) => a.localeCompare(b)),
+    [tasks, users],
   );
+
+  const departmentUsers = useMemo(() =>
+    users
+      .filter(user => user.department === departmentFilter)
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [departmentFilter, users],
+  );
+
+  const filteredTasks = useMemo(() => {
+    if (!departmentFilter) return [];
+
+    const departmentTasks = tasks.filter(task => task.department === departmentFilter);
+    return userFilter === 'all'
+      ? departmentTasks
+      : departmentTasks.filter(task => task.assignedTo === userFilter);
+  }, [tasks, departmentFilter, userFilter]);
+
+  const departmentTaskCount = filteredTasks.length;
+  const scheduledTaskCount = filteredTasks.filter(task => task.delayedDate ?? task.endDate).length;
 
   function getTasksForDay(day: Date) {
     return filteredTasks.filter(task => {
@@ -52,14 +75,31 @@ export default function CalendarClient({ tasks, users }: Props) {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Department filter */}
+          <select
+            value={departmentFilter}
+            onChange={e => {
+              setDepartmentFilter(e.target.value);
+              setUserFilter('all');
+              setSelectedTask(null);
+            }}
+            className="input py-1.5 text-xs w-auto min-w-[180px]"
+          >
+            <option value="">Select Department</option>
+            {departments.map(department => (
+              <option key={department} value={department}>{department}</option>
+            ))}
+          </select>
+
           {/* User filter */}
           <select
             value={userFilter}
             onChange={e => setUserFilter(e.target.value)}
-            className="input py-1.5 text-xs w-auto"
+            className="input py-1.5 text-xs w-auto min-w-[160px]"
+            disabled={!departmentFilter}
           >
-            <option value="all">All Members</option>
-            {users.map(u => (
+            <option value="all">All Individuals</option>
+            {departmentUsers.map(u => (
               <option key={u.uid} value={u.uid}>{u.name}</option>
             ))}
           </select>
@@ -92,7 +132,27 @@ export default function CalendarClient({ tasks, users }: Props) {
         </div>
       </div>
 
+      {departmentFilter && (
+        <div className="card border-0 bg-gray-50 px-4 py-3">
+          <p className="text-xs font-medium text-gray-400">Calendar Scope</p>
+          <p className="mt-1 text-sm font-semibold text-gray-900">
+            {departmentFilter} - {scheduledTaskCount} scheduled task{scheduledTaskCount === 1 ? '' : 's'}
+          </p>
+        </div>
+      )}
+
       {/* Calendar grid */}
+      {!departmentFilter ? (
+        <div className="card flex min-h-[360px] flex-col items-center justify-center p-8 text-center">
+          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-brand-50 text-brand-700">
+            <Building2 size={22} />
+          </div>
+          <h2 className="text-base font-semibold text-gray-900">Select a department</h2>
+          <p className="mt-1 max-w-sm text-sm text-gray-400">
+            Calendar data is shown department-wise. Choose a department from the dropdown above to view its task dates.
+          </p>
+        </div>
+      ) : (
       <div className="card overflow-hidden">
         {/* Day headers */}
         <div className="grid grid-cols-7 border-b border-gray-100">
@@ -154,6 +214,7 @@ export default function CalendarClient({ tasks, users }: Props) {
           })}
         </div>
       </div>
+      )}
 
       {/* Task modal */}
       {selectedTask && (

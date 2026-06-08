@@ -2,6 +2,7 @@ import { adminGetAllTasks } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { getSession } from '@/lib/utils/auth';
 import CalendarClient from '@/components/admin/CalendarClient';
+import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
 export default async function CalendarPage() {
   const [tasks, users] = await Promise.all([
@@ -9,7 +10,9 @@ export default async function CalendarPage() {
     adminGetAllUsers(),
   ]);
 
-  const serializedTasks = tasks.map(t => ({
+  const hydratedTasks = hydrateTasksWithUsers(tasks, users);
+
+  const serializedTasks = hydratedTasks.map(t => ({
     ...t,
     startDate:   t.startDate?.toDate().toISOString() ?? null,
     endDate:     t.endDate?.toDate().toISOString() ?? null,
