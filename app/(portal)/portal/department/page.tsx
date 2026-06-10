@@ -27,6 +27,13 @@ export default async function DepartmentTasksPage() {
     createdAt:   t.createdAt.toDate().toISOString(),
     updatedAt:   t.updatedAt.toDate().toISOString(),
   }));
+  const serializedUsers = visibleUsers.map(user => ({
+    uid: user.uid,
+    name: user.name,
+    department: user.department,
+    role: user.role,
+    isActive: user.isActive,
+  }));
 
   return (
     <div className="p-6">
@@ -36,7 +43,7 @@ export default async function DepartmentTasksPage() {
         </h1>
         <p className="text-sm text-gray-500 mt-0.5">{session.department} - {tasks.length} tasks</p>
       </div>
-      <TaskListClient tasks={serialized} role="user" currentUid={session.uid} users={visibleUsers} />
+      <TaskListClient tasks={serialized} role="user" currentUid={session.uid} users={serializedUsers} />
     </div>
   );
 }
