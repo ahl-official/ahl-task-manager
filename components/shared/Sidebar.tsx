@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard, CheckSquare, Users, Calendar,
   BarChart2, RefreshCw, PlusCircle, LogOut, Menu, X,
-  Building2, ListChecks,
+  Building2, ListChecks, HelpCircle,
 } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
@@ -32,6 +32,7 @@ const USER_NAV = [
   { href: '/portal/revisions',   icon: RefreshCw,       label: 'Revisions'      },
   { href: '/portal/create-task', icon: PlusCircle,      label: 'Create Task'    },
   { href: '/portal/scores',      icon: BarChart2,       label: 'My Score'       },
+  { href: '/portal/help',        icon: HelpCircle,      label: 'Help'           },
 ];
 
 export default function Sidebar({
