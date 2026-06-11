@@ -17,12 +17,79 @@ function formatWaId(waNumber: string): string {
   return `${digits}@c.us`;
 }
 
+type ResolveChatIdResult =
+  | { ok: true; chatId: string }
+  | { ok: false; chatId: string; error: string; status?: number; body?: string };
+
+export type SendWhatsAppResult = {
+  ok: boolean;
+  chatId: string;
+  status?: number;
+  body?: string;
+  error?: string;
+};
+
+async function resolveChatId(waNumber: string): Promise<ResolveChatIdResult> {
+  const fallbackChatId = formatWaId(waNumber);
+  const phone = waNumber.replace(/\D/g, '');
+
+  if (!WAHA_URL || !phone) {
+    return { ok: true, chatId: fallbackChatId };
+  }
+
+  const url = `${WAHA_URL}/api/contacts/check-exists?phone=${encodeURIComponent(phone)}&session=${encodeURIComponent(WAHA_SESSION)}`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: buildHeaders(),
+    });
+    const body = await res.text();
+
+    if (!res.ok) {
+      console.warn(`WAHA contact check failed: ${res.status}`, body);
+      return { ok: true, chatId: fallbackChatId };
+    }
+
+    const data = JSON.parse(body) as { numberExists?: boolean; chatId?: string };
+    if (data.numberExists === false) {
+      return {
+        ok: false,
+        chatId: fallbackChatId,
+        status: res.status,
+        body,
+        error: 'WhatsApp number does not exist according to WAHA',
+      };
+    }
+
+    return { ok: true, chatId: data.chatId || fallbackChatId };
+  } catch (err) {
+    console.warn('WAHA contact check error', err);
+    return { ok: true, chatId: fallbackChatId };
+  }
+}
+
 export async function sendWhatsApp(
   waNumber: string,
   text: string,
   taskId?: string,
-): Promise<void> {
-  const chatId = formatWaId(waNumber);
+): Promise<SendWhatsAppResult> {
+  const resolved = await resolveChatId(waNumber);
+  const chatId = resolved.chatId;
+
+  if (!resolved.ok) {
+    await adminLog('SEND_WA', `FAILED send to ${waNumber}`, {
+      taskId,
+      meta: {
+        chatId,
+        status: resolved.status,
+        body: resolved.body,
+        error: resolved.error,
+      },
+    });
+    return resolved;
+  }
+
   const url    = `${WAHA_URL}/api/sendText`;
 
   try {
@@ -44,13 +111,17 @@ export async function sendWhatsApp(
 
     if (!res.ok) {
       console.error(`WAHA send failed: ${res.status}`, body);
+      return { ok: false, chatId, status: res.status, body };
     }
+
+    return { ok: true, chatId, status: res.status, body };
   } catch (err) {
     console.error('WAHA sendWhatsApp error', err);
     await adminLog('SEND_WA', `FAILED send to ${waNumber}`, {
       taskId,
-      meta: { error: String(err) },
+      meta: { chatId, error: String(err) },
     });
+    return { ok: false, chatId, error: String(err) };
   }
 }
 

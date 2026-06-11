@@ -87,7 +87,19 @@ async function sendOtpResponse(user: AHLUser, useStateless: boolean) {
     ? createStatelessOtpSession(user, otp)
     : await createOtpSession(user, otp);
 
-  await sendWhatsApp(user.waNumber, msgLoginOtp(otp));
+  const sendResult = await sendWhatsApp(user.waNumber, msgLoginOtp(otp));
+  if (!sendResult.ok) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: sendResult.error === 'WhatsApp number does not exist according to WAHA'
+          ? 'This WhatsApp number does not exist or is not reachable on WhatsApp.'
+          : 'OTP could not be sent on WhatsApp. Please ask admin to check the WAHA session.',
+      },
+      { status: 502 },
+    );
+  }
+
   if (!useStateless) {
     await adminLog('INBOUND_WA', `OTP login requested: ${user.name}`, { uid: user.uid });
   }
