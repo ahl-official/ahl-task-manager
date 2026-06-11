@@ -25,6 +25,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
   const isAssignee = task.assignedTo === currentUid;
   const isHandoff  = task.handoffUid === currentUid;
   const due        = getDueBadge(task.endDate);
+  const needsDates = isAssignee && task.status === 'In Progress' && (!task.startDate || !task.endDate);
 
   async function doAction(action: string, extra: Record<string, string> = {}) {
     setLoading(action);
@@ -36,7 +37,13 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
-      toast.success(`Task ${action}ed successfully`);
+      const successMessage: Record<string, string> = {
+        accept: 'Task accepted successfully',
+        'set-dates': 'Task dates saved successfully',
+        complete: 'Task completed successfully',
+        verify: 'Task verified successfully',
+      };
+      toast.success(successMessage[action] ?? 'Task updated successfully');
       onUpdate();
     } catch (err: any) {
       toast.error(err.message ?? 'Action failed');
@@ -190,7 +197,49 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
                     </div>
                   </div>
                 )}
-                {['In Progress', 'Delay Requested'].includes(task.status) && (
+                {needsDates && (
+                  <div className="w-full rounded-xl bg-blue-50 p-3">
+                    <p className="mb-2 text-xs font-semibold text-blue-800">Set task timeline</p>
+                    <p className="mb-3 text-xs text-blue-700">This admin-assigned task is active. Add the start and due date before marking it complete.</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div>
+                        <label className="label text-blue-700">Start Date</label>
+                        <input
+                          type="date"
+                          value={acceptStartDate}
+                          onChange={e => setAcceptStartDate(e.target.value)}
+                          className="input"
+                          min={new Date().toISOString().split('T')[0]}
+                        />
+                      </div>
+                      <div>
+                        <label className="label text-blue-700">Due Date</label>
+                        <input
+                          type="date"
+                          value={acceptEndDate}
+                          onChange={e => setAcceptEndDate(e.target.value)}
+                          className="input"
+                          min={acceptStartDate || new Date().toISOString().split('T')[0]}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <ActionButton
+                        label="Save Dates"
+                        onClick={() => {
+                          if (!acceptStartDate || !acceptEndDate) {
+                            toast.error('Set start and due date first');
+                            return;
+                          }
+                          doAction('set-dates', { startDate: acceptStartDate, endDate: acceptEndDate });
+                        }}
+                        loading={loading === 'set-dates'}
+                        color="blue"
+                      />
+                    </div>
+                  </div>
+                )}
+                {['In Progress', 'Delay Requested'].includes(task.status) && task.startDate && task.endDate && (
                   <ActionButton label="Mark Complete" onClick={() => doAction('complete')} loading={loading === 'complete'} color="green" />
                 )}
               </div>

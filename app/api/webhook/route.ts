@@ -125,6 +125,10 @@ async function handleAccept(from: string, uid: string, name: string, taskId: str
   const task = await adminGetTask(taskId);
   if (!task) { await sendWhatsApp(from, `❌ Task ${taskId} not found.`); return; }
   if (task.assignedTo !== uid) { await sendWhatsApp(from, `❌ Task ${taskId} is not assigned to you.`); return; }
+  if (task.status === 'In Progress' && (!task.startDate || !task.endDate)) {
+    await sendWhatsApp(from, `Task *${taskId}* is already active. Please open the portal and set the start date and due date before work is completed.`);
+    return;
+  }
   if (task.status !== 'Pending Accept') {
     await sendWhatsApp(from, `ℹ️ Task ${taskId} is already ${task.status}.`); return;
   }
@@ -140,6 +144,11 @@ async function handleDone(from: string, uid: string, name: string, taskId: strin
   if (task.assignedTo !== uid) { await sendWhatsApp(from, `❌ Task ${taskId} is not assigned to you.`); return; }
   if (!['In Progress', 'Delay Requested'].includes(task.status)) {
     await sendWhatsApp(from, `ℹ️ Task ${taskId} cannot be completed from status: ${task.status}.`); return;
+  }
+
+  if (!task.startDate || !task.endDate) {
+    await sendWhatsApp(from, `Please set the start date and due date for *${taskId}* in the portal before marking it complete.`);
+    return;
   }
 
   const now = Timestamp.now();

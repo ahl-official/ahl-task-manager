@@ -23,7 +23,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 }
 
 // PATCH /api/tasks/[id]
-// Body: { action: 'accept' | 'complete' | 'verify' }
+// Body: { action: 'accept' | 'set-dates' | 'complete' | 'verify' }
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
@@ -55,9 +55,32 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       });
     }
 
+    else if (action === 'set-dates') {
+      if (task.assignedTo !== session.uid) {
+        return NextResponse.json({ success: false, error: 'Only assignee can set dates' }, { status: 403 });
+      }
+      if (!startDate || !endDate) {
+        return NextResponse.json({ success: false, error: 'Start date and due date are required' }, { status: 400 });
+      }
+      if (new Date(endDate) < new Date(startDate)) {
+        return NextResponse.json({ success: false, error: 'Due date must be after start date' }, { status: 400 });
+      }
+      await adminUpdateTaskStatus(params.id, 'In Progress', {
+        startDate: Timestamp.fromDate(new Date(startDate)),
+        endDate: Timestamp.fromDate(new Date(endDate)),
+        acceptedAt: task.acceptedAt ?? now,
+      });
+      await adminLog('TASK_ACCEPTED', `${params.id} dates set by ${session.name}`, {
+        taskId: params.id, uid: session.uid,
+      });
+    }
+
     else if (action === 'complete') {
       if (task.assignedTo !== session.uid) {
         return NextResponse.json({ success: false, error: 'Only assignee can complete' }, { status: 403 });
+      }
+      if (!task.startDate || !task.endDate) {
+        return NextResponse.json({ success: false, error: 'Set start date and due date before completing this task' }, { status: 400 });
       }
       await adminUpdateTaskStatus(params.id, 'Completed', { completedAt: now });
       await adminIncrementScore(session.uid, 'tasksCompleted');

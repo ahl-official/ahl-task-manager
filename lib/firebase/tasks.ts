@@ -166,6 +166,7 @@ export async function adminCreateTask(
   input: CreateTaskInput,
   creatorUid: string,
   creatorFallback?: { name: string; waNumber?: string; department?: string },
+  options?: { skipAcceptance?: boolean },
 ): Promise<Task> {
   const [taskId, creator, assignee, handoff] = await Promise.all([
     generateTaskId(),
@@ -194,6 +195,9 @@ export async function adminCreateTask(
 
   const now = AdminTimestamp.now();
   const creatorName = creator?.name ?? creatorFallback?.name ?? 'Admin';
+  const startDate = input.startDate ? AdminTimestamp.fromDate(new Date(input.startDate)) : null;
+  const endDate = input.endDate ? AdminTimestamp.fromDate(new Date(input.endDate)) : null;
+  const skipAcceptance = options?.skipAcceptance ?? false;
   const task: Task = {
     taskId,
     description:    input.description,
@@ -207,15 +211,15 @@ export async function adminCreateTask(
     handoffWa:      handoffUser.waNumber,
     category:       input.category,
     priority:       input.priority,
-    status:         'Pending Accept',
+    status:         skipAcceptance ? 'In Progress' : 'Pending Accept',
     department:     assignee.department,
-    startDate:      input.startDate ? AdminTimestamp.fromDate(new Date(input.startDate)) : null,
-    endDate:        input.endDate ? AdminTimestamp.fromDate(new Date(input.endDate)) : null,
+    startDate,
+    endDate,
     delayedDate:    null,
     delayReason:    null,
     revisionStatus: 'none',
     notes:          input.notes ?? null,
-    acceptedAt:     null,
+    acceptedAt:     skipAcceptance ? now : null,
     completedAt:    null,
     verifiedAt:     null,
     createdAt:      now,

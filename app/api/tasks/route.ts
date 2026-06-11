@@ -88,17 +88,38 @@ export async function POST(req: NextRequest) {
       }, { status: 403 });
     }
 
+    if ((body.startDate && !body.endDate) || (!body.startDate && body.endDate)) {
+      return NextResponse.json({
+        success: false,
+        error: 'Please provide both start date and due date, or leave both empty.',
+      }, { status: 400 });
+    }
+
+    if (body.startDate && body.endDate && new Date(body.endDate) < new Date(body.startDate)) {
+      return NextResponse.json({
+        success: false,
+        error: 'Due date must be after start date.',
+      }, { status: 400 });
+    }
+
+    const skipAcceptance = session.role === 'admin';
     const task = await adminCreateTask(body, session.uid, {
       name: session.name,
       waNumber: session.waNumber,
       department: session.department,
+    }, {
+      skipAcceptance,
     });
 
     // Score: tasks assigned
     await adminIncrementScore(task.assignedTo, 'tasksAssigned');
 
     // WA notifications
-    const endDateStr = task.endDate ? formatDate(task.endDate.toDate().toISOString()) : 'Set by assignee on accept';
+    const endDateStr = task.endDate
+      ? formatDate(task.endDate.toDate().toISOString())
+      : skipAcceptance
+        ? 'Set by assignee in portal'
+        : 'Set by assignee on accept';
 
     await sendWhatsApp(
       task.assignedToWa,
@@ -108,6 +129,8 @@ export async function POST(req: NextRequest) {
         priority:      task.priority,
         endDate:       endDateStr,
         createdByName: task.createdByName,
+        acceptanceRequired: !skipAcceptance,
+        datesRequired: skipAcceptance && !task.endDate,
       }),
       task.taskId,
     );

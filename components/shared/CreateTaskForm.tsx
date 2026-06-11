@@ -33,6 +33,8 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
     assignedTo:  '',
     category:    'Daily',
     priority:    'Medium',
+    startDate:   '',
+    endDate:     '',
     handoffUid:  currentUser.uid,
     notes:       '',
     department:  '',
@@ -118,6 +120,14 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
     e.preventDefault();
     if (!form.description || !form.assignedTo || !form.handoffUid) {
       toast.error('Please fill in all required fields');
+      return;
+    }
+    if ((form.startDate && !form.endDate) || (!form.startDate && form.endDate)) {
+      toast.error('Add both start date and due date, or leave both empty');
+      return;
+    }
+    if (form.startDate && form.endDate && new Date(form.endDate) < new Date(form.startDate)) {
+      toast.error('Due date must be after start date');
       return;
     }
 
@@ -214,8 +224,29 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
           </select>
         </div>
 
+        <div>
+          <label className="label">Start Date</label>
+          <input
+            type="date"
+            value={form.startDate}
+            onChange={e => set('startDate', e.target.value)}
+            className="input"
+          />
+        </div>
+
+        <div>
+          <label className="label">Due Date</label>
+          <input
+            type="date"
+            value={form.endDate}
+            onChange={e => set('endDate', e.target.value)}
+            className="input"
+            min={form.startDate || undefined}
+          />
+        </div>
+
         <div className="col-span-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
-          The assigned person will set the start and due date when accepting the task.
+          Admin-created tasks become active immediately. Add dates now, or the assigned person will be asked to set dates in the portal.
         </div>
       </div>
 

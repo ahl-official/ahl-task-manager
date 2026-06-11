@@ -62,7 +62,24 @@ export function msgTaskAssigned(task: {
   priority: string;
   endDate: string;
   createdByName: string;
+  acceptanceRequired?: boolean;
+  datesRequired?: boolean;
 }): string {
+  const actionLines = task.datesRequired
+    ? [
+      `Please open the portal and set the start date and due date before completing this task.`,
+      `Portal: ${PORTAL_URL}`,
+    ]
+    : task.acceptanceRequired === false
+      ? [
+        `This task is active. Acceptance is not required.`,
+        `Open the portal: ${PORTAL_URL}`,
+      ]
+      : [
+        `Reply *ACCEPT ${task.taskId}* to accept`,
+        `Or open the portal: ${PORTAL_URL}`,
+      ];
+
   return [
     `📋 *New Task Assigned: ${task.taskId}*`,
     ``,
@@ -71,8 +88,7 @@ export function msgTaskAssigned(task: {
     `*Due:* ${task.endDate}`,
     `*Assigned by:* ${task.createdByName}`,
     ``,
-    `Reply *ACCEPT ${task.taskId}* to accept`,
-    `Or open the portal: ${PORTAL_URL}`,
+    ...actionLines,
   ].join('\n');
 }
 
