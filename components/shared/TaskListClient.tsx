@@ -2,8 +2,8 @@
 
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
-import { Search } from 'lucide-react';
-import { cn, formatDate, STATUS_COLORS, PRIORITY_COLORS, PRIORITY_DOT, getDueBadge } from '@/lib/utils';
+import { ArrowRight, Clock3, Search } from 'lucide-react';
+import { cn, formatDate, STATUS_COLORS, PRIORITY_DOT, getDueBadge } from '@/lib/utils';
 import TaskModal from './TaskModal';
 import type { TaskSerialized } from '@/types';
 
@@ -23,6 +23,19 @@ const CATEGORY_LABELS = {
   'One Time': 'One Time Task',
 } as const;
 const RECURRING_CATEGORIES = new Set(['Daily', 'Weekly', 'Monthly']);
+const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue']);
+const NEW_ASSIGNMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function getTimeAgo(iso: string) {
+  const diffMs = Math.max(0, Date.now() - new Date(iso).getTime());
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 export default function TaskListClient({ tasks, role, currentUid, users = [] }: Props) {
   const [search, setSearch]         = useState('');
@@ -60,6 +73,14 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
     });
   }, [tasks, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter]);
 
+  const justAssignedTasks = useMemo(() =>
+    tasks
+      .filter(task => ACTIVE_STATUSES.has(task.status))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 4),
+    [tasks]
+  );
+
   const selectedUser = users.find(user => user.uid === userFilter);
   const scopeLabel = selectedUser?.name ?? (departmentFilter === 'all' ? 'All tasks' : departmentFilter);
   const stats = {
@@ -80,8 +101,58 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
 
   return (
     <>
+      {justAssignedTasks.length > 0 && (
+        <section className="surface-enter mb-5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-brand-600">Just assigned</p>
+              <h2 className="text-base font-semibold text-gray-900">
+                {role === 'user' ? 'Newest tasks for you' : 'Newest active assignments'}
+              </h2>
+            </div>
+            <span className="hidden rounded-full bg-white px-3 py-1 text-xs font-medium text-gray-500 shadow-card sm:inline-flex">
+              {justAssignedTasks.length} latest
+            </span>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {justAssignedTasks.map(task => {
+              const createdAtMs = new Date(task.createdAt).getTime();
+              const isFresh = Date.now() - createdAtMs <= NEW_ASSIGNMENT_WINDOW_MS;
+              return (
+                <button
+                  key={task.taskId}
+                  type="button"
+                  onClick={() => openTask(task)}
+                  className="card group flex min-h-[150px] flex-col justify-between p-4 text-left hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus:ring-2 focus:ring-brand-500"
+                >
+                  <div>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <span className="font-mono text-xs font-medium text-brand-600">{task.taskId}</span>
+                      <span className={cn('badge text-[10px]', isFresh ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-500')}>
+                        {isFresh ? 'New' : getTimeAgo(task.createdAt)}
+                      </span>
+                    </div>
+                    <p className="line-clamp-2 text-sm font-semibold leading-5 text-gray-900">{task.description}</p>
+                    <p className="mt-2 truncate text-xs text-gray-400">{task.assignedToName} - {task.department || 'No department'}</p>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                      <Clock3 size={13} />
+                      <span>{formatDate(task.endDate)}</span>
+                    </div>
+                    <ArrowRight size={15} className="text-gray-300 transition-transform group-hover:translate-x-0.5 group-hover:text-brand-600" />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {role === 'admin' && (
-        <div className="mb-4 grid gap-3 md:grid-cols-5">
+        <div className="surface-enter mb-4 grid gap-3 md:grid-cols-5">
           <div className="card border-0 bg-gray-50 p-4 md:col-span-2">
             <p className="text-xs font-medium text-gray-400">Viewing</p>
             <p className="mt-1 text-lg font-semibold text-gray-900">{scopeLabel}</p>
@@ -102,7 +173,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
       )}
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-4">
+      <div className="surface-enter flex flex-wrap gap-3 mb-4">
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
@@ -171,7 +242,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
       </div>
 
       {/* Table */}
-      <div className="card overflow-hidden">
+      <div className="card surface-enter overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -194,7 +265,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
                 return (
                   <tr
                     key={task.taskId}
-                    className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer transition-colors"
+                    className="cursor-pointer border-b border-gray-50 transition-all duration-150 hover:bg-gray-50"
                     onClick={() => openTask(task)}
                   >
                     <td className="px-4 py-3">

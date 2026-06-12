@@ -1,12 +1,25 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { Building2, X } from 'lucide-react';
-import { cn, STATUS_COLORS } from '@/lib/utils';
+import { ArrowRight, Building2, Clock3, X } from 'lucide-react';
+import { cn, formatDate, STATUS_COLORS } from '@/lib/utils';
 import TaskModal from '@/components/shared/TaskModal';
 import type { TaskSerialized } from '@/types';
 
 type TaskFilter = 'all' | 'Pending Accept' | 'In Progress' | 'Completed' | 'Verified' | 'Overdue';
+const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue']);
+const NEW_ASSIGNMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function getTimeAgo(iso: string) {
+  const diffMs = Math.max(0, Date.now() - new Date(iso).getTime());
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 interface Props {
   users: any[];
@@ -89,6 +102,14 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
     completed: tasks.filter(t => ['Completed', 'Verified'].includes(t.status)).length,
   };
 
+  const justAssignedTasks = useMemo(() =>
+    tasks
+      .filter(task => ACTIVE_STATUSES.has(task.status))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 6),
+    [tasks]
+  );
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -98,7 +119,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
       </div>
 
       {/* Overall stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="surface-enter grid grid-cols-2 md:grid-cols-5 gap-3">
         {[
           { label: 'Total',       value: overallStats.total,      color: 'text-gray-700',   bg: 'bg-gray-50',   filter: 'all' as TaskFilter },
           { label: 'Pending',     value: overallStats.pending,    color: 'text-yellow-700', bg: 'bg-yellow-50', filter: 'Pending Accept' as TaskFilter },
@@ -111,7 +132,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
             type="button"
             onClick={() => { setSelectedUser(null); setSelectedDepartment(null); setFilter(stat.filter); }}
             className={cn(
-              'card p-4 text-left border-0 transition-all hover:shadow-card-hover',
+              'card p-4 text-left border-0 hover:-translate-y-0.5 hover:shadow-card-hover',
               stat.bg,
               filter === stat.filter && 'ring-2 ring-brand-500',
             )}
@@ -122,8 +143,58 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
         ))}
       </div>
 
+      {justAssignedTasks.length > 0 && (
+        <section className="surface-enter">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-brand-600">Just assigned</p>
+              <h2 className="text-base font-semibold text-gray-900">Newest active assignments</h2>
+            </div>
+            <span className="hidden rounded-full bg-white px-3 py-1 text-xs font-medium text-gray-500 shadow-card sm:inline-flex">
+              Latest {justAssignedTasks.length}
+            </span>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {justAssignedTasks.map(task => {
+              const createdAtMs = new Date(task.createdAt).getTime();
+              const isFresh = Date.now() - createdAtMs <= NEW_ASSIGNMENT_WINDOW_MS;
+              return (
+                <button
+                  key={task.taskId}
+                  type="button"
+                  onClick={() => setSelectedTask(task)}
+                  className="card group flex min-h-[150px] flex-col justify-between p-4 text-left hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus:ring-2 focus:ring-brand-500"
+                >
+                  <div>
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <span className="font-mono text-xs font-medium text-brand-600">{task.taskId}</span>
+                      <span className={cn('badge text-[10px]', isFresh ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-500')}>
+                        {isFresh ? 'New' : getTimeAgo(task.createdAt)}
+                      </span>
+                    </div>
+                    <p className="line-clamp-2 text-sm font-semibold leading-5 text-gray-900">{task.description}</p>
+                    <p className="mt-2 truncate text-xs text-gray-400">
+                      {task.assignedToName} - {task.department || 'No department'}
+                    </p>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                      <Clock3 size={13} />
+                      <span>{formatDate(task.endDate)}</span>
+                    </div>
+                    <ArrowRight size={15} className="text-gray-300 transition-transform group-hover:translate-x-0.5 group-hover:text-brand-600" />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* Filters */}
-      <div className="flex flex-wrap gap-2 items-center">
+      <div className="surface-enter flex flex-wrap gap-2 items-center">
         {/* Status filter */}
         <div className="flex gap-1.5 flex-wrap">
           {(['all', 'Pending Accept', 'In Progress', 'Completed', 'Verified', 'Overdue'] as TaskFilter[]).map(f => (
@@ -168,7 +239,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
             key={block.name}
             type="button"
             onClick={() => { setSelectedUser(null); setSelectedDepartment(block.name); }}
-            className="card flex min-h-[190px] flex-col justify-between p-5 text-left transition-all hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus:ring-2 focus:ring-brand-500"
+            className="card flex min-h-[190px] flex-col justify-between p-5 text-left hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus:ring-2 focus:ring-brand-500"
           >
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-center gap-3">
