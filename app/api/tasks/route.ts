@@ -32,8 +32,11 @@ export async function GET(req: NextRequest) {
   const scope      = searchParams.get('scope') ?? 'mine';
   const status     = searchParams.get('status') ?? undefined;
   const department = searchParams.get('department') ?? undefined;
-  const limitParam = Number(searchParams.get('limit') ?? '300');
-  const maxResults = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 1000) : 300;
+  const requestedLimit = searchParams.get('limit');
+  const limitParam = requestedLimit ? Number(requestedLimit) : null;
+  const maxResults = typeof limitParam === 'number' && Number.isFinite(limitParam)
+    ? Math.min(Math.max(limitParam, 1), 1000)
+    : null;
 
   try {
     let tasks;
