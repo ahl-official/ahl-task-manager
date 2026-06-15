@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/utils/auth';
-import { adminGetAllUsers, adminCreateUser, adminGetUserByUid, adminUpdateUser, normalizeWa, waLast10 } from '@/lib/firebase/users';
+import { adminGetAllUsers, adminCreateUser, adminDeleteUser, adminGetUserByUid, adminUpdateUser, normalizeWa, waLast10 } from '@/lib/firebase/users';
 import { adminAuth } from '@/lib/firebase/admin';
 import type { AHLUser } from '@/types';
 import { filterUsersForSession } from '@/lib/utils/access';
@@ -94,5 +94,37 @@ export async function PATCH(req: NextRequest) {
     });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  }
+}
+
+// DELETE /api/users?uid=...
+export async function DELETE(req: NextRequest) {
+  const session = await getSession();
+  if (!session || session.role !== 'admin') {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
+  }
+
+  try {
+    const { searchParams } = new URL(req.url);
+    const uid = searchParams.get('uid');
+    if (!uid) {
+      return NextResponse.json({ success: false, error: 'User id is required' }, { status: 400 });
+    }
+
+    if (uid === session.uid) {
+      return NextResponse.json({ success: false, error: 'You cannot delete your own admin user.' }, { status: 400 });
+    }
+
+    await adminDeleteUser(uid);
+
+    try {
+      await adminAuth.deleteUser(uid);
+    } catch (err: any) {
+      if (err?.code !== 'auth/user-not-found') throw err;
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (err: any) {
+    return NextResponse.json({ success: false, error: err.message ?? 'Failed to delete user' }, { status: 500 });
   }
 }

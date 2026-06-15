@@ -180,6 +180,28 @@ export default function UsersClient({
     }
   }
 
+  async function deleteUser(user: any) {
+    if (!confirm(`Delete ${user.name}? This removes the user from the team panel and disables their login account. Existing tasks will remain in task history.`)) {
+      return;
+    }
+
+    setLoading(`delete-${user.uid}`);
+    try {
+      const res = await fetch(`/api/users?uid=${encodeURIComponent(user.uid)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+
+      setUsers(us => us.filter(u => u.uid !== user.uid));
+      toast.success('User deleted');
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to delete user');
+    } finally {
+      setLoading(null);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="card p-4">
@@ -418,6 +440,17 @@ export default function UsersClient({
                       : user.isActive ? <UserX size={12} /> : <UserCheck size={12} />
                     }
                     {user.isActive ? 'Deactivate' : 'Activate'}
+                  </button>
+                  <button
+                    onClick={() => deleteUser(user)}
+                    disabled={loading === `delete-${user.uid}`}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                  >
+                    {loading === `delete-${user.uid}`
+                      ? <Loader2 size={11} className="animate-spin" />
+                      : <Trash2 size={12} />
+                    }
+                    Delete
                   </button>
                   </div>
                 </td>

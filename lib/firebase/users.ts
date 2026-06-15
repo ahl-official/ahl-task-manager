@@ -142,3 +142,24 @@ export async function adminUpdateUser(uid: string, data: Partial<AHLUser>): Prom
   clearFirestoreReadCache('departments:');
   clearFirestoreReadCache('tasks:');
 }
+
+export async function adminDeleteUser(uid: string): Promise<void> {
+  let ref = adminDb.collection(COL).doc(uid);
+  const snap = await ref.get();
+
+  if (!snap.exists) {
+    const byField = await adminDb
+      .collection(COL)
+      .where('uid', '==', uid)
+      .limit(1)
+      .get();
+    if (byField.empty) throw new Error('User not found');
+    ref = byField.docs[0].ref;
+  }
+
+  await ref.delete();
+  clearFirestoreReadCache('users:');
+  clearFirestoreReadCache('scores:');
+  clearFirestoreReadCache('departments:');
+  clearFirestoreReadCache('tasks:');
+}
