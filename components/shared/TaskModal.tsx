@@ -24,6 +24,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
 
   const isAssignee = task.assignedTo === currentUid;
   const isHandoff  = task.handoffUid === currentUid;
+  const isAdmin    = role === 'admin';
   const due        = getDueBadge(task.endDate);
   const needsDates = isAssignee && task.status === 'In Progress' && (!task.startDate || !task.endDate);
 
@@ -40,7 +41,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
       const successMessage: Record<string, string> = {
         accept: 'Task accepted successfully',
         'set-dates': 'Task dates saved successfully',
-        complete: 'Task completed successfully',
+        complete: isAdmin ? 'Task completed and verified successfully' : 'Task completed successfully',
         verify: 'Task verified successfully',
       };
       toast.success(successMessage[action] ?? 'Task updated successfully');
@@ -154,38 +155,42 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
           {/* ── Actions ── */}
           <div className="border-t border-gray-100 pt-4 space-y-3">
             {/* Assignee actions */}
-            {isAssignee && (
+            {(isAssignee || isAdmin) && (
               <div className="flex gap-2 flex-wrap">
                 {task.status === 'Pending Accept' && (
                   <div className="w-full rounded-xl bg-blue-50 p-3">
-                    <p className="mb-2 text-xs font-semibold text-blue-800">Accept and set timeline</p>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <div>
-                        <label className="label text-blue-700">Start Date</label>
-                        <input
-                          type="date"
-                          value={acceptStartDate}
-                          onChange={e => setAcceptStartDate(e.target.value)}
-                          className="input"
-                          min={new Date().toISOString().split('T')[0]}
-                        />
+                    <p className="mb-2 text-xs font-semibold text-blue-800">
+                      {isAdmin ? 'Admin override' : 'Accept and set timeline'}
+                    </p>
+                    {!isAdmin && (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div>
+                          <label className="label text-blue-700">Start Date</label>
+                          <input
+                            type="date"
+                            value={acceptStartDate}
+                            onChange={e => setAcceptStartDate(e.target.value)}
+                            className="input"
+                            min={new Date().toISOString().split('T')[0]}
+                          />
+                        </div>
+                        <div>
+                          <label className="label text-blue-700">Due Date</label>
+                          <input
+                            type="date"
+                            value={acceptEndDate}
+                            onChange={e => setAcceptEndDate(e.target.value)}
+                            className="input"
+                            min={acceptStartDate || new Date().toISOString().split('T')[0]}
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <label className="label text-blue-700">Due Date</label>
-                        <input
-                          type="date"
-                          value={acceptEndDate}
-                          onChange={e => setAcceptEndDate(e.target.value)}
-                          className="input"
-                          min={acceptStartDate || new Date().toISOString().split('T')[0]}
-                        />
-                      </div>
-                    </div>
+                    )}
                     <div className="mt-3">
                       <ActionButton
-                        label="Accept Task"
+                        label={isAdmin ? 'Accept Anyway' : 'Accept Task'}
                         onClick={() => {
-                          if (!acceptStartDate || !acceptEndDate) {
+                          if (!isAdmin && (!acceptStartDate || !acceptEndDate)) {
                             toast.error('Set start and due date before accepting');
                             return;
                           }
@@ -197,7 +202,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
                     </div>
                   </div>
                 )}
-                {needsDates && (
+                {!isAdmin && needsDates && (
                   <div className="w-full rounded-xl bg-blue-50 p-3">
                     <p className="mb-2 text-xs font-semibold text-blue-800">Set task timeline</p>
                     <p className="mb-3 text-xs text-blue-700">This admin-assigned task is active. Add the start and due date before marking it complete.</p>
@@ -239,14 +244,17 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
                     </div>
                   </div>
                 )}
-                {['In Progress', 'Delay Requested'].includes(task.status) && task.startDate && task.endDate && (
+                {!isAdmin && ['In Progress', 'Delay Requested'].includes(task.status) && task.startDate && task.endDate && (
                   <ActionButton label="Mark Complete" onClick={() => doAction('complete')} loading={loading === 'complete'} color="green" />
+                )}
+                {isAdmin && task.status !== 'Completed' && task.status !== 'Verified' && (
+                  <ActionButton label="Complete and Verify" onClick={() => doAction('complete')} loading={loading === 'complete'} color="green" />
                 )}
               </div>
             )}
 
             {/* Handoff actions */}
-            {(isHandoff || role === 'admin') && task.status === 'Completed' && (
+            {(isHandoff || isAdmin) && task.status === 'Completed' && (
               <ActionButton label="Verify Task" onClick={() => doAction('verify')} loading={loading === 'verify'} color="brand" />
             )}
 
@@ -302,7 +310,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
             )}
 
             {/* Revision decision for handoff */}
-            {(isHandoff || role === 'admin') && task.revisionStatus === 'requested' && (
+            {(isHandoff || isAdmin) && task.revisionStatus === 'requested' && (
               <div className="bg-yellow-50 rounded-xl p-3">
                 <p className="text-xs font-semibold text-yellow-800 mb-2 flex items-center gap-1.5">
                   <RefreshCw size={13} /> Revision Requested

@@ -33,22 +33,25 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const { action, startDate, endDate } = await req.json();
   const now = Timestamp.now();
+  const isAdmin = session.role === 'admin';
+  const actorIsAssignee = task.assignedTo === session.uid;
+  const scoreUid = isAdmin ? task.assignedTo : session.uid;
 
   try {
     if (action === 'accept') {
-      if (task.assignedTo !== session.uid) {
+      if (!actorIsAssignee && !isAdmin) {
         return NextResponse.json({ success: false, error: 'Only assignee can accept' }, { status: 403 });
       }
-      if (!startDate || !endDate) {
+      if (!isAdmin && (!startDate || !endDate)) {
         return NextResponse.json({ success: false, error: 'Start date and due date are required when accepting' }, { status: 400 });
       }
-      if (new Date(endDate) < new Date(startDate)) {
+      if (startDate && endDate && new Date(endDate) < new Date(startDate)) {
         return NextResponse.json({ success: false, error: 'Due date must be after start date' }, { status: 400 });
       }
       await adminUpdateTaskStatus(params.id, 'In Progress', {
         acceptedAt: now,
-        startDate: Timestamp.fromDate(new Date(startDate)),
-        endDate: Timestamp.fromDate(new Date(endDate)),
+        startDate: startDate ? Timestamp.fromDate(new Date(startDate)) : task.startDate,
+        endDate: endDate ? Timestamp.fromDate(new Date(endDate)) : task.endDate,
       });
       await adminLog('TASK_ACCEPTED', `${params.id} accepted by ${session.name}`, {
         taskId: params.id, uid: session.uid,
@@ -56,7 +59,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     else if (action === 'set-dates') {
-      if (task.assignedTo !== session.uid) {
+      if (!actorIsAssignee && !isAdmin) {
         return NextResponse.json({ success: false, error: 'Only assignee can set dates' }, { status: 403 });
       }
       if (!startDate || !endDate) {
@@ -76,33 +79,51 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     else if (action === 'complete') {
-      if (task.assignedTo !== session.uid) {
+      if (!actorIsAssignee && !isAdmin) {
         return NextResponse.json({ success: false, error: 'Only assignee can complete' }, { status: 403 });
       }
-      if (!task.startDate || !task.endDate) {
+      if (!isAdmin && (!task.startDate || !task.endDate)) {
         return NextResponse.json({ success: false, error: 'Set start date and due date before completing this task' }, { status: 400 });
       }
-      await adminUpdateTaskStatus(params.id, 'Completed', { completedAt: now });
-      await adminIncrementScore(session.uid, 'tasksCompleted');
+      const shouldCountCompletion = task.status !== 'Completed' && task.status !== 'Verified';
+
+      await adminUpdateTaskStatus(params.id, isAdmin ? 'Verified' : 'Completed', {
+        acceptedAt: task.acceptedAt ?? now,
+        completedAt: now,
+        verifiedAt: isAdmin ? now : task.verifiedAt,
+      });
+      if (shouldCountCompletion) {
+        await adminIncrementScore(scoreUid, 'tasksCompleted');
+      }
 
       // Check on-time vs late
       const endDate = task.delayedDate ?? task.endDate;
-      if (endDate && now.toMillis() <= endDate.toMillis()) {
-        await adminIncrementScore(session.uid, 'onTimeCount');
-      } else if (endDate) {
-        await adminIncrementScore(session.uid, 'lateCount');
+      if (shouldCountCompletion) {
+        if (endDate && now.toMillis() <= endDate.toMillis()) {
+          await adminIncrementScore(scoreUid, 'onTimeCount');
+        } else if (endDate) {
+          await adminIncrementScore(scoreUid, 'lateCount');
+        }
       }
 
-      // Notify handoff to verify
-      await sendWhatsApp(
-        task.handoffWa,
-        msgTaskCompleted({
-          taskId:         task.taskId,
-          description:    task.description,
-          assignedToName: task.assignedToName,
-        }),
-        task.taskId,
-      );
+      if (isAdmin) {
+        await sendWhatsApp(
+          task.assignedToWa,
+          msgTaskVerified({ taskId: task.taskId, handoffName: session.name }),
+          task.taskId,
+        );
+      } else {
+        // Notify handoff to verify
+        await sendWhatsApp(
+          task.handoffWa,
+          msgTaskCompleted({
+            taskId:         task.taskId,
+            description:    task.description,
+            assignedToName: task.assignedToName,
+          }),
+          task.taskId,
+        );
+      }
 
       await adminLog('TASK_DONE', `${params.id} completed by ${session.name}`, {
         taskId: params.id, uid: session.uid,
