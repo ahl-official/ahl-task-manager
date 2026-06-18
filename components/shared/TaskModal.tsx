@@ -11,7 +11,7 @@ interface Props {
   onClose: () => void;
   role: 'admin' | 'user';
   currentUid: string;
-  onUpdate: () => void;
+  onUpdate: (task?: TaskSerialized) => void;
 }
 
 export default function TaskModal({ task, onClose, role, currentUid, onUpdate }: Props) {
@@ -45,7 +45,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
         verify: 'Task verified successfully',
       };
       toast.success(successMessage[action] ?? 'Task updated successfully');
-      onUpdate();
+      onUpdate(data.data);
     } catch (err: any) {
       toast.error(err.message ?? 'Action failed');
     } finally {

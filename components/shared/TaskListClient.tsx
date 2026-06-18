@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { ArrowRight, Clock3, Search } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS, PRIORITY_DOT, getDueBadge } from '@/lib/utils';
@@ -38,6 +38,7 @@ function getTimeAgo(iso: string) {
 }
 
 export default function TaskListClient({ tasks, role, currentUid, users = [] }: Props) {
+  const [taskItems, setTaskItems] = useState(tasks);
   const [search, setSearch]         = useState('');
   const [statusFilter, setStatus]   = useState('all');
   const [priorityFilter, setPriority] = useState('all');
@@ -46,12 +47,26 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
   const [categoryFilter, setCategory] = useState('all');
   const [selectedTask, setSelected] = useState<TaskSerialized | null>(null);
 
+  useEffect(() => {
+    setTaskItems(tasks);
+  }, [tasks]);
+
+  function updateTask(updated?: TaskSerialized) {
+    if (!updated) {
+      setSelected(null);
+      return;
+    }
+
+    setTaskItems(current => current.map(task => task.taskId === updated.taskId ? updated : task));
+    setSelected(updated);
+  }
+
   const departments = useMemo(() =>
     Array.from(new Set([
       ...users.map(user => user.department).filter(Boolean),
-      ...tasks.map(task => task.department).filter(Boolean),
+      ...taskItems.map(task => task.department).filter(Boolean),
     ])).sort((a, b) => a.localeCompare(b)),
-    [tasks, users]
+    [taskItems, users]
   );
 
   const visibleUsers = useMemo(() =>
@@ -62,7 +77,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
   );
 
   const filtered = useMemo(() => {
-    return tasks.filter(t => {
+    return taskItems.filter(t => {
       const matchSearch   = !search || t.description.toLowerCase().includes(search.toLowerCase()) || t.taskId.toLowerCase().includes(search.toLowerCase());
       const matchStatus   = statusFilter === 'all' || t.status === statusFilter;
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
@@ -71,14 +86,14 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
       const matchCategory = categoryFilter === 'all' || t.category === categoryFilter;
       return matchSearch && matchStatus && matchPriority && matchDepartment && matchUser && matchCategory;
     });
-  }, [tasks, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter]);
+  }, [taskItems, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter]);
 
   const justAssignedTasks = useMemo(() =>
-    tasks
+    taskItems
       .filter(task => ACTIVE_STATUSES.has(task.status))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, 4),
-    [tasks]
+    [taskItems]
   );
 
   const selectedUser = users.find(user => user.uid === userFilter);
@@ -237,7 +252,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
         </select>
 
         <div className="flex items-center text-xs text-gray-400">
-          {filtered.length} of {tasks.length}
+          {filtered.length} of {taskItems.length}
         </div>
       </div>
 
@@ -325,7 +340,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
           onClose={() => setSelected(null)}
           role={role}
           currentUid={currentUid}
-          onUpdate={() => { setSelected(null); window.location.reload(); }}
+          onUpdate={updateTask}
         />
       )}
     </>

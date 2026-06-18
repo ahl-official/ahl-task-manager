@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
   isSameDay, isSameMonth, isToday, addMonths, subMonths, getDay,
@@ -16,10 +16,25 @@ interface Props {
 }
 
 export default function CalendarClient({ tasks, users }: Props) {
+  const [taskItems, setTaskItems] = useState(tasks);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedTask, setSelectedTask] = useState<TaskSerialized | null>(null);
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [userFilter, setUserFilter]     = useState('all');
+
+  useEffect(() => {
+    setTaskItems(tasks);
+  }, [tasks]);
+
+  function updateTask(updated?: TaskSerialized) {
+    if (!updated) {
+      setSelectedTask(null);
+      return;
+    }
+
+    setTaskItems(current => current.map(task => task.taskId === updated.taskId ? updated : task));
+    setSelectedTask(updated);
+  }
 
   const days = useMemo(() => {
     const start = startOfMonth(currentDate);
@@ -30,9 +45,9 @@ export default function CalendarClient({ tasks, users }: Props) {
   const departments = useMemo(() =>
     Array.from(new Set([
       ...users.map(user => user.department).filter(Boolean),
-      ...tasks.map(task => task.department).filter(Boolean),
+      ...taskItems.map(task => task.department).filter(Boolean),
     ])).sort((a, b) => a.localeCompare(b)),
-    [tasks, users],
+    [taskItems, users],
   );
 
   const departmentUsers = useMemo(() =>
@@ -45,11 +60,11 @@ export default function CalendarClient({ tasks, users }: Props) {
   const filteredTasks = useMemo(() => {
     if (!departmentFilter) return [];
 
-    const departmentTasks = tasks.filter(task => task.department === departmentFilter);
+    const departmentTasks = taskItems.filter(task => task.department === departmentFilter);
     return userFilter === 'all'
       ? departmentTasks
       : departmentTasks.filter(task => task.assignedTo === userFilter);
-  }, [tasks, departmentFilter, userFilter]);
+  }, [taskItems, departmentFilter, userFilter]);
 
   const departmentTaskCount = filteredTasks.length;
   const scheduledTaskCount = filteredTasks.filter(task => task.delayedDate ?? task.endDate).length;
@@ -223,7 +238,7 @@ export default function CalendarClient({ tasks, users }: Props) {
           onClose={() => setSelectedTask(null)}
           role="admin"
           currentUid=""
-          onUpdate={() => { setSelectedTask(null); window.location.reload(); }}
+          onUpdate={updateTask}
         />
       )}
     </div>

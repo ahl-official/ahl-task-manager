@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { ArrowRight, Building2, Clock3, X } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS } from '@/lib/utils';
 import TaskModal from '@/components/shared/TaskModal';
@@ -29,11 +29,26 @@ interface Props {
 }
 
 export default function AdminDashboardClient({ users, tasks, scores, departments: initialDepartments }: Props) {
+  const [taskItems, setTaskItems] = useState(tasks);
   const [filter, setFilter]         = useState<TaskFilter>('all');
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<TaskSerialized | null>(null);
   const [deptFilter, setDeptFilter]  = useState<string>('all');
+
+  useEffect(() => {
+    setTaskItems(tasks);
+  }, [tasks]);
+
+  function updateTask(updated?: TaskSerialized) {
+    if (!updated) {
+      setSelectedTask(null);
+      return;
+    }
+
+    setTaskItems(current => current.map(task => task.taskId === updated.taskId ? updated : task));
+    setSelectedTask(updated);
+  }
 
   const departments = useMemo(() => {
     const userDepartments = users.map((u: any) => u.department).filter(Boolean);
@@ -44,13 +59,13 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
   const activeUsers = users.filter((u: any) => u.isActive);
 
   function getTasksForUser(uid: string) {
-    let userTasks = tasks.filter(t => t.assignedTo === uid);
+    let userTasks = taskItems.filter(t => t.assignedTo === uid);
     if (filter !== 'all') userTasks = userTasks.filter(t => t.status === filter);
     return userTasks;
   }
 
   function getCounts(uid: string) {
-    const ut = tasks.filter(t => t.assignedTo === uid);
+    const ut = taskItems.filter(t => t.assignedTo === uid);
     return {
       all:       ut.length,
       pending:   ut.filter(t => t.status === 'Pending Accept').length,
@@ -72,7 +87,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
     .map(department => {
       const departmentUsers = activeUsers.filter((u: any) => u.department === department);
       const userIds = new Set(departmentUsers.map((u: any) => u.uid));
-      const departmentTasks = tasks.filter(t => userIds.has(t.assignedTo));
+      const departmentTasks = taskItems.filter(t => userIds.has(t.assignedTo));
       const visibleUsers = departmentUsers.filter((u: any) => filter === 'all' || getTasksForUser(u.uid).length > 0);
 
       return {
@@ -95,19 +110,19 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
     : null;
 
   const overallStats = {
-    total:     tasks.length,
-    pending:   tasks.filter(t => t.status === 'Pending Accept').length,
-    inProgress:tasks.filter(t => t.status === 'In Progress').length,
-    overdue:   tasks.filter(t => t.status === 'Overdue').length,
-    completed: tasks.filter(t => ['Completed', 'Verified'].includes(t.status)).length,
+    total:     taskItems.length,
+    pending:   taskItems.filter(t => t.status === 'Pending Accept').length,
+    inProgress:taskItems.filter(t => t.status === 'In Progress').length,
+    overdue:   taskItems.filter(t => t.status === 'Overdue').length,
+    completed: taskItems.filter(t => ['Completed', 'Verified'].includes(t.status)).length,
   };
 
   const justAssignedTasks = useMemo(() =>
-    tasks
+    taskItems
       .filter(task => ACTIVE_STATUSES.has(task.status))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, 6),
-    [tasks]
+    [taskItems]
   );
 
   return (
@@ -408,7 +423,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
           onClose={() => setSelectedTask(null)}
           role="admin"
           currentUid=""
-          onUpdate={() => { setSelectedTask(null); window.location.reload(); }}
+          onUpdate={updateTask}
         />
       )}
     </div>

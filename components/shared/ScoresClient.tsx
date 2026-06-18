@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { cn, STATUS_COLORS } from '@/lib/utils';
 import {
   AlertTriangle,
@@ -35,10 +35,25 @@ export default function ScoresClient({
   viewerRole = 'member',
   showDepartments = false,
 }: Props) {
+  const [taskItems, setTaskItems] = useState(tasks);
   const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [filter, setFilter] = useState<TaskFilter>('all');
   const [selectedTask, setSelectedTask] = useState<TaskSerialized | null>(null);
+
+  useEffect(() => {
+    setTaskItems(tasks);
+  }, [tasks]);
+
+  function updateTask(updated?: TaskSerialized) {
+    if (!updated) {
+      setSelectedTask(null);
+      return;
+    }
+
+    setTaskItems(current => current.map(task => task.taskId === updated.taskId ? updated : task));
+    setSelectedTask(updated);
+  }
 
   const activeUsers = users.filter(user => user.isActive !== false);
   const scoreMap = useMemo(() =>
@@ -85,14 +100,14 @@ export default function ScoresClient({
   }, [activeUsers, initialDepartments, normalizedScores]);
 
   function userTasks(uid: string, nextFilter: TaskFilter = filter) {
-    const rows = tasks.filter(task => task.assignedTo === uid);
+    const rows = taskItems.filter(task => task.assignedTo === uid);
     if (nextFilter === 'all') return rows;
     if (nextFilter === 'Completed') return rows.filter(task => ['Completed', 'Verified'].includes(task.status));
     return rows.filter(task => task.status === nextFilter);
   }
 
   function countsForUser(uid: string) {
-    const rows = tasks.filter(task => task.assignedTo === uid);
+    const rows = taskItems.filter(task => task.assignedTo === uid);
     return {
       total: rows.length,
       pending: rows.filter(task => task.status === 'Pending Accept').length,
@@ -108,7 +123,7 @@ export default function ScoresClient({
 
   function scoreForIdentity(identity: { uid: string; name: string; department: string }) {
     const existing = scoreMap[identity.uid];
-    const rows = tasks.filter(task => task.assignedTo === identity.uid);
+    const rows = taskItems.filter(task => task.assignedTo === identity.uid);
     const completedRows = rows.filter(task => ['Completed', 'Verified'].includes(task.status));
     const onTimeRows = completedRows.filter(task => {
       if (!task.completedAt) return false;
@@ -148,7 +163,7 @@ export default function ScoresClient({
       .filter(user => sameDepartment(user.department, department))
       .forEach(user => identities.set(user.uid, user));
 
-    tasks
+    taskItems
       .filter(task => sameDepartment(task.department, department))
       .forEach(task => {
         if (!identities.has(task.assignedTo)) {
@@ -175,7 +190,7 @@ export default function ScoresClient({
     const departmentUsers = Array.from(identities.values());
     const departmentScores = departmentUsers.map(user => scoreForIdentity(user));
     const userIds = new Set(departmentUsers.map(user => user.uid));
-    const departmentTasks = tasks.filter(task => userIds.has(task.assignedTo));
+    const departmentTasks = taskItems.filter(task => userIds.has(task.assignedTo));
     const averageScore = departmentScores.length
       ? Math.round(departmentScores.reduce((sum, score) => sum + (score.monthlyScore ?? 0), 0) / departmentScores.length)
       : 0;
@@ -324,7 +339,7 @@ export default function ScoresClient({
           onClose={() => setSelectedTask(null)}
           role={viewerRole === 'admin' ? 'admin' : 'user'}
           currentUid={currentUid}
-          onUpdate={() => { setSelectedTask(null); window.location.reload(); }}
+          onUpdate={updateTask}
         />
       )}
     </div>
