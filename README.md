@@ -119,6 +119,12 @@ WAHA_API_KEY=your-api-key-if-any
 # App
 NEXT_PUBLIC_APP_URL=https://yourdomain.com
 CRON_SECRET=generate-a-random-32char-string
+
+# Optional: Google Sheets-backed checklist completions
+CHECKLIST_SPREADSHEET_ID=your-google-sheet-id
+CHECKLIST_COMPLETIONS_SHEET=Checklist Completions
+GOOGLE_SHEETS_CLIENT_EMAIL=service-account@project.iam.gserviceaccount.com
+GOOGLE_SHEETS_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n
 ```
 
 ### 5. Create First Admin User
