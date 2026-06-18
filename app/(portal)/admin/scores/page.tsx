@@ -8,7 +8,7 @@ import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 export default async function AdminScoresPage() {
   const [scores, tasks, users, departments] = await Promise.all([
     adminGetAllScores(),
-    adminGetAllTasks(),
+    adminGetAllTasks({ limit: null }),
     adminGetAllUsers(),
     adminGetDepartments(),
   ]);

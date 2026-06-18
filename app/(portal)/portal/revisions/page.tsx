@@ -12,7 +12,9 @@ export default async function PortalRevisionsPage() {
 
   const [revisions, allTasks, allUsers] = await Promise.all([
     session.role === 'leader' ? adminGetAllRevisions() : adminGetRevisionsForUser(session.uid),
-    adminGetAllTasks(),
+    session.role === 'leader'
+      ? adminGetAllTasks({ department: session.department, limit: null })
+      : adminGetAllTasks({ limit: null }),
     adminGetAllUsers(),
   ]);
   const visibleUsers = filterUsersForSession(session, allUsers);

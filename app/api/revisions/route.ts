@@ -22,7 +22,9 @@ export async function GET(req: NextRequest) {
   if (session.role === 'admin' || session.role === 'leader') {
     const [allRevisions, allTasks] = await Promise.all([
       adminGetAllRevisions(),
-      adminGetAllTasks(),
+      session.role === 'leader'
+        ? adminGetAllTasks({ department: session.department, limit: null })
+        : adminGetAllTasks({ limit: null }),
     ]);
     const visibleTaskIds = new Set(filterTasksForSession(session, allTasks).map(task => task.taskId));
     const revisions = allRevisions.filter(revision =>

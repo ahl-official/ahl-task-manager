@@ -411,7 +411,7 @@ export async function adminGetAllTasks(filters?: {
     const params = new URLSearchParams({ scope: 'all' });
     if (filters?.status) params.set('status', filters.status);
     if (filters?.department) params.set('department', filters.department);
-    if (filters?.limit !== null) params.set('limit', String(filters?.limit ?? DEFAULT_TASK_READ_LIMIT));
+    params.set('limit', filters?.limit === null ? 'all' : String(filters?.limit ?? DEFAULT_TASK_READ_LIMIT));
     const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
     return tasks.map(cfTask).filter(Boolean) as Task[];
   }

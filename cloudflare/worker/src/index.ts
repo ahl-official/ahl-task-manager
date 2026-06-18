@@ -394,7 +394,10 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     const uid = url.searchParams.get('uid');
     const status = url.searchParams.get('status');
     const department = url.searchParams.get('department');
-    const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 500), 1), 1000);
+    const limitParam = url.searchParams.get('limit');
+    const limit = limitParam === 'all'
+      ? null
+      : Math.min(Math.max(Number(limitParam || 500), 1), 1000);
     const clauses: string[] = [];
     const binds: unknown[] = [];
     if (scope === 'mine' && uid) { clauses.push('assigned_to = ?'); binds.push(uid); }
@@ -402,7 +405,10 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     if (status) { clauses.push('status = ?'); binds.push(status); }
     if (department) { clauses.push('department = ?'); binds.push(department); }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const rows = await env.DB.prepare(`SELECT * FROM tasks_current ${where} ORDER BY created_at DESC LIMIT ?`).bind(...binds, limit).all();
+    const limitClause = limit ? 'LIMIT ?' : '';
+    const rows = await env.DB.prepare(`SELECT * FROM tasks_current ${where} ORDER BY created_at DESC ${limitClause}`)
+      .bind(...binds, ...(limit ? [limit] : []))
+      .all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
 

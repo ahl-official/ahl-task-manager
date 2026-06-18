@@ -10,7 +10,7 @@ export default async function AdminRevisionsPage() {
   if (!session) return null;
 
   const [tasks, allRevisions, users] = await Promise.all([
-    adminGetAllTasks(),
+    adminGetAllTasks({ limit: null }),
     adminGetAllRevisions(),
     adminGetAllUsers(),
   ]);
