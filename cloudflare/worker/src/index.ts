@@ -406,12 +406,6 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
 
-  if (url.pathname.startsWith('/tasks/') && req.method === 'GET') {
-    const id = decodeURIComponent(url.pathname.slice('/tasks/'.length));
-    const task = taskFromRow(await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id = ? LIMIT 1').bind(id).first());
-    return task ? json({ success: true, data: task }) : json({ success: false, error: 'Not found' }, { status: 404 });
-  }
-
   if (url.pathname === '/tasks/active' && req.method === 'GET') {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 500), 1), 1000);
     const placeholders = ACTIVE_STATUSES.map(() => '?').join(',');
@@ -431,6 +425,12 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     const to = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
     const rows = await env.DB.prepare("SELECT * FROM tasks_current WHERE status IN ('Pending Accept', 'In Progress') AND end_date IS NOT NULL AND end_date >= ? AND end_date <= ? ORDER BY end_date ASC LIMIT 1000").bind(from, to).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
+  }
+
+  if (url.pathname.startsWith('/tasks/') && req.method === 'GET') {
+    const id = decodeURIComponent(url.pathname.slice('/tasks/'.length));
+    const task = taskFromRow(await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id = ? LIMIT 1').bind(id).first());
+    return task ? json({ success: true, data: task }) : json({ success: false, error: 'Not found' }, { status: 404 });
   }
 
   if (url.pathname === '/tasks' && req.method === 'POST') {
