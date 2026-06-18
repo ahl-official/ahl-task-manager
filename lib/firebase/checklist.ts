@@ -97,10 +97,11 @@ export async function adminGetChecklistRowsForTasks(tasks: Task[]) {
 async function hydrateChecklistTasks(uid: string, tasks: Task[]) {
   const periodKeys = new Set(tasks.map(task => getChecklistPeriodKey(task.category)));
   if (hasCloudflareApi()) {
-    const rows = await cfApi<any[]>(`/checklist/completions?uid=${encodeURIComponent(uid)}`);
+    const params = new URLSearchParams({ uid });
+    Array.from(periodKeys).forEach(periodKey => params.append('periodKey', periodKey));
+    const rows = await cfApi<any[]>(`/checklist/completions?${params.toString()}`);
     const completed = new Set(
       rows
-        .filter(row => periodKeys.has(row.periodKey))
         .map(row => `${row.taskId}:${row.periodKey}`)
     );
 
@@ -144,8 +145,9 @@ export async function adminCompleteChecklistTask(task: Task, uid: string): Promi
   const periodKey = getChecklistPeriodKey(task.category);
   const id = `${task.taskId}_${uid}_${periodKey}`;
   if (hasCloudflareApi()) {
-    const existingRows = await cfApi<any[]>(`/checklist/completions?uid=${encodeURIComponent(uid)}`);
-    if (existingRows.some(row => row.taskId === task.taskId && row.periodKey === periodKey)) {
+    const params = new URLSearchParams({ uid, taskId: task.taskId, periodKey });
+    const existingRows = await cfApi<any[]>(`/checklist/completions?${params.toString()}`);
+    if (existingRows.length > 0) {
       throw new Error(`${getCategoryLabel(task.category)} is already completed for this period`);
     }
     const row = await cfApi<any>('/checklist/completions', {

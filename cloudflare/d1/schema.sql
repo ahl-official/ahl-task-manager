@@ -60,8 +60,11 @@ CREATE TABLE IF NOT EXISTS tasks_current (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_created ON tasks_current (assigned_to, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_handoff_created ON tasks_current (handoff_uid, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks_current (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks_current (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_department_status ON tasks_current (department, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_department_created ON tasks_current (department, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_department_status_created ON tasks_current (department, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_week_status ON tasks_current (week_key, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_month_status ON tasks_current (month_key, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_due_status ON tasks_current (status, end_date);

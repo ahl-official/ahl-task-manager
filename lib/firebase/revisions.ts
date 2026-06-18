@@ -4,7 +4,6 @@ import type { RevisionLog, RevisionDecision } from '@/types';
 import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { cfRevision } from '@/lib/cloudflare/models';
-import { adminGetTask } from './tasks';
 
 const COL = 'revisionLog';
 const DEFAULT_REVISION_READ_LIMIT = 300;
@@ -126,12 +125,13 @@ export async function adminGetAllRevisions(options?: {
 
 export async function adminGetPendingRevisionsByHandoff(handoffUid: string): Promise<RevisionLog[]> {
   if (hasCloudflareApi()) {
-    const revisions = await adminGetAllRevisions({ status: 'pending', limit: MAX_REVISION_READ_LIMIT });
-    const pairs = await Promise.all(revisions.map(async revision => ({
-      revision,
-      task: await adminGetTask(revision.taskId),
-    })));
-    return pairs.filter(pair => pair.task?.handoffUid === handoffUid).map(pair => pair.revision);
+    const params = new URLSearchParams({
+      status: 'pending',
+      handoffUid,
+      limit: String(MAX_REVISION_READ_LIMIT),
+    });
+    const revisions = await cfApi<any[]>(`/revisions?${params.toString()}`);
+    return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
   }
 
   const revisions = await adminGetAllRevisions({ status: 'pending', limit: MAX_REVISION_READ_LIMIT });
@@ -154,14 +154,12 @@ export async function adminGetPendingRevisionsByHandoff(handoffUid: string): Pro
 
 export async function adminGetRevisionsForUser(uid: string): Promise<RevisionLog[]> {
   if (hasCloudflareApi()) {
-    const revisions = await adminGetAllRevisions({ limit: MAX_REVISION_READ_LIMIT });
-    const pairs = await Promise.all(revisions.map(async revision => ({
-      revision,
-      task: await adminGetTask(revision.taskId),
-    })));
-    return pairs
-      .filter(pair => pair.revision.requestedBy === uid || pair.task?.handoffUid === uid)
-      .map(pair => pair.revision);
+    const params = new URLSearchParams({
+      visibleForUid: uid,
+      limit: String(MAX_REVISION_READ_LIMIT),
+    });
+    const revisions = await cfApi<any[]>(`/revisions?${params.toString()}`);
+    return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
   }
 
   const revisions = await adminGetAllRevisions({ limit: MAX_REVISION_READ_LIMIT });

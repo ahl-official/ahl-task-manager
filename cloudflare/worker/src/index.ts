@@ -519,7 +519,36 @@ async function routeRevisions(req: Request, env: Env, url: URL) {
     const status = url.searchParams.get('status');
     const taskId = url.searchParams.get('taskId');
     const requestedBy = url.searchParams.get('requestedBy');
+    const handoffUid = url.searchParams.get('handoffUid');
+    const visibleForUid = url.searchParams.get('visibleForUid');
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 300), 1), 1000);
+
+    if (handoffUid) {
+      const clauses = ['t.handoff_uid = ?'];
+      const binds: unknown[] = [handoffUid];
+      if (status) { clauses.push('r.status = ?'); binds.push(status); }
+      const rows = await env.DB.prepare(
+        `SELECT r.* FROM revisions r
+         JOIN tasks_current t ON t.task_id = r.task_id
+         WHERE ${clauses.join(' AND ')}
+         ORDER BY r.created_at DESC LIMIT ?`
+      ).bind(...binds, limit).all();
+      return json({ success: true, data: rows.results.map(revisionFromRow) });
+    }
+
+    if (visibleForUid) {
+      const clauses = ['(r.requested_by = ? OR t.handoff_uid = ?)'];
+      const binds: unknown[] = [visibleForUid, visibleForUid];
+      if (status) { clauses.push('r.status = ?'); binds.push(status); }
+      const rows = await env.DB.prepare(
+        `SELECT r.* FROM revisions r
+         LEFT JOIN tasks_current t ON t.task_id = r.task_id
+         WHERE ${clauses.join(' AND ')}
+         ORDER BY r.created_at DESC LIMIT ?`
+      ).bind(...binds, limit).all();
+      return json({ success: true, data: rows.results.map(revisionFromRow) });
+    }
+
     const clauses: string[] = [];
     const binds: unknown[] = [];
     if (status) { clauses.push('status = ?'); binds.push(status); }
@@ -604,7 +633,20 @@ async function routeChecklist(req: Request, env: Env, url: URL) {
   if (url.pathname === '/checklist/completions' && req.method === 'GET') {
     const uid = url.searchParams.get('uid');
     if (!uid) return json({ success: false, error: 'uid is required' }, { status: 400 });
-    const rows = await env.DB.prepare('SELECT * FROM checklist_completions WHERE uid = ?').bind(uid).all<any>();
+    const taskId = url.searchParams.get('taskId');
+    const periodKey = url.searchParams.get('periodKey');
+    const periodKeys = url.searchParams.getAll('periodKey');
+    const clauses = ['uid = ?'];
+    const binds: unknown[] = [uid];
+    if (taskId) { clauses.push('task_id = ?'); binds.push(taskId); }
+    if (periodKeys.length > 1) {
+      clauses.push(`period_key IN (${periodKeys.map(() => '?').join(',')})`);
+      binds.push(...periodKeys);
+    } else if (periodKey) {
+      clauses.push('period_key = ?');
+      binds.push(periodKey);
+    }
+    const rows = await env.DB.prepare(`SELECT * FROM checklist_completions WHERE ${clauses.join(' AND ')}`).bind(...binds).all<any>();
     return json({ success: true, data: rows.results.map(row => ({
       id: row.id,
       taskId: row.task_id,
