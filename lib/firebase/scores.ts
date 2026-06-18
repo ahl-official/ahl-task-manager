@@ -50,10 +50,19 @@ export async function adminIncrementScore(
   uid: string,
   field: 'tasksAssigned' | 'tasksCompleted' | 'onTimeCount' | 'lateCount',
 ): Promise<void> {
+  return adminIncrementScores(uid, [field]);
+}
+
+export async function adminIncrementScores(
+  uid: string,
+  fields: Array<'tasksAssigned' | 'tasksCompleted' | 'onTimeCount' | 'lateCount'>,
+): Promise<void> {
+  if (fields.length === 0) return;
+
   if (hasCloudflareApi()) {
     await cfApi('/scores/increment', {
       method: 'POST',
-      body: JSON.stringify({ uid, field }),
+      body: JSON.stringify({ uid, fields }),
     });
     return;
   }
@@ -80,8 +89,15 @@ export async function adminIncrementScore(
     });
   }
 
+  const counts = fields.reduce<Record<string, number>>((acc, field) => {
+    acc[field] = (acc[field] ?? 0) + 1;
+    return acc;
+  }, {});
+
   await ref.update({
-    [field]:     FieldValue.increment(1),
+    ...Object.fromEntries(
+      Object.entries(counts).map(([field, count]) => [field, FieldValue.increment(count)])
+    ),
     ...(user ? {
       name: user.name,
       department: user.department,

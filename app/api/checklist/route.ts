@@ -8,7 +8,7 @@ import {
   getCategoryLabel,
   isRecurringCategory,
 } from '@/lib/firebase/checklist';
-import { adminIncrementScore, adminLog } from '@/lib/firebase/scores';
+import { adminIncrementScores, adminLog } from '@/lib/firebase/scores';
 import type { TaskCategory } from '@/types';
 import { filterTasksForSession } from '@/lib/utils/access';
 
@@ -54,8 +54,7 @@ export async function POST(req: NextRequest) {
     if (!task) return NextResponse.json({ success: false, error: 'Task not found' }, { status: 404 });
 
     const completion = await adminCompleteChecklistTask(task, session.uid);
-    await adminIncrementScore(session.uid, 'tasksCompleted');
-    await adminIncrementScore(session.uid, 'onTimeCount');
+    await adminIncrementScores(session.uid, ['tasksCompleted', 'onTimeCount']);
     await adminLog('TASK_DONE', `${getCategoryLabel(task.category)} checklist completed by ${session.name}`, {
       taskId: task.taskId,
       uid: session.uid,

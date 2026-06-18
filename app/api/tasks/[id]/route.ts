@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/utils/auth';
 import { adminGetTask, adminUpdateTaskStatus, serializeTask } from '@/lib/firebase/tasks';
-import { adminIncrementScore, adminLog } from '@/lib/firebase/scores';
+import { adminIncrementScores, adminLog } from '@/lib/firebase/scores';
 import { sendWhatsApp, msgTaskAccepted, msgTaskCompleted, msgTaskVerified } from '@/lib/waha';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { TaskStatus } from '@/types';
@@ -36,6 +36,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const isAdmin = session.role === 'admin';
   const actorIsAssignee = task.assignedTo === session.uid;
   const scoreUid = isAdmin ? task.assignedTo : session.uid;
+  let updatedTask: Awaited<ReturnType<typeof adminUpdateTaskStatus>> = null;
 
   try {
     if (action === 'accept') {
@@ -48,7 +49,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (startDate && endDate && new Date(endDate) < new Date(startDate)) {
         return NextResponse.json({ success: false, error: 'Due date must be after start date' }, { status: 400 });
       }
-      await adminUpdateTaskStatus(params.id, 'In Progress', {
+      updatedTask = await adminUpdateTaskStatus(params.id, 'In Progress', {
         acceptedAt: now,
         startDate: startDate ? Timestamp.fromDate(new Date(startDate)) : task.startDate,
         endDate: endDate ? Timestamp.fromDate(new Date(endDate)) : task.endDate,
@@ -68,7 +69,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (new Date(endDate) < new Date(startDate)) {
         return NextResponse.json({ success: false, error: 'Due date must be after start date' }, { status: 400 });
       }
-      await adminUpdateTaskStatus(params.id, 'In Progress', {
+      updatedTask = await adminUpdateTaskStatus(params.id, 'In Progress', {
         startDate: Timestamp.fromDate(new Date(startDate)),
         endDate: Timestamp.fromDate(new Date(endDate)),
         acceptedAt: task.acceptedAt ?? now,
@@ -87,23 +88,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       }
       const shouldCountCompletion = task.status !== 'Completed' && task.status !== 'Verified';
 
-      await adminUpdateTaskStatus(params.id, isAdmin ? 'Verified' : 'Completed', {
+      updatedTask = await adminUpdateTaskStatus(params.id, isAdmin ? 'Verified' : 'Completed', {
         acceptedAt: task.acceptedAt ?? now,
         completedAt: now,
         verifiedAt: isAdmin ? now : task.verifiedAt,
       });
       if (shouldCountCompletion) {
-        await adminIncrementScore(scoreUid, 'tasksCompleted');
-      }
-
-      // Check on-time vs late
-      const endDate = task.delayedDate ?? task.endDate;
-      if (shouldCountCompletion) {
+        const scoreFields: Parameters<typeof adminIncrementScores>[1] = ['tasksCompleted'];
+        const endDate = task.delayedDate ?? task.endDate;
         if (endDate && now.toMillis() <= endDate.toMillis()) {
-          await adminIncrementScore(scoreUid, 'onTimeCount');
+          scoreFields.push('onTimeCount');
         } else if (endDate) {
-          await adminIncrementScore(scoreUid, 'lateCount');
+          scoreFields.push('lateCount');
         }
+        await adminIncrementScores(scoreUid, scoreFields);
       }
 
       if (isAdmin) {
@@ -134,7 +132,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (task.handoffUid !== session.uid && session.role !== 'admin') {
         return NextResponse.json({ success: false, error: 'Only handoff can verify' }, { status: 403 });
       }
-      await adminUpdateTaskStatus(params.id, 'Verified', { verifiedAt: now });
+      updatedTask = await adminUpdateTaskStatus(params.id, 'Verified', { verifiedAt: now });
 
       // Notify assignee
       await sendWhatsApp(
@@ -152,7 +150,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });
     }
 
-    const updated = await adminGetTask(params.id);
+    const updated = updatedTask ?? await adminGetTask(params.id);
     return NextResponse.json({ success: true, data: serializeTask(updated!) });
   } catch (err: any) {
     console.error(`PATCH /api/tasks/${params.id} error`, err);

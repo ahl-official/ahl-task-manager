@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminGetUserByWa } from '@/lib/firebase/users';
 import { adminGetTask, adminUpdateTaskStatus, serializeTask } from '@/lib/firebase/tasks';
-import { adminIncrementScore, adminLog } from '@/lib/firebase/scores';
+import { adminIncrementScores, adminLog } from '@/lib/firebase/scores';
 import {
   sendWhatsApp,
   msgTaskAccepted,
@@ -153,14 +153,15 @@ async function handleDone(from: string, uid: string, name: string, taskId: strin
 
   const now = Timestamp.now();
   await adminUpdateTaskStatus(taskId, 'Completed', { completedAt: now });
-  await adminIncrementScore(uid, 'tasksCompleted');
 
+  const scoreFields: Parameters<typeof adminIncrementScores>[1] = ['tasksCompleted'];
   const endDate = task.delayedDate ?? task.endDate;
   if (endDate && now.toMillis() <= endDate.toMillis()) {
-    await adminIncrementScore(uid, 'onTimeCount');
+    scoreFields.push('onTimeCount');
   } else if (endDate) {
-    await adminIncrementScore(uid, 'lateCount');
+    scoreFields.push('lateCount');
   }
+  await adminIncrementScores(uid, scoreFields);
 
   await sendWhatsApp(from, `✅ *${taskId}* marked as complete. Your checker has been notified.`);
   await sendWhatsApp(task.handoffWa, msgTaskCompleted({ taskId, description: task.description, assignedToName: name }), taskId);

@@ -23,6 +23,7 @@ type Env = {
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 const ACTIVE_STATUSES = ['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue'];
+const DROPPED_LOG_TYPES = new Set(['WEBHOOK_RAW']);
 
 function json(data: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), { ...init, headers: { ...JSON_HEADERS, ...(init.headers ?? {}) } });
@@ -228,6 +229,10 @@ async function sendWhatsApp(env: Env, to: string, message: string) {
 }
 
 async function log(env: Env, type: string, message: string, opts: Record<string, unknown> = {}) {
+  if (DROPPED_LOG_TYPES.has(type)) return;
+  if (type === 'SEND_WA' && /^Sent to\b/.test(message)) return;
+  if (type === 'REMINDER' && /\bsent\b/i.test(message)) return;
+
   await env.DB.prepare(
     'INSERT INTO logs (id, type, task_id, uid, message, meta_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).bind(randomId('log_'), type, opts.taskId || null, opts.uid || null, message, JSON.stringify(opts.meta || {}), nowIso()).run();
@@ -492,24 +497,48 @@ async function routeScores(req: Request, env: Env, url: URL) {
     return json({ success: true });
   }
   if (url.pathname === '/scores/increment' && req.method === 'POST') {
-    const data = await body<{ uid?: string; field?: string }>(req);
-    if (!data.uid || !data.field) return json({ success: false, error: 'uid and field are required' }, { status: 400 });
-    const col = data.field === 'tasksCompleted'
-      ? 'tasks_completed'
-      : data.field === 'onTimeCount'
-        ? 'on_time_count'
-        : data.field === 'lateCount'
-          ? 'late_count'
-          : 'tasks_assigned';
-    const user = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ? LIMIT 1').bind(data.uid).first());
-    if (user) {
-      await env.DB.prepare(
-        'INSERT OR IGNORE INTO scores (uid, name, department, wa_number, tasks_assigned, tasks_completed, on_time_count, late_count, monthly_score, last_updated) VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, ?)'
-      ).bind(user.uid, user.name, user.department, user.waNumber, nowIso()).run();
-    }
-    await env.DB.prepare(`UPDATE scores SET ${col} = ${col} + 1, last_updated = ? WHERE uid = ?`).bind(nowIso(), data.uid).run();
-    const score = scoreFromRow(await env.DB.prepare('SELECT * FROM scores WHERE uid = ? LIMIT 1').bind(data.uid).first());
-    return json({ success: true, data: score });
+    const data = await body<{ uid?: string; field?: string; fields?: string[] }>(req);
+    const fields = [...(data.fields ?? []), ...(data.field ? [data.field] : [])];
+    if (!data.uid || fields.length === 0) return json({ success: false, error: 'uid and field(s) are required' }, { status: 400 });
+
+    const counts = {
+      tasksAssigned: fields.filter(field => field === 'tasksAssigned').length,
+      tasksCompleted: fields.filter(field => field === 'tasksCompleted').length,
+      onTimeCount: fields.filter(field => field === 'onTimeCount').length,
+      lateCount: fields.filter(field => field === 'lateCount').length,
+    };
+    const now = nowIso();
+
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO scores (uid, name, department, wa_number, tasks_assigned, tasks_completed, on_time_count, late_count, monthly_score, last_updated)
+       SELECT uid, name, department, wa_number, 0, 0, 0, 0, 0, ? FROM users WHERE uid = ?`
+    ).bind(now, data.uid).run();
+
+    await env.DB.prepare(
+      `UPDATE scores
+       SET tasks_assigned = tasks_assigned + ?,
+           tasks_completed = tasks_completed + ?,
+           on_time_count = on_time_count + ?,
+           late_count = late_count + ?,
+           monthly_score = CASE
+             WHEN tasks_assigned + ? > 0 THEN ROUND(((on_time_count + ?) * 100.0) / (tasks_assigned + ?))
+             ELSE 0
+           END,
+           last_updated = ?
+       WHERE uid = ?`
+    ).bind(
+      counts.tasksAssigned,
+      counts.tasksCompleted,
+      counts.onTimeCount,
+      counts.lateCount,
+      counts.tasksAssigned,
+      counts.onTimeCount,
+      counts.tasksAssigned,
+      now,
+      data.uid,
+    ).run();
+
+    return json({ success: true });
   }
   return null;
 }

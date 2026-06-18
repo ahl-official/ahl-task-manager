@@ -315,13 +315,12 @@ export async function adminUpdateTaskStatus(
   taskId: string,
   status: TaskStatus,
   extra?: Partial<Task>,
-): Promise<void> {
+): Promise<Task | null> {
   if (hasCloudflareApi()) {
-    await cfApi(`/tasks/${encodeURIComponent(taskId)}`, {
+    return cfTask(await cfApi(`/tasks/${encodeURIComponent(taskId)}`, {
       method: 'PATCH',
       body: JSON.stringify(cfTimestampFields({ status, ...(extra ?? {}) })),
-    });
-    return;
+    }));
   }
 
   await adminDb.collection(COL).doc(taskId).update({
@@ -331,6 +330,7 @@ export async function adminUpdateTaskStatus(
   });
   clearFirestoreReadCache('tasks:');
   clearFirestoreReadCache('scores:');
+  return adminGetTask(taskId);
 }
 
 export async function adminGetTask(taskId: string): Promise<Task | null> {
