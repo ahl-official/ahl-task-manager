@@ -6,6 +6,7 @@ import { sendWhatsApp, msgLoginOtp } from '@/lib/waha';
 import { isFirestoreQuotaError } from '@/lib/firebase/errors';
 import { adminAuth } from '@/lib/firebase/admin';
 import type { AHLUser } from '@/types';
+import { cfEnvelope, hasCloudflareApi } from '@/lib/cloudflare/api';
 
 function normalizeWa(raw: string) {
   return raw.replace(/\D/g, '');
@@ -124,6 +125,15 @@ export async function POST(req: NextRequest) {
 
     if (!waNumber) {
       return NextResponse.json({ success: false, error: 'WhatsApp number required' }, { status: 400 });
+    }
+
+    if (hasCloudflareApi()) {
+      const response = await cfEnvelope('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ waNumber }),
+      }, { auth: false });
+
+      return NextResponse.json(response, { status: response.success ? 200 : 401 });
     }
 
     const user = await adminGetUserByWa(waNumber);

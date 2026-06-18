@@ -18,6 +18,7 @@ import { canAssignTask } from '@/lib/utils/hierarchy';
 import { filterTasksForSession } from '@/lib/utils/access';
 import { adminDb } from '@/lib/firebase/admin';
 import { adminGetUserByUid } from '@/lib/firebase/users';
+import { hasCloudflareApi } from '@/lib/cloudflare/api';
 
 function normalizeRole(role: string) {
   return role === 'user' ? 'member' : role;
@@ -150,8 +151,8 @@ export async function POST(req: NextRequest) {
     );
 
     // Notify coordinator WA if configured
-    const configSnap = await adminDb.collection('config').doc('app').get();
-    const coordinatorWa = configSnap.exists ? configSnap.data()!.coordinatorWa : '';
+    const configSnap = hasCloudflareApi() ? null : await adminDb.collection('config').doc('app').get();
+    const coordinatorWa = process.env.COORDINATOR_WA || (configSnap?.exists ? configSnap.data()!.coordinatorWa : '');
     if (coordinatorWa && coordinatorWa !== task.handoffWa) {
       await sendWhatsApp(
         coordinatorWa,

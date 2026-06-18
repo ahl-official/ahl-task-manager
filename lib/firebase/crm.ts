@@ -1,5 +1,7 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
+import { timestamp } from '@/lib/cloudflare/timestamp';
 
 const COL = 'crmLeads';
 
@@ -35,6 +37,13 @@ export interface CreateCrmLeadInput {
 }
 
 export async function adminCreateCrmLead(input: CreateCrmLeadInput): Promise<CrmLead> {
+  if (hasCloudflareApi()) {
+    return hydrateCrmLead(await cfApi('/crm', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }));
+  }
+
   const ref = adminDb.collection(COL).doc();
   const now = Timestamp.now();
   const lead: CrmLead = {
@@ -58,6 +67,11 @@ export async function adminCreateCrmLead(input: CreateCrmLeadInput): Promise<Crm
 }
 
 export async function adminGetCrmLeads(): Promise<CrmLead[]> {
+  if (hasCloudflareApi()) {
+    const leads = await cfApi<any[]>('/crm');
+    return leads.map(hydrateCrmLead);
+  }
+
   const snap = await adminDb.collection(COL).orderBy('updatedAt', 'desc').get();
   return snap.docs.map(d => d.data() as CrmLead);
 }
@@ -67,6 +81,15 @@ export async function adminUpdateCrmLead(id: string, data: Partial<CrmLead>): Pr
     ...data,
     updatedAt: Timestamp.now(),
   });
+}
+
+function hydrateCrmLead(row: any): CrmLead {
+  return {
+    ...row,
+    nextFollowUp: timestamp(row.nextFollowUp),
+    createdAt: timestamp(row.createdAt)! as Timestamp,
+    updatedAt: timestamp(row.updatedAt)! as Timestamp,
+  };
 }
 
 export function serializeCrmLead(lead: CrmLead) {

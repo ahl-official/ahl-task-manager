@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/utils/auth';
-import { adminGetAllTasks, adminGetTask, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetActiveTasks, adminGetTask, serializeTask } from '@/lib/firebase/tasks';
 import {
   adminCompleteChecklistTask,
   adminGetChecklistRowsForTasks,
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
     ? (await adminGetChecklistRowsForTasks(
       filterTasksForSession(
         session,
-        (await adminGetAllTasks()).filter(task => !category || task.category === category),
+        (await adminGetActiveTasks(1000)).filter(task => !category || task.category === category),
       ),
     )).flatMap(group => group.tasks)
     : await adminGetChecklistTasksForUser(session.uid, category as TaskCategory | undefined);

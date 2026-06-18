@@ -4,6 +4,8 @@ import type { AHLUser, UserScore, AppLog, LogType } from '@/types';
 import { handleFirestoreReadError } from './errors';
 import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
 import { adminGetAllUsers } from './users';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
+import { cfScore } from '@/lib/cloudflare/models';
 
 // ─── Scores ─────────────────────────────────────────────────────────────────
 
@@ -48,6 +50,14 @@ export async function adminIncrementScore(
   uid: string,
   field: 'tasksAssigned' | 'tasksCompleted' | 'onTimeCount' | 'lateCount',
 ): Promise<void> {
+  if (hasCloudflareApi()) {
+    await cfApi('/scores/increment', {
+      method: 'POST',
+      body: JSON.stringify({ uid, field }),
+    });
+    return;
+  }
+
   const ref = adminDb.collection(SCORES).doc(uid);
   const snap = await ref.get();
 
@@ -92,6 +102,11 @@ export async function adminIncrementScore(
 }
 
 export async function adminGetAllScores(): Promise<UserScore[]> {
+  if (hasCloudflareApi()) {
+    const scores = await cfApi<any[]>('/scores');
+    return scores.map(cfScore).filter(Boolean) as UserScore[];
+  }
+
   try {
     return await cachedFirestoreRead('scores:all', 2 * 60 * 1000, async () => {
       const [scoreSnap, users] = await Promise.all([
@@ -118,6 +133,10 @@ export async function adminGetAllScores(): Promise<UserScore[]> {
 }
 
 export async function adminGetScore(uid: string): Promise<UserScore | null> {
+  if (hasCloudflareApi()) {
+    return cfScore(await cfApi(`/scores?uid=${encodeURIComponent(uid)}`));
+  }
+
   try {
     return await cachedFirestoreRead(`scores:user:${uid}`, 2 * 60 * 1000, async () => {
       const [scoreSnap, userSnap] = await Promise.all([
@@ -150,6 +169,14 @@ export async function adminLog(
   message: string,
   opts?: { taskId?: string; uid?: string; meta?: Record<string, unknown> },
 ): Promise<void> {
+  if (hasCloudflareApi()) {
+    await cfApi('/logs', {
+      method: 'POST',
+      body: JSON.stringify({ type, message, ...opts }),
+    }).catch(err => console.error('Failed to write Cloudflare log', err));
+    return;
+  }
+
   try {
     const ref = adminDb.collection(LOGS).doc();
     await ref.set({

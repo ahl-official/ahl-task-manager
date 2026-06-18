@@ -53,6 +53,14 @@
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "status",  "order": "ASCENDING" },
+        { "fieldPath": "endDate", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "tasks",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "assignedTo", "order": "ASCENDING" },
         { "fieldPath": "status",     "order": "ASCENDING" }
       ]
@@ -78,6 +86,56 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "tasks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "weekKey", "order": "ASCENDING" },
+        { "fieldPath": "status",  "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "tasks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "monthKey", "order": "ASCENDING" },
+        { "fieldPath": "status",   "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "misScores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "periodType", "order": "ASCENDING" },
+        { "fieldPath": "periodKey",  "order": "ASCENDING" },
+        { "fieldPath": "misScore",   "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "misScores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid",        "order": "ASCENDING" },
+        { "fieldPath": "periodType", "order": "ASCENDING" },
+        { "fieldPath": "periodKey",  "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reports",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "periodType", "order": "ASCENDING" },
+        { "fieldPath": "periodKey",  "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "reminderQueue",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "dueAt",  "order": "ASCENDING" }
       ]
     }
   ],

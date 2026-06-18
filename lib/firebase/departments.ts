@@ -2,6 +2,8 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
 import { handleFirestoreReadError } from './errors';
 import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
+import { cfDepartment } from '@/lib/cloudflare/models';
 
 const COL = 'departments';
 
@@ -24,6 +26,11 @@ export interface Department {
 }
 
 export async function adminGetDepartments(): Promise<Department[]> {
+  if (hasCloudflareApi()) {
+    const departments = await cfApi<any[]>('/departments');
+    return departments.map(cfDepartment).filter(Boolean) as Department[];
+  }
+
   try {
     return await cachedFirestoreRead('departments:all', 5 * 60 * 1000, async () => {
       const snap = await adminDb.collection(COL).orderBy('name').get();
@@ -40,6 +47,13 @@ export async function adminGetDepartments(): Promise<Department[]> {
 }
 
 export async function adminCreateDepartment(name: string): Promise<Department> {
+  if (hasCloudflareApi()) {
+    return cfDepartment(await cfApi('/departments', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }))!;
+  }
+
   const cleanName = name.trim().replace(/\s+/g, ' ');
   if (!cleanName) throw new Error('Department name is required');
 
@@ -68,6 +82,11 @@ export async function adminCreateDepartment(name: string): Promise<Department> {
 }
 
 export async function adminDeleteDepartment(id: string): Promise<void> {
+  if (hasCloudflareApi()) {
+    await cfApi(`/departments?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return;
+  }
+
   const cleanId = id.trim();
   if (!cleanId) throw new Error('Department id is required');
 
@@ -95,6 +114,11 @@ export async function adminDeleteDepartment(id: string): Promise<void> {
 }
 
 export async function adminClearDepartments(): Promise<void> {
+  if (hasCloudflareApi()) {
+    await cfApi('/departments?all=true', { method: 'DELETE' });
+    return;
+  }
+
   const [departments, users] = await Promise.all([
     adminDb.collection(COL).get(),
     adminDb.collection('users').get(),

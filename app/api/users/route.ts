@@ -4,9 +4,19 @@ import { adminGetAllUsers, adminCreateUser, adminDeleteUser, adminGetUserByUid, 
 import { adminAuth } from '@/lib/firebase/admin';
 import type { AHLUser } from '@/types';
 import { filterUsersForSession } from '@/lib/utils/access';
+import { hasCloudflareApi } from '@/lib/cloudflare/api';
 
 function normalizeRole(role: string | undefined) {
   return role === 'user' ? 'member' : role;
+}
+
+function userIdFromInput(input: Pick<AHLUser, 'name' | 'waNumber'>) {
+  const nameKey = input.name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `user-${nameKey || waLast10(input.waNumber)}`;
 }
 
 // GET /api/users
@@ -34,13 +44,17 @@ export async function POST(req: NextRequest) {
     const body = await req.json() as Omit<AHLUser, 'uid' | 'createdAt' | 'updatedAt'>;
     const role = normalizeRole(body.role) as AHLUser['role'];
 
+    if (hasCloudflareApi()) {
+      const uid = userIdFromInput(body);
+      await adminCreateUser({ ...body, role, uid });
+      return NextResponse.json({ success: true, data: { uid } }, { status: 201 });
+    }
+
     // Create Firebase Auth user with WA number as email placeholder
     const authUser = await adminAuth.createUser({
       displayName: body.name,
     });
-
     await adminCreateUser({ ...body, role, uid: authUser.uid });
-
     // Set custom claims
     await adminAuth.setCustomUserClaims(authUser.uid, {
       role,
@@ -68,7 +82,7 @@ export async function PATCH(req: NextRequest) {
     if (data.role) data.role = normalizeRole(data.role);
     await adminUpdateUser(uid, data);
 
-    if (data.role || data.department || data.waNumber || data.name) {
+    if (!hasCloudflareApi() && (data.role || data.department || data.waNumber || data.name)) {
       const current = await adminAuth.getUser(uid);
       await adminAuth.setCustomUserClaims(uid, {
         ...current.customClaims,
@@ -117,10 +131,12 @@ export async function DELETE(req: NextRequest) {
 
     await adminDeleteUser(uid);
 
-    try {
-      await adminAuth.deleteUser(uid);
-    } catch (err: any) {
-      if (err?.code !== 'auth/user-not-found') throw err;
+    if (!hasCloudflareApi()) {
+      try {
+        await adminAuth.deleteUser(uid);
+      } catch (err: any) {
+        if (err?.code !== 'auth/user-not-found') throw err;
+      }
     }
 
     return NextResponse.json({ success: true });

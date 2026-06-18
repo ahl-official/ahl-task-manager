@@ -59,12 +59,18 @@ export interface Task {
   verifiedAt: FirestoreTimestamp | null;
   createdAt: FirestoreTimestamp;
   updatedAt: FirestoreTimestamp;
+  dayKey?: string;
+  weekKey?: string;
+  weekStart?: FirestoreTimestamp;
+  weekEnd?: FirestoreTimestamp;
+  monthKey?: string;
 }
 
 // Serialized version for client components (Timestamps → ISO strings)
 export interface TaskSerialized extends Omit<Task,
   'startDate' | 'endDate' | 'delayedDate' | 'acceptedAt' |
-  'completedAt' | 'verifiedAt' | 'createdAt' | 'updatedAt'
+  'completedAt' | 'verifiedAt' | 'createdAt' | 'updatedAt' |
+  'weekStart' | 'weekEnd'
 > {
   startDate: string | null;
   endDate: string | null;
@@ -74,6 +80,11 @@ export interface TaskSerialized extends Omit<Task,
   verifiedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  dayKey?: string;
+  weekKey?: string;
+  weekStart?: string | null;
+  weekEnd?: string | null;
+  monthKey?: string;
 }
 
 export interface CreateTaskInput {
@@ -127,6 +138,52 @@ export interface UserScore {
   lateCount: number;
   monthlyScore: number;
   lastUpdated: FirestoreTimestamp;
+}
+
+export type PeriodType = 'daily' | 'weekly' | 'monthly';
+
+export interface PeriodMetrics {
+  id: string;
+  periodType: PeriodType;
+  periodKey: string;
+  periodStart: FirestoreTimestamp | null;
+  periodEnd: FirestoreTimestamp | null;
+  uid: string | null;
+  name: string | null;
+  department: string | null;
+  waNumber: string | null;
+  tasksAssigned: number;
+  tasksCompleted: number;
+  tasksVerified: number;
+  pendingAccept: number;
+  inProgress: number;
+  delayRequested: number;
+  overdue: number;
+  onTimeCount: number;
+  lateCount: number;
+  highPriority: number;
+  mediumPriority: number;
+  lowPriority: number;
+  misScore: number;
+  monthlyScore: number;
+  updatedAt: FirestoreTimestamp;
+  lastUpdated: FirestoreTimestamp;
+}
+
+export interface ReminderQueueItem {
+  id: string;
+  taskId: string;
+  assignedTo: string;
+  assignedToName: string;
+  waNumber: string;
+  department: string;
+  reminderType: 'due_today' | 'overdue' | 'daily_report' | 'weekly_report' | 'monthly_report';
+  dueAt: FirestoreTimestamp;
+  status: 'pending' | 'sent' | 'failed';
+  attempts: number;
+  lastError: string | null;
+  createdAt: FirestoreTimestamp;
+  updatedAt: FirestoreTimestamp;
 }
 
 // ─── Log ────────────────────────────────────────────────────────────────────

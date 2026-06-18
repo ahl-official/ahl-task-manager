@@ -1,5 +1,7 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
+import { timestamp } from '@/lib/cloudflare/timestamp';
 
 const COL = 'automations';
 
@@ -32,6 +34,13 @@ export interface CreateAutomationInput {
 }
 
 export async function adminCreateAutomation(input: CreateAutomationInput): Promise<AutomationRule> {
+  if (hasCloudflareApi()) {
+    return hydrateAutomation(await cfApi('/automations', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }));
+  }
+
   const ref = adminDb.collection(COL).doc();
   const now = Timestamp.now();
   const rule: AutomationRule = {
@@ -53,15 +62,36 @@ export async function adminCreateAutomation(input: CreateAutomationInput): Promi
 }
 
 export async function adminGetAutomations(): Promise<AutomationRule[]> {
+  if (hasCloudflareApi()) {
+    const rules = await cfApi<any[]>('/automations');
+    return rules.map(hydrateAutomation);
+  }
+
   const snap = await adminDb.collection(COL).orderBy('createdAt', 'desc').get();
   return snap.docs.map(d => d.data() as AutomationRule);
 }
 
 export async function adminToggleAutomation(id: string, isActive: boolean): Promise<void> {
+  if (hasCloudflareApi()) {
+    await cfApi('/automations', {
+      method: 'PATCH',
+      body: JSON.stringify({ id, isActive }),
+    });
+    return;
+  }
+
   await adminDb.collection(COL).doc(id).update({
     isActive,
     updatedAt: Timestamp.now(),
   });
+}
+
+function hydrateAutomation(row: any): AutomationRule {
+  return {
+    ...row,
+    createdAt: timestamp(row.createdAt)! as Timestamp,
+    updatedAt: timestamp(row.updatedAt)! as Timestamp,
+  };
 }
 
 export function serializeAutomation(rule: AutomationRule) {

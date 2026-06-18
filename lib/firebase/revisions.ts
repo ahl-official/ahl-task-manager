@@ -1,8 +1,18 @@
 import { adminDb } from './admin';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { RevisionLog, RevisionDecision } from '@/types';
+import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
+import { cfRevision } from '@/lib/cloudflare/models';
+import { adminGetTask } from './tasks';
 
 const COL = 'revisionLog';
+const DEFAULT_REVISION_READ_LIMIT = 300;
+const MAX_REVISION_READ_LIMIT = 1000;
+
+function clampRevisionLimit(limitCount = DEFAULT_REVISION_READ_LIMIT) {
+  return Math.min(Math.max(limitCount, 1), MAX_REVISION_READ_LIMIT);
+}
 
 export async function adminCreateRevision(data: {
   taskId: string;
@@ -11,6 +21,13 @@ export async function adminCreateRevision(data: {
   requestedDate: string; // ISO
   reason: string;
 }): Promise<RevisionLog> {
+  if (hasCloudflareApi()) {
+    return cfRevision(await cfApi('/revisions', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }))!;
+  }
+
   const ref = adminDb.collection(COL).doc();
   const now = Timestamp.now();
 
@@ -29,6 +46,7 @@ export async function adminCreateRevision(data: {
   };
 
   await ref.set(revision);
+  clearFirestoreReadCache('revisions:');
   return revision;
 }
 
@@ -38,6 +56,13 @@ export async function adminDecideRevision(
   decidedBy: string,
   decidedByName: string,
 ): Promise<RevisionLog> {
+  if (hasCloudflareApi()) {
+    return cfRevision(await cfApi('/revisions', {
+      method: 'PATCH',
+      body: JSON.stringify({ revisionId, decision, decidedBy, decidedByName }),
+    }))!;
+  }
+
   const ref = adminDb.collection(COL).doc(revisionId);
   const snap = await ref.get();
   if (!snap.exists) throw new Error('Revision not found');
@@ -50,39 +75,67 @@ export async function adminDecideRevision(
     decidedAt:    now,
   });
 
+  clearFirestoreReadCache('revisions:');
   return { ...snap.data() as RevisionLog, status: decision, decidedBy, decidedByName, decidedAt: now };
 }
 
-export async function adminGetRevisionsByTask(taskId: string): Promise<RevisionLog[]> {
-  const snap = await adminDb
-    .collection(COL)
-    .orderBy('createdAt', 'desc')
-    .get();
-  return snap.docs
-    .map(d => d.data() as RevisionLog)
-    .filter(r => r.taskId === taskId);
+export async function adminGetRevisionsByTask(taskId: string, limitCount = DEFAULT_REVISION_READ_LIMIT): Promise<RevisionLog[]> {
+  if (hasCloudflareApi()) {
+    const revisions = await cfApi<any[]>(`/revisions?taskId=${encodeURIComponent(taskId)}&limit=${encodeURIComponent(String(clampRevisionLimit(limitCount)))}`);
+    return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
+  }
+
+  const readLimit = clampRevisionLimit(limitCount);
+  return cachedFirestoreRead(`revisions:task:${taskId}:${readLimit}`, 2 * 60 * 1000, async () => {
+    const snap = await adminDb
+      .collection(COL)
+      .where('taskId', '==', taskId)
+      .orderBy('createdAt', 'desc')
+      .limit(readLimit)
+      .get();
+    return snap.docs.map(d => d.data() as RevisionLog);
+  });
 }
 
-export async function adminGetAllRevisions(): Promise<RevisionLog[]> {
-  const snap = await adminDb
-    .collection(COL)
-    .orderBy('createdAt', 'desc')
-    .get();
-  return snap.docs.map(d => d.data() as RevisionLog);
+export async function adminGetAllRevisions(options?: {
+  status?: RevisionDecision;
+  limit?: number | null;
+}): Promise<RevisionLog[]> {
+  if (hasCloudflareApi()) {
+    const params = new URLSearchParams();
+    if (options?.status) params.set('status', options.status);
+    if (options?.limit !== null) params.set('limit', String(options?.limit ?? DEFAULT_REVISION_READ_LIMIT));
+    const revisions = await cfApi<any[]>(`/revisions?${params.toString()}`);
+    return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
+  }
+
+  const readLimit = options?.limit === null ? null : clampRevisionLimit(options?.limit);
+  const key = `revisions:all:${options?.status ?? 'any'}:${readLimit ?? 'all'}`;
+
+  return cachedFirestoreRead(key, 2 * 60 * 1000, async () => {
+    let ref = options?.status
+      ? adminDb.collection(COL).where('status', '==', options.status).orderBy('createdAt', 'desc')
+      : adminDb.collection(COL).orderBy('createdAt', 'desc');
+
+    if (readLimit) ref = ref.limit(readLimit);
+
+    const snap = await ref.get();
+    return snap.docs.map(d => d.data() as RevisionLog);
+  });
 }
 
 export async function adminGetPendingRevisionsByHandoff(handoffUid: string): Promise<RevisionLog[]> {
-  // Get all pending revisions for tasks where this user is handoff
-  const snap = await adminDb
-    .collection(COL)
-    .orderBy('createdAt', 'desc')
-    .get();
+  if (hasCloudflareApi()) {
+    const revisions = await adminGetAllRevisions({ status: 'pending', limit: MAX_REVISION_READ_LIMIT });
+    const pairs = await Promise.all(revisions.map(async revision => ({
+      revision,
+      task: await adminGetTask(revision.taskId),
+    })));
+    return pairs.filter(pair => pair.task?.handoffUid === handoffUid).map(pair => pair.revision);
+  }
 
-  const revisions = snap.docs
-    .map(d => d.data() as RevisionLog)
-    .filter(r => r.status === 'pending');
+  const revisions = await adminGetAllRevisions({ status: 'pending', limit: MAX_REVISION_READ_LIMIT });
 
-  // Filter by checking if handoffUid matches the task
   const taskIds = Array.from(new Set(revisions.map(r => r.taskId)));
   if (taskIds.length === 0) return [];
 
@@ -100,7 +153,18 @@ export async function adminGetPendingRevisionsByHandoff(handoffUid: string): Pro
 }
 
 export async function adminGetRevisionsForUser(uid: string): Promise<RevisionLog[]> {
-  const revisions = await adminGetAllRevisions();
+  if (hasCloudflareApi()) {
+    const revisions = await adminGetAllRevisions({ limit: MAX_REVISION_READ_LIMIT });
+    const pairs = await Promise.all(revisions.map(async revision => ({
+      revision,
+      task: await adminGetTask(revision.taskId),
+    })));
+    return pairs
+      .filter(pair => pair.revision.requestedBy === uid || pair.task?.handoffUid === uid)
+      .map(pair => pair.revision);
+  }
+
+  const revisions = await adminGetAllRevisions({ limit: MAX_REVISION_READ_LIMIT });
   const taskIds = Array.from(new Set(revisions.map(r => r.taskId)));
   if (taskIds.length === 0) return revisions.filter(r => r.requestedBy === uid);
 

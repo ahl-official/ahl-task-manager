@@ -8,6 +8,8 @@ import { adminDb } from './admin';
 import type { AHLUser } from '@/types';
 import { handleFirestoreReadError } from './errors';
 import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
+import { cfUser } from '@/lib/cloudflare/models';
 
 const COL = 'users';
 
@@ -63,6 +65,10 @@ export async function getActiveUsers(): Promise<AHLUser[]> {
 // ─── Server-side (Admin SDK) ─────────────────────────────────────────────────
 
 export async function adminGetUserByWa(waInput: string): Promise<AHLUser | null> {
+  if (hasCloudflareApi()) {
+    return cfUser(await cfApi(`/users/by-wa?wa=${encodeURIComponent(waInput)}`));
+  }
+
   const last10 = waLast10(waInput);
   const snap = await adminDb
     .collection(COL)
@@ -76,6 +82,10 @@ export async function adminGetUserByWa(waInput: string): Promise<AHLUser | null>
 }
 
 export async function adminGetUserByUid(uid: string): Promise<AHLUser | null> {
+  if (hasCloudflareApi()) {
+    return cfUser(await cfApi(`/users/by-uid?uid=${encodeURIComponent(uid)}`));
+  }
+
   const snap = await adminDb.collection(COL).doc(uid).get();
   if (snap.exists) return snap.data() as AHLUser;
 
@@ -89,6 +99,11 @@ export async function adminGetUserByUid(uid: string): Promise<AHLUser | null> {
 }
 
 export async function adminGetAllUsers(): Promise<AHLUser[]> {
+  if (hasCloudflareApi()) {
+    const users = await cfApi<any[]>('/users');
+    return users.map(cfUser).filter(Boolean) as AHLUser[];
+  }
+
   try {
     return await cachedFirestoreRead('users:all', 5 * 60 * 1000, async () => {
       const snap = await adminDb.collection(COL).orderBy('name').get();
@@ -101,6 +116,14 @@ export async function adminGetAllUsers(): Promise<AHLUser[]> {
 }
 
 export async function adminCreateUser(user: Omit<AHLUser, 'createdAt' | 'updatedAt'>): Promise<void> {
+  if (hasCloudflareApi()) {
+    await cfApi('/users', {
+      method: 'POST',
+      body: JSON.stringify(user),
+    });
+    return;
+  }
+
   const now = AdminTimestamp.now();
   await adminDb.collection(COL).doc(user.uid).set({
     ...user,
@@ -113,6 +136,14 @@ export async function adminCreateUser(user: Omit<AHLUser, 'createdAt' | 'updated
 }
 
 export async function adminUpdateUser(uid: string, data: Partial<AHLUser>): Promise<void> {
+  if (hasCloudflareApi()) {
+    await cfApi('/users', {
+      method: 'PATCH',
+      body: JSON.stringify({ uid, ...data }),
+    });
+    return;
+  }
+
   const updateData: Partial<AHLUser> & Record<string, unknown> = { ...data };
 
   if (typeof data.waNumber === 'string') {
@@ -144,6 +175,11 @@ export async function adminUpdateUser(uid: string, data: Partial<AHLUser>): Prom
 }
 
 export async function adminDeleteUser(uid: string): Promise<void> {
+  if (hasCloudflareApi()) {
+    await cfApi(`/users?uid=${encodeURIComponent(uid)}`, { method: 'DELETE' });
+    return;
+  }
+
   let ref = adminDb.collection(COL).doc(uid);
   const snap = await ref.get();
 

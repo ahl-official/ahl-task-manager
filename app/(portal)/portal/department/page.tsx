@@ -1,5 +1,5 @@
 import { getSession } from '@/lib/utils/auth';
-import { adminGetAllTasks } from '@/lib/firebase/tasks';
+import { adminGetAllTasks, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import TaskListClient from '@/components/shared/TaskListClient';
 import { filterTasksForSession, filterUsersForSession } from '@/lib/utils/access';
@@ -16,17 +16,7 @@ export default async function DepartmentTasksPage() {
   const visibleUsers = filterUsersForSession(session, allUsers);
   const tasks = filterTasksForSession(session, hydrateTasksWithUsers(allTasks, visibleUsers));
 
-  const serialized = tasks.map(t => ({
-    ...t,
-    startDate:   t.startDate?.toDate().toISOString() ?? null,
-    endDate:     t.endDate?.toDate().toISOString() ?? null,
-    delayedDate: t.delayedDate?.toDate().toISOString() ?? null,
-    acceptedAt:  t.acceptedAt?.toDate().toISOString() ?? null,
-    completedAt: t.completedAt?.toDate().toISOString() ?? null,
-    verifiedAt:  t.verifiedAt?.toDate().toISOString() ?? null,
-    createdAt:   t.createdAt.toDate().toISOString(),
-    updatedAt:   t.updatedAt.toDate().toISOString(),
-  }));
+  const serialized = tasks.map(serializeTask);
   const serializedUsers = visibleUsers.map(user => ({
     uid: user.uid,
     name: user.name,

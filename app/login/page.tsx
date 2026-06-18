@@ -65,18 +65,20 @@ export default function LoginPage() {
         return;
       }
 
-      const credential = await signInWithCustomToken(auth, data.data.customToken);
-      const idToken = await credential.user.getIdToken();
-      const sessionRes = await fetch('/api/auth/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idToken }),
-      });
+      if (data.data.customToken) {
+        const credential = await signInWithCustomToken(auth, data.data.customToken);
+        const idToken = await credential.user.getIdToken();
+        const sessionRes = await fetch('/api/auth/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken }),
+        });
 
-      const sessionData = await sessionRes.json();
-      if (!sessionData.success) {
-        toast.error('Session creation failed');
-        return;
+        const sessionData = await sessionRes.json();
+        if (!sessionData.success) {
+          toast.error('Session creation failed');
+          return;
+        }
       }
 
       const role = data.data.user.role;

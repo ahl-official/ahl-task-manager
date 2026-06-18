@@ -1,6 +1,6 @@
 import { getSession } from '@/lib/utils/auth';
 import { adminGetAllScores, adminGetScore } from '@/lib/firebase/scores';
-import { adminGetAllTasks, adminGetTasksByAssignee } from '@/lib/firebase/tasks';
+import { adminGetAllTasks, adminGetTasksByAssignee, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { Trophy, TrendingUp, CheckCircle2, Clock, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -25,17 +25,7 @@ export default async function PortalScorePage() {
       ...score,
       lastUpdated: score.lastUpdated.toDate().toISOString(),
     }));
-    const serializedTasks = visibleTasks.map(t => ({
-      ...t,
-      startDate:   t.startDate?.toDate().toISOString() ?? null,
-      endDate:     t.endDate?.toDate().toISOString() ?? null,
-      delayedDate: t.delayedDate?.toDate().toISOString() ?? null,
-      acceptedAt:  t.acceptedAt?.toDate().toISOString() ?? null,
-      completedAt: t.completedAt?.toDate().toISOString() ?? null,
-      verifiedAt:  t.verifiedAt?.toDate().toISOString() ?? null,
-      createdAt:   t.createdAt.toDate().toISOString(),
-      updatedAt:   t.updatedAt.toDate().toISOString(),
-    }));
+    const serializedTasks = visibleTasks.map(serializeTask);
     const serializedUsers = visibleUsers.map(user => ({
       uid: user.uid,
       name: user.name,

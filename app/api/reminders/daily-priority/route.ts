@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { adminGetAllTasks } from '@/lib/firebase/tasks';
+import { adminGetActiveTasks } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminLog } from '@/lib/firebase/scores';
 import { formatDate } from '@/lib/utils';
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
   try {
     const [users, tasks] = await Promise.all([
       adminGetAllUsers(),
-      adminGetAllTasks(),
+      adminGetActiveTasks(1000),
     ]);
 
     const activeUsers = users.filter(user => user.isActive && user.waNumber);

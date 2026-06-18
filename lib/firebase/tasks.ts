@@ -5,16 +5,74 @@ import {
 import { Timestamp as AdminTimestamp, type Query } from 'firebase-admin/firestore';
 import { db } from './client';
 import { adminDb } from './admin';
-import type { Task, TaskStatus, CreateTaskInput } from '@/types';
+import type { Task, TaskSerialized, TaskStatus, CreateTaskInput } from '@/types';
 import { adminGetUserByUid } from './users';
 import { handleFirestoreReadError } from './errors';
 import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
+import { cfTask, cfTimestampFields } from '@/lib/cloudflare/models';
 
 const COL      = 'tasks';
 const COUNTERS = 'counters';
+const DEFAULT_TASK_READ_LIMIT = 500;
+const MAX_TASK_READ_LIMIT = 1000;
+const REMINDER_TASK_READ_LIMIT = 500;
+const ACTIVE_TASK_STATUSES: TaskStatus[] = ['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue'];
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function sortNewestFirst(tasks: Task[]) {
   return tasks.sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis());
+}
+
+function startOfUtcDay(date: Date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function addDays(date: Date, days: number) {
+  return new Date(date.getTime() + days * DAY_MS);
+}
+
+function formatDateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function formatMonthKey(date: Date) {
+  return date.toISOString().slice(0, 7);
+}
+
+function getBusinessWeekPeriod(dateInput: Date) {
+  const date = startOfUtcDay(dateInput);
+  const day = date.getUTCDay();
+  const daysSinceWednesday = (day - 3 + 7) % 7;
+  const weekStart = addDays(date, -daysSinceWednesday);
+  const weekEnd = addDays(weekStart, 6);
+  const year = weekStart.getUTCFullYear();
+  const jan1 = startOfUtcDay(new Date(Date.UTC(year, 0, 1)));
+  const firstWeekStart = addDays(jan1, -((jan1.getUTCDay() - 3 + 7) % 7));
+  const weekNumber = Math.floor((weekStart.getTime() - firstWeekStart.getTime()) / (7 * DAY_MS)) + 1;
+
+  return {
+    weekKey: `${year}-W${String(weekNumber).padStart(2, '0')}`,
+    weekStart,
+    weekEnd,
+  };
+}
+
+function periodFieldsForDate(dateInput: Date) {
+  const date = startOfUtcDay(dateInput);
+  const week = getBusinessWeekPeriod(date);
+  return {
+    dayKey: formatDateKey(date),
+    weekKey: week.weekKey,
+    weekStart: AdminTimestamp.fromDate(week.weekStart),
+    weekEnd: AdminTimestamp.fromDate(week.weekEnd),
+    monthKey: formatMonthKey(date),
+  };
+}
+
+function taskPeriodFields(endDate: AdminTimestamp | null, completedAt: AdminTimestamp | null, startDate: AdminTimestamp | null, createdAt: AdminTimestamp) {
+  const periodDate = endDate?.toDate() ?? completedAt?.toDate() ?? startDate?.toDate() ?? createdAt.toDate();
+  return periodFieldsForDate(periodDate);
 }
 
 function normalizeKey(value: unknown) {
@@ -124,6 +182,12 @@ function normalizeTaskDoc(id: string, data: Record<string, any>): Task {
     verifiedAt: toTimestamp(data.verifiedAt),
     createdAt,
     updatedAt: toTimestamp(data.updatedAt) ?? createdAt,
+    ...taskPeriodFields(
+      endDate,
+      toTimestamp(data.completedAt),
+      startDate,
+      createdAt,
+    ),
   };
 }
 
@@ -144,7 +208,7 @@ export async function generateTaskId(): Promise<string> {
 
 // ─── Serialize Timestamps for client ────────────────────────────────────────
 
-export function serializeTask(task: Task): Record<string, unknown> {
+export function serializeTask(task: Task): TaskSerialized {
   const tsToIso = (ts: { toDate: () => Date } | null) => ts ? ts.toDate().toISOString() : null;
   return {
     ...task,
@@ -156,6 +220,8 @@ export function serializeTask(task: Task): Record<string, unknown> {
     verifiedAt:  tsToIso(task.verifiedAt),
     createdAt:   task.createdAt.toDate().toISOString(),
     updatedAt:   task.updatedAt.toDate().toISOString(),
+    weekStart:   tsToIso(task.weekStart ?? null),
+    weekEnd:     tsToIso(task.weekEnd ?? null),
   };
 }
 
@@ -167,6 +233,18 @@ export async function adminCreateTask(
   creatorFallback?: { name: string; waNumber?: string; department?: string },
   options?: { skipAcceptance?: boolean },
 ): Promise<Task> {
+  if (hasCloudflareApi()) {
+    return cfTask(await cfApi('/tasks', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...input,
+        creatorUid,
+        creatorFallback,
+        skipAcceptance: options?.skipAcceptance ?? false,
+      }),
+    }))!;
+  }
+
   const [taskId, creator, assignee, handoff] = await Promise.all([
     generateTaskId(),
     adminGetUserByUid(creatorUid),
@@ -197,6 +275,7 @@ export async function adminCreateTask(
   const startDate = input.startDate ? AdminTimestamp.fromDate(new Date(input.startDate)) : null;
   const endDate = input.endDate ? AdminTimestamp.fromDate(new Date(input.endDate)) : null;
   const skipAcceptance = options?.skipAcceptance ?? false;
+  const periodFields = taskPeriodFields(endDate, null, startDate, now);
   const task: Task = {
     taskId,
     description:    input.description,
@@ -223,6 +302,7 @@ export async function adminCreateTask(
     verifiedAt:     null,
     createdAt:      now,
     updatedAt:      now,
+    ...periodFields,
   };
 
   await adminDb.collection(COL).doc(taskId).set(task);
@@ -236,6 +316,14 @@ export async function adminUpdateTaskStatus(
   status: TaskStatus,
   extra?: Partial<Task>,
 ): Promise<void> {
+  if (hasCloudflareApi()) {
+    await cfApi(`/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(cfTimestampFields({ status, ...(extra ?? {}) })),
+    });
+    return;
+  }
+
   await adminDb.collection(COL).doc(taskId).update({
     status,
     updatedAt: AdminTimestamp.now(),
@@ -246,25 +334,34 @@ export async function adminUpdateTaskStatus(
 }
 
 export async function adminGetTask(taskId: string): Promise<Task | null> {
+  if (hasCloudflareApi()) {
+    return cfTask(await cfApi(`/tasks/${encodeURIComponent(taskId)}`));
+  }
+
   const snap = await adminDb.collection(COL).doc(taskId).get();
   return snap.exists ? normalizeTaskDoc(snap.id, snap.data() as Record<string, any>) : null;
 }
 
 export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
+  if (hasCloudflareApi()) {
+    const tasks = await cfApi<any[]>(`/tasks?scope=mine&uid=${encodeURIComponent(uid)}&limit=${MAX_TASK_READ_LIMIT}`);
+    return tasks.map(cfTask).filter(Boolean) as Task[];
+  }
+
   try {
     return await cachedFirestoreRead(`tasks:assignee:${uid}`, 2 * 60 * 1000, async () => {
       const user = await adminGetUserByUid(uid);
       const queries: Query[] = [
-        adminDb.collection(COL).where('assignedTo', '==', uid),
+        adminDb.collection(COL).where('assignedTo', '==', uid).orderBy('createdAt', 'desc').limit(MAX_TASK_READ_LIMIT),
       ];
 
       if (user?.name) {
         for (const name of nameAliases(user.name)) {
           queries.push(
-            adminDb.collection(COL).where('assignedToName', '==', name),
-            adminDb.collection(COL).where('name', '==', name),
-            adminDb.collection(COL).where('Name', '==', name),
-            adminDb.collection(COL).where('name ', '==', name),
+            adminDb.collection(COL).where('assignedToName', '==', name).limit(DEFAULT_TASK_READ_LIMIT),
+            adminDb.collection(COL).where('name', '==', name).limit(DEFAULT_TASK_READ_LIMIT),
+            adminDb.collection(COL).where('Name', '==', name).limit(DEFAULT_TASK_READ_LIMIT),
+            adminDb.collection(COL).where('name ', '==', name).limit(DEFAULT_TASK_READ_LIMIT),
           );
         }
       }
@@ -284,11 +381,18 @@ export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
 }
 
 export async function adminGetTasksByHandoff(uid: string): Promise<Task[]> {
+  if (hasCloudflareApi()) {
+    const tasks = await cfApi<any[]>(`/tasks?scope=handoff&uid=${encodeURIComponent(uid)}&limit=${MAX_TASK_READ_LIMIT}`);
+    return tasks.map(cfTask).filter(Boolean) as Task[];
+  }
+
   try {
     return await cachedFirestoreRead(`tasks:handoff:${uid}`, 2 * 60 * 1000, async () => {
       const snap = await adminDb
         .collection(COL)
         .where('handoffUid', '==', uid)
+        .orderBy('createdAt', 'desc')
+        .limit(MAX_TASK_READ_LIMIT)
         .get();
       return sortNewestFirst(snap.docs.map(d => normalizeTaskDoc(d.id, d.data())));
     });
@@ -303,8 +407,21 @@ export async function adminGetAllTasks(filters?: {
   department?: string;
   limit?: number | null;
 }): Promise<Task[]> {
+  if (hasCloudflareApi()) {
+    const params = new URLSearchParams({ scope: 'all' });
+    if (filters?.status) params.set('status', filters.status);
+    if (filters?.department) params.set('department', filters.department);
+    if (filters?.limit !== null) params.set('limit', String(filters?.limit ?? DEFAULT_TASK_READ_LIMIT));
+    const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
+    return tasks.map(cfTask).filter(Boolean) as Task[];
+  }
+
   try {
-    const readLimit = typeof filters?.limit === 'number' ? filters.limit : null;
+    const readLimit = filters?.limit === null
+      ? null
+      : typeof filters?.limit === 'number'
+        ? Math.min(Math.max(filters.limit, 1), MAX_TASK_READ_LIMIT)
+        : DEFAULT_TASK_READ_LIMIT;
     const key = `tasks:all:${filters?.department ?? 'any'}:${filters?.status ?? 'any'}:${readLimit}`;
 
     return await cachedFirestoreRead(key, 2 * 60 * 1000, async () => {
@@ -317,6 +434,8 @@ export async function adminGetAllTasks(filters?: {
       if (filters?.status) {
         ref = ref.where('status', '==', filters.status);
       }
+
+      ref = ref.orderBy('createdAt', 'desc');
 
       if (readLimit) {
         ref = ref.limit(readLimit);
@@ -336,37 +455,82 @@ export async function adminGetAllTasks(filters?: {
 }
 
 export async function adminGetOverdueTasks(): Promise<Task[]> {
+  if (hasCloudflareApi()) {
+    const tasks = await cfApi<any[]>('/tasks/overdue');
+    return tasks.map(cfTask).filter(Boolean) as Task[];
+  }
+
   const now = AdminTimestamp.now();
-  const snap = await adminDb
-    .collection(COL)
-    .orderBy('endDate', 'asc')
-    .get();
-  return snap.docs
-    .map(d => normalizeTaskDoc(d.id, d.data()))
-    .filter(t =>
-      t.endDate &&
-      t.endDate.toMillis() < now.toMillis() &&
-      ['Pending Accept', 'In Progress'].includes(t.status)
-    );
+  const snaps = await Promise.all(
+    ['Pending Accept', 'In Progress'].map(status =>
+      adminDb
+        .collection(COL)
+        .where('status', '==', status)
+        .where('endDate', '<', now)
+        .limit(REMINDER_TASK_READ_LIMIT)
+        .get()
+    )
+  );
+
+  const byId = new Map<string, Task>();
+  snaps.forEach(snap => {
+    snap.docs.forEach(doc => byId.set(doc.id, normalizeTaskDoc(doc.id, doc.data())));
+  });
+  return Array.from(byId.values()).filter(t => t.endDate);
 }
 
 export async function adminGetTasksDueWithinHours(hours: number): Promise<Task[]> {
+  if (hasCloudflareApi()) {
+    const tasks = await cfApi<any[]>(`/tasks/due-within?hours=${encodeURIComponent(String(hours))}`);
+    return tasks.map(cfTask).filter(Boolean) as Task[];
+  }
+
   const now  = new Date();
   const from = AdminTimestamp.fromDate(now);
   const to   = AdminTimestamp.fromDate(new Date(now.getTime() + hours * 60 * 60 * 1000));
 
-  const snap = await adminDb
-    .collection(COL)
-    .orderBy('endDate', 'asc')
-    .get();
-  return snap.docs
-    .map(d => normalizeTaskDoc(d.id, d.data()))
-    .filter(t =>
-      t.endDate &&
-      t.endDate.toMillis() >= from.toMillis() &&
-      t.endDate.toMillis() <= to.toMillis() &&
-      ['Pending Accept', 'In Progress'].includes(t.status)
-    );
+  const snaps = await Promise.all(
+    ['Pending Accept', 'In Progress'].map(status =>
+      adminDb
+        .collection(COL)
+        .where('status', '==', status)
+        .where('endDate', '>=', from)
+        .where('endDate', '<=', to)
+        .limit(REMINDER_TASK_READ_LIMIT)
+        .get()
+    )
+  );
+
+  const byId = new Map<string, Task>();
+  snaps.forEach(snap => {
+    snap.docs.forEach(doc => byId.set(doc.id, normalizeTaskDoc(doc.id, doc.data())));
+  });
+  return Array.from(byId.values()).filter(t => t.endDate);
+}
+
+export async function adminGetActiveTasks(limitCount = DEFAULT_TASK_READ_LIMIT): Promise<Task[]> {
+  if (hasCloudflareApi()) {
+    const tasks = await cfApi<any[]>(`/tasks/active?limit=${encodeURIComponent(String(limitCount))}`);
+    return tasks.map(cfTask).filter(Boolean) as Task[];
+  }
+
+  const readLimit = Math.min(Math.max(limitCount, 1), MAX_TASK_READ_LIMIT);
+  const snaps = await Promise.all(
+    ACTIVE_TASK_STATUSES.map(status =>
+      adminDb
+        .collection(COL)
+        .where('status', '==', status)
+        .orderBy('createdAt', 'desc')
+        .limit(readLimit)
+        .get()
+    )
+  );
+
+  const byId = new Map<string, Task>();
+  snaps.forEach(snap => {
+    snap.docs.forEach(doc => byId.set(doc.id, normalizeTaskDoc(doc.id, doc.data())));
+  });
+  return sortNewestFirst(Array.from(byId.values())).slice(0, readLimit);
 }
 
 // ─── Client SDK reads ────────────────────────────────────────────────────────
@@ -375,6 +539,8 @@ export async function getMyTasks(uid: string): Promise<Task[]> {
   const q = query(
     collection(db, COL),
     where('assignedTo', '==', uid),
+    orderBy('createdAt', 'desc'),
+    limit(MAX_TASK_READ_LIMIT),
   );
   const snap = await getDocs(q);
   return sortNewestFirst(snap.docs.map(d => normalizeTaskDoc(d.id, d.data())));
@@ -384,6 +550,8 @@ export async function getDepartmentTasks(department: string): Promise<Task[]> {
   const q = query(
     collection(db, COL),
     where('department', '==', department),
+    orderBy('createdAt', 'desc'),
+    limit(MAX_TASK_READ_LIMIT),
   );
   const snap = await getDocs(q);
   return sortNewestFirst(snap.docs.map(d => normalizeTaskDoc(d.id, d.data())));
@@ -393,6 +561,8 @@ export async function getHandoffTasks(uid: string): Promise<Task[]> {
   const q = query(
     collection(db, COL),
     where('handoffUid', '==', uid),
+    orderBy('createdAt', 'desc'),
+    limit(MAX_TASK_READ_LIMIT),
   );
   const snap = await getDocs(q);
   return sortNewestFirst(snap.docs.map(d => normalizeTaskDoc(d.id, d.data())));

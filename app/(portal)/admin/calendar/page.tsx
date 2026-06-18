@@ -1,4 +1,4 @@
-import { adminGetAllTasks } from '@/lib/firebase/tasks';
+import { adminGetAllTasks, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { getSession } from '@/lib/utils/auth';
 import CalendarClient from '@/components/admin/CalendarClient';
@@ -6,23 +6,13 @@ import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
 export default async function CalendarPage() {
   const [tasks, users] = await Promise.all([
-    adminGetAllTasks(),
+    adminGetAllTasks({ limit: 500 }),
     adminGetAllUsers(),
   ]);
 
   const hydratedTasks = hydrateTasksWithUsers(tasks, users);
 
-  const serializedTasks = hydratedTasks.map(t => ({
-    ...t,
-    startDate:   t.startDate?.toDate().toISOString() ?? null,
-    endDate:     t.endDate?.toDate().toISOString() ?? null,
-    delayedDate: t.delayedDate?.toDate().toISOString() ?? null,
-    acceptedAt:  t.acceptedAt?.toDate().toISOString() ?? null,
-    completedAt: t.completedAt?.toDate().toISOString() ?? null,
-    verifiedAt:  t.verifiedAt?.toDate().toISOString() ?? null,
-    createdAt:   t.createdAt.toDate().toISOString(),
-    updatedAt:   t.updatedAt.toDate().toISOString(),
-  }));
+  const serializedTasks = hydratedTasks.map(serializeTask);
 
   const serializedUsers = users.map(u => ({
     uid:        u.uid,

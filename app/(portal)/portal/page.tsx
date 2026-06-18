@@ -1,5 +1,5 @@
 import { getSession } from '@/lib/utils/auth';
-import { adminGetTasksByAssignee } from '@/lib/firebase/tasks';
+import { adminGetTasksByAssignee, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetScore } from '@/lib/firebase/scores';
 import TaskListClient from '@/components/shared/TaskListClient';
 import { Trophy } from 'lucide-react';
@@ -21,17 +21,7 @@ export default async function PortalPage() {
     waNumber: session.waNumber,
   }]);
 
-  const serialized = hydratedTasks.map(t => ({
-    ...t,
-    startDate:   t.startDate?.toDate().toISOString() ?? null,
-    endDate:     t.endDate?.toDate().toISOString() ?? null,
-    delayedDate: t.delayedDate?.toDate().toISOString() ?? null,
-    acceptedAt:  t.acceptedAt?.toDate().toISOString() ?? null,
-    completedAt: t.completedAt?.toDate().toISOString() ?? null,
-    verifiedAt:  t.verifiedAt?.toDate().toISOString() ?? null,
-    createdAt:   t.createdAt.toDate().toISOString(),
-    updatedAt:   t.updatedAt.toDate().toISOString(),
-  }));
+  const serialized = hydratedTasks.map(serializeTask);
 
   const pending    = hydratedTasks.filter(t => t.status === 'Pending Accept').length;
   const inProgress = hydratedTasks.filter(t => t.status === 'In Progress').length;

@@ -1,5 +1,5 @@
 import { adminGetAllScores } from '@/lib/firebase/scores';
-import { adminGetAllTasks } from '@/lib/firebase/tasks';
+import { adminGetAllTasks, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminGetDepartments, serializeDepartment } from '@/lib/firebase/departments';
 import ScoresClient from '@/components/shared/ScoresClient';
@@ -18,17 +18,7 @@ export default async function AdminScoresPage() {
   }));
   const hydratedTasks = hydrateTasksWithUsers(tasks, users);
 
-  const serializedTasks = hydratedTasks.map(t => ({
-    ...t,
-    startDate:   t.startDate?.toDate().toISOString() ?? null,
-    endDate:     t.endDate?.toDate().toISOString() ?? null,
-    delayedDate: t.delayedDate?.toDate().toISOString() ?? null,
-    acceptedAt:  t.acceptedAt?.toDate().toISOString() ?? null,
-    completedAt: t.completedAt?.toDate().toISOString() ?? null,
-    verifiedAt:  t.verifiedAt?.toDate().toISOString() ?? null,
-    createdAt:   t.createdAt.toDate().toISOString(),
-    updatedAt:   t.updatedAt.toDate().toISOString(),
-  }));
+  const serializedTasks = hydratedTasks.map(serializeTask);
   const serializedUsers = users.map(user => ({
     uid: user.uid,
     name: user.name,

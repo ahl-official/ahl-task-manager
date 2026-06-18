@@ -1,0 +1,15 @@
+name = "ahl-task-manager-api"
+main = "worker/src/index.ts"
+compatibility_date = "2026-06-16"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ahl_task_manager"
+database_id = "replace-with-cloudflare-d1-database-id"
+
+[[r2_buckets]]
+binding = "ARCHIVE"
+bucket_name = "ahl-task-archive"
+
+[vars]
+APP_ORIGIN = "https://ahl-task-manager.vercel.app"

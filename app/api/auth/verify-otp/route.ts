@@ -3,6 +3,8 @@ import { adminAuth } from '@/lib/firebase/admin';
 import { verifyOtpSession } from '@/lib/firebase/otp';
 import { adminLog } from '@/lib/firebase/scores';
 import { isFirestoreQuotaError } from '@/lib/firebase/errors';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
+import { createSessionCookie, setSessionCookieHeaders } from '@/lib/utils/auth';
 
 // POST /api/auth/verify-otp
 // Body: { sessionId: string, otp: string }
@@ -18,6 +20,19 @@ export async function POST(req: NextRequest) {
     const normalizedOtp = String(otp).replace(/\D/g, '');
     if (normalizedOtp.length !== 6) {
       return NextResponse.json({ success: false, error: 'Enter the 6-digit OTP' }, { status: 400 });
+    }
+
+    if (hasCloudflareApi()) {
+      const data = await cfApi<{ user: { uid: string; name: string; role: any; department: string; waNumber: string } }>('/auth/verify-otp', {
+        method: 'POST',
+        body: JSON.stringify({ sessionId, otp: normalizedOtp }),
+      }, { auth: false });
+
+      const sessionCookie = await createSessionCookie(data.user);
+      const headers = setSessionCookieHeaders(sessionCookie);
+      const res = NextResponse.json({ success: true, data: { user: data.user } });
+      res.headers.set('Set-Cookie', headers['Set-Cookie']);
+      return res;
     }
 
     const user = await verifyOtpSession(sessionId, normalizedOtp);

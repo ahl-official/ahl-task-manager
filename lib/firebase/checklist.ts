@@ -1,7 +1,9 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
-import { adminGetAllTasks, adminGetTasksByAssignee } from './tasks';
+import { adminGetActiveTasks, adminGetTasksByAssignee } from './tasks';
 import type { Task, TaskCategory } from '@/types';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
+import { timestamp } from '@/lib/cloudflare/timestamp';
 
 const COL = 'checklistCompletions';
 const RECURRING_CATEGORIES: TaskCategory[] = ['Daily', 'Weekly', 'Monthly'];
@@ -66,7 +68,7 @@ export async function adminGetChecklistTasksForUser(uid: string, category?: Task
 }
 
 export async function adminGetChecklistTasksForCategory(category: TaskCategory) {
-  const tasks = await adminGetAllTasks();
+  const tasks = await adminGetActiveTasks(1000);
   const recurring = tasks.filter(task =>
     task.category === category &&
     OPEN_STATUSES.has(task.status)
@@ -94,6 +96,24 @@ export async function adminGetChecklistRowsForTasks(tasks: Task[]) {
 
 async function hydrateChecklistTasks(uid: string, tasks: Task[]) {
   const periodKeys = new Set(tasks.map(task => getChecklistPeriodKey(task.category)));
+  if (hasCloudflareApi()) {
+    const rows = await cfApi<any[]>(`/checklist/completions?uid=${encodeURIComponent(uid)}`);
+    const completed = new Set(
+      rows
+        .filter(row => periodKeys.has(row.periodKey))
+        .map(row => `${row.taskId}:${row.periodKey}`)
+    );
+
+    return tasks.map(task => {
+      const periodKey = getChecklistPeriodKey(task.category);
+      return {
+        task,
+        periodKey,
+        completed: completed.has(`${task.taskId}:${periodKey}`),
+      };
+    });
+  }
+
   const snap = await adminDb
     .collection(COL)
     .where('uid', '==', uid)
@@ -123,6 +143,25 @@ export async function adminCompleteChecklistTask(task: Task, uid: string): Promi
 
   const periodKey = getChecklistPeriodKey(task.category);
   const id = `${task.taskId}_${uid}_${periodKey}`;
+  if (hasCloudflareApi()) {
+    const existingRows = await cfApi<any[]>(`/checklist/completions?uid=${encodeURIComponent(uid)}`);
+    if (existingRows.some(row => row.taskId === task.taskId && row.periodKey === periodKey)) {
+      throw new Error(`${getCategoryLabel(task.category)} is already completed for this period`);
+    }
+    const row = await cfApi<any>('/checklist/completions', {
+      method: 'POST',
+      body: JSON.stringify({ id, taskId: task.taskId, uid, category: task.category, periodKey }),
+    });
+    return {
+      id,
+      taskId: task.taskId,
+      uid,
+      category: task.category,
+      periodKey,
+      completedAt: timestamp(row.completedAt)! as Timestamp,
+    };
+  }
+
   const ref = adminDb.collection(COL).doc(id);
   const existing = await ref.get();
   if (existing.exists) throw new Error(`${getCategoryLabel(task.category)} is already completed for this period`);
