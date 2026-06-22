@@ -127,6 +127,7 @@ function normalizeStatus(value: unknown): TaskStatus {
   if (text === 'completed' || text === 'complete' || text === 'done') return 'Completed';
   if (text === 'verified') return 'Verified';
   if (text === 'overdue') return 'Overdue';
+  if (text === 'dead') return 'Dead';
   if (text === 'in progress' || text === 'in-progress') return 'In Progress';
   if (text === 'delay requested' || text === 'shifted') return 'Delay Requested';
   return 'Pending Accept';

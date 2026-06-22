@@ -469,6 +469,7 @@ async function routeTasks(req: Request, env: Env, url: URL) {
       ['delayedDate', 'delayed_date'],
       ['delayReason', 'delay_reason'],
       ['revisionStatus', 'revision_status'],
+      ['notes', 'notes'],
       ['acceptedAt', 'accepted_at'],
       ['completedAt', 'completed_at'],
       ['verifiedAt', 'verified_at'],

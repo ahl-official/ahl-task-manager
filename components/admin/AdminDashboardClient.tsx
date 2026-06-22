@@ -7,7 +7,7 @@ import TaskModal from '@/components/shared/TaskModal';
 import type { TaskSerialized } from '@/types';
 
 type TaskFilter = 'all' | 'Pending Accept' | 'In Progress' | 'Completed' | 'Verified' | 'Overdue';
-const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue']);
+const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Dead']);
 const NEW_ASSIGNMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function getTimeAgo(iso: string) {

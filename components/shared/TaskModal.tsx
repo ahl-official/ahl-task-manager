@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { X, Calendar, User, Tag, AlertCircle, CheckCircle2, Clock, RefreshCw, Loader2 } from 'lucide-react';
+import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2 } from 'lucide-react';
 import { cn, formatDate, formatDateTime, STATUS_COLORS, PRIORITY_COLORS, PRIORITY_DOT, getDueBadge } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { TaskSerialized } from '@/types';
@@ -21,12 +21,14 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
   const [revisionReason, setRevisionReason] = useState('');
   const [acceptStartDate, setAcceptStartDate] = useState('');
   const [acceptEndDate, setAcceptEndDate] = useState('');
+  const [remark, setRemark] = useState('');
 
   const isAssignee = task.assignedTo === currentUid;
   const isHandoff  = task.handoffUid === currentUid;
   const isAdmin    = role === 'admin';
   const due        = getDueBadge(task.endDate);
   const needsDates = isAssignee && task.status === 'In Progress' && (!task.startDate || !task.endDate);
+  const canChangeDead = isAssignee || isHandoff || isAdmin;
 
   async function doAction(action: string, extra: Record<string, string> = {}) {
     setLoading(action);
@@ -43,8 +45,12 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
         'set-dates': 'Task dates saved successfully',
         complete: isAdmin ? 'Task completed and verified successfully' : 'Task completed successfully',
         verify: 'Task verified successfully',
+        dead: 'Task flagged Dead',
+        remark: 'Remark added',
+        revive: 'Task revived',
       };
       toast.success(successMessage[action] ?? 'Task updated successfully');
+      if (['dead', 'remark', 'revive'].includes(action)) setRemark('');
       onUpdate(data.data);
     } catch (err: any) {
       toast.error(err.message ?? 'Action failed');
@@ -141,7 +147,17 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
           {task.notes && (
             <div className="bg-gray-50 rounded-xl p-3">
               <p className="text-xs text-gray-500 font-medium mb-1">Notes</p>
-              <p className="text-sm text-gray-700">{task.notes}</p>
+              <p className="whitespace-pre-line text-sm text-gray-700">{task.notes}</p>
+            </div>
+          )}
+
+          {task.status === 'Dead' && (
+            <div className="flex gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-red-800">
+              <AlertOctagon size={18} className="mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-semibold">This task is marked Dead</p>
+                <p className="text-xs">It needs attention before work can continue or completion can be recorded.</p>
+              </div>
             </div>
           )}
 
@@ -154,6 +170,55 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
 
           {/* ── Actions ── */}
           <div className="border-t border-gray-100 pt-4 space-y-3">
+            <div className="rounded-md border border-gray-200 bg-white p-3">
+              <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                <MessageSquare size={13} /> Add remark
+              </p>
+              <textarea
+                value={remark}
+                onChange={event => setRemark(event.target.value)}
+                placeholder="Add an update, blocker, or comment..."
+                className="input h-20 resize-none"
+                maxLength={1000}
+              />
+              <div className="mt-2 flex flex-wrap gap-2">
+                <ActionButton
+                  label="Add Remark"
+                  onClick={() => {
+                    if (!remark.trim()) return toast.error('Add a remark first');
+                    doAction('remark', { remark });
+                  }}
+                  loading={loading === 'remark'}
+                  color="blue"
+                />
+                {canChangeDead && task.status !== 'Dead' && task.status !== 'Completed' && task.status !== 'Verified' && (
+                  <ActionButton
+                    label="Flag Dead"
+                    onClick={() => {
+                      if (!remark.trim()) return toast.error('Explain why the task is Dead');
+                      doAction('dead', { remark });
+                    }}
+                    loading={loading === 'dead'}
+                    color="red"
+                  />
+                )}
+                {canChangeDead && task.status === 'Dead' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!remark.trim()) return toast.error('Add a revival remark first');
+                      doAction('revive', { remark });
+                    }}
+                    disabled={loading === 'revive'}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-green-600 px-3 py-2 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-60"
+                  >
+                    {loading === 'revive' ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+                    Revive Task
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* Assignee actions */}
             {(isAssignee || isAdmin) && (
               <div className="flex gap-2 flex-wrap">
@@ -247,7 +312,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
                 {!isAdmin && ['In Progress', 'Delay Requested'].includes(task.status) && task.startDate && task.endDate && (
                   <ActionButton label="Mark Complete" onClick={() => doAction('complete')} loading={loading === 'complete'} color="green" />
                 )}
-                {isAdmin && task.status !== 'Completed' && task.status !== 'Verified' && (
+                {isAdmin && task.status !== 'Dead' && task.status !== 'Completed' && task.status !== 'Verified' && (
                   <ActionButton label="Complete and Verify" onClick={() => doAction('complete')} loading={loading === 'complete'} color="green" />
                 )}
               </div>

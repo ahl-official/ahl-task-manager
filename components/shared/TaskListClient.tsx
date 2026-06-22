@@ -14,7 +14,7 @@ interface Props {
   users?: { uid: string; name: string; department: string; role?: string; isActive?: boolean }[];
 }
 
-const STATUS_OPTIONS = ['all', 'Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Completed', 'Verified'];
+const STATUS_OPTIONS = ['all', 'Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Dead', 'Completed', 'Verified'];
 const CATEGORY_OPTIONS = ['all', 'Daily', 'Weekly', 'Monthly', 'One Time'];
 const CATEGORY_LABELS = {
   Daily: 'Daily Task',
@@ -23,7 +23,7 @@ const CATEGORY_LABELS = {
   'One Time': 'One Time Task',
 } as const;
 const RECURRING_CATEGORIES = new Set(['Daily', 'Weekly', 'Monthly']);
-const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue']);
+const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Dead']);
 const NEW_ASSIGNMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function getTimeAgo(iso: string) {
@@ -280,7 +280,10 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
                 return (
                   <tr
                     key={task.taskId}
-                    className="cursor-pointer border-b border-gray-50 transition-all duration-150 hover:bg-gray-50"
+                    className={cn(
+                      'cursor-pointer border-b border-gray-50 transition-all duration-150 hover:bg-gray-50',
+                      task.status === 'Dead' && 'bg-red-50 hover:bg-red-100',
+                    )}
                     onClick={() => openTask(task)}
                   >
                     <td className="px-4 py-3">

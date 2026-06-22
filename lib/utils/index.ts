@@ -55,6 +55,7 @@ export const STATUS_COLORS: Record<string, string> = {
   'In Progress':    'bg-blue-100 text-blue-700',
   'Delay Requested':'bg-orange-100 text-orange-700',
   'Overdue':        'bg-red-100 text-red-700',
+  'Dead':           'bg-red-600 text-white',
   'Completed':      'bg-green-100 text-green-700',
   'Verified':       'bg-brand-100 text-brand-700',
 };

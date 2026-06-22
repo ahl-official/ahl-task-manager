@@ -28,6 +28,7 @@ export type TaskStatus =
   | 'In Progress'
   | 'Delay Requested'
   | 'Overdue'
+  | 'Dead'
   | 'Completed'
   | 'Verified';
 
@@ -193,6 +194,7 @@ export type LogType =
   | 'TASK_ACCEPTED'
   | 'TASK_DONE'
   | 'TASK_VERIFIED'
+  | 'TASK_UPDATED'
   | 'SEND_WA'
   | 'INBOUND_WA'
   | 'WEBHOOK_RAW'

@@ -23,18 +23,22 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 }
 
 // PATCH /api/tasks/[id]
-// Body: { action: 'accept' | 'set-dates' | 'complete' | 'verify' }
+// Body: { action: 'accept' | 'set-dates' | 'complete' | 'verify' | 'dead' | 'remark' | 'revive' }
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
   const task = await adminGetTask(params.id);
   if (!task) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
+  if (!canViewTask(session, task)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
+  }
 
-  const { action, startDate, endDate } = await req.json();
+  const { action, startDate, endDate, remark = '' } = await req.json();
   const now = Timestamp.now();
   const isAdmin = session.role === 'admin';
   const actorIsAssignee = task.assignedTo === session.uid;
+  const actorIsHandoff = task.handoffUid === session.uid;
   const scoreUid = isAdmin ? task.assignedTo : session.uid;
   let updatedTask: Awaited<ReturnType<typeof adminUpdateTaskStatus>> = null;
 
@@ -85,6 +89,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       }
       if (!isAdmin && (!task.startDate || !task.endDate)) {
         return NextResponse.json({ success: false, error: 'Set start date and due date before completing this task' }, { status: 400 });
+      }
+      if (task.status === 'Dead') {
+        return NextResponse.json({ success: false, error: 'Revive this task before completing it' }, { status: 400 });
       }
       const shouldCountCompletion = task.status !== 'Completed' && task.status !== 'Verified';
 
@@ -143,6 +150,39 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
       await adminLog('TASK_VERIFIED', `${params.id} verified by ${session.name}`, {
         taskId: params.id, uid: session.uid,
+      });
+    }
+
+    else if (action === 'dead' || action === 'remark' || action === 'revive') {
+      const cleanRemark = String(remark).trim();
+      if (!cleanRemark) {
+        return NextResponse.json({ success: false, error: 'A remark is required' }, { status: 400 });
+      }
+      if (cleanRemark.length > 1000) {
+        return NextResponse.json({ success: false, error: 'Remark must be 1000 characters or fewer' }, { status: 400 });
+      }
+      if ((action === 'dead' || action === 'revive') && !actorIsAssignee && !actorIsHandoff && !isAdmin) {
+        return NextResponse.json({ success: false, error: 'Only the assignee, checker, or admin can change the Dead state' }, { status: 403 });
+      }
+      if (action === 'dead' && (task.status === 'Completed' || task.status === 'Verified')) {
+        return NextResponse.json({ success: false, error: 'Completed tasks cannot be flagged Dead' }, { status: 400 });
+      }
+      if (action === 'revive' && task.status !== 'Dead') {
+        return NextResponse.json({ success: false, error: 'Only Dead tasks can be revived' }, { status: 400 });
+      }
+
+      const timestamp = new Intl.DateTimeFormat('en-IN', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+        timeZone: 'Asia/Kolkata',
+      }).format(new Date());
+      const marker = action === 'dead' ? 'DEAD' : action === 'revive' ? 'REVIVED' : 'REMARK';
+      const entry = `[${marker} - ${timestamp}] ${session.name}: ${cleanRemark}`;
+      const notes = task.notes ? `${task.notes}\n${entry}` : entry;
+      const status: TaskStatus = action === 'dead' ? 'Dead' : action === 'revive' ? 'In Progress' : task.status;
+      updatedTask = await adminUpdateTaskStatus(params.id, status, { notes });
+      await adminLog('TASK_UPDATED', `${params.id} ${marker.toLowerCase()} by ${session.name}`, {
+        taskId: params.id, uid: session.uid, meta: { action },
       });
     }
 
