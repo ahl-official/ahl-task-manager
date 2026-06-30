@@ -4,7 +4,7 @@ import { adminGetTask, adminUpdateTaskStatus, serializeTask } from '@/lib/fireba
 import { adminIncrementScores, adminLog } from '@/lib/firebase/scores';
 import { sendWhatsApp, msgTaskAccepted, msgTaskCompleted, msgTaskVerified } from '@/lib/waha';
 import { Timestamp } from 'firebase-admin/firestore';
-import type { TaskStatus } from '@/types';
+import type { TaskPriority, TaskStatus } from '@/types';
 import { canViewTask } from '@/lib/utils/access';
 
 // GET /api/tasks/[id]
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 }
 
 // PATCH /api/tasks/[id]
-// Body: { action: 'accept' | 'set-dates' | 'complete' | 'verify' | 'dead' | 'remark' | 'revive' }
+// Body: { action: 'accept' | 'set-dates' | 'complete' | 'verify' | 'dead' | 'remark' | 'revive' | 'update-priority' }
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
@@ -34,7 +34,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
   }
 
-  const { action, startDate, endDate, remark = '' } = await req.json();
+  const { action, startDate, endDate, priority, remark = '' } = await req.json();
   const now = Timestamp.now();
   const isAdmin = session.role === 'admin';
   const actorIsAssignee = task.assignedTo === session.uid;
@@ -150,6 +150,23 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
       await adminLog('TASK_VERIFIED', `${params.id} verified by ${session.name}`, {
         taskId: params.id, uid: session.uid,
+      });
+    }
+
+    else if (action === 'update-priority') {
+      const nextPriority = String(priority ?? '') as TaskPriority;
+      if (!['High', 'Medium', 'Low'].includes(nextPriority)) {
+        return NextResponse.json({ success: false, error: 'Invalid priority' }, { status: 400 });
+      }
+      if (!actorIsAssignee && !actorIsHandoff && !isAdmin) {
+        return NextResponse.json({ success: false, error: 'Only the assignee, checker, or admin can change priority' }, { status: 403 });
+      }
+      if (task.status === 'Completed' || task.status === 'Verified') {
+        return NextResponse.json({ success: false, error: 'Completed tasks cannot be reprioritized' }, { status: 400 });
+      }
+      updatedTask = await adminUpdateTaskStatus(params.id, task.status, { priority: nextPriority });
+      await adminLog('TASK_UPDATED', `${params.id} priority changed to ${nextPriority} by ${session.name}`, {
+        taskId: params.id, uid: session.uid, meta: { priority: nextPriority },
       });
     }
 

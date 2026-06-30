@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
-import { ArrowRight, Clock3, Search } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Clock3, Search } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS, PRIORITY_DOT, getDueBadge } from '@/lib/utils';
+import { scheduleByTaskId, scheduleTasks } from '@/lib/utils/scheduling';
 import TaskModal from './TaskModal';
 import type { TaskSerialized } from '@/types';
 
@@ -25,6 +26,22 @@ const CATEGORY_LABELS = {
 const RECURRING_CATEGORIES = new Set(['Daily', 'Weekly', 'Monthly']);
 const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Dead']);
 const NEW_ASSIGNMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const RISK_STYLES = {
+  blocked: 'bg-red-600 text-white',
+  overdue: 'bg-red-100 text-red-700',
+  'at-risk': 'bg-orange-100 text-orange-700',
+  tight: 'bg-yellow-100 text-yellow-700',
+  'on-track': 'bg-green-100 text-green-700',
+  unscheduled: 'bg-gray-100 text-gray-600',
+} as const;
+const RISK_LABELS = {
+  blocked: 'Dead',
+  overdue: 'Overdue',
+  'at-risk': 'At risk',
+  tight: 'Tight',
+  'on-track': 'On track',
+  unscheduled: 'No dates',
+} as const;
 
 function getTimeAgo(iso: string) {
   const diffMs = Math.max(0, Date.now() - new Date(iso).getTime());
@@ -45,6 +62,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
   const [departmentFilter, setDepartment] = useState('all');
   const [userFilter, setUserFilter] = useState('all');
   const [categoryFilter, setCategory] = useState('all');
+  const [sortMode, setSortMode] = useState<'recommended' | 'newest'>('recommended');
   const [selectedTask, setSelected] = useState<TaskSerialized | null>(null);
 
   useEffect(() => {
@@ -76,8 +94,11 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
     [departmentFilter, users]
   );
 
+  const scheduleMap = useMemo(() => scheduleByTaskId(taskItems), [taskItems]);
+  const recommendedQueue = useMemo(() => scheduleTasks(taskItems).slice(0, 5), [taskItems]);
+
   const filtered = useMemo(() => {
-    return taskItems.filter(t => {
+    const rows = taskItems.filter(t => {
       const matchSearch   = !search || t.description.toLowerCase().includes(search.toLowerCase()) || t.taskId.toLowerCase().includes(search.toLowerCase());
       const matchStatus   = statusFilter === 'all' || t.status === statusFilter;
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
@@ -86,7 +107,20 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
       const matchCategory = categoryFilter === 'all' || t.category === categoryFilter;
       return matchSearch && matchStatus && matchPriority && matchDepartment && matchUser && matchCategory;
     });
-  }, [taskItems, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter]);
+
+    if (sortMode === 'recommended') {
+      return rows.sort((left, right) => {
+        const leftSchedule = scheduleMap.get(left.taskId);
+        const rightSchedule = scheduleMap.get(right.taskId);
+        if (leftSchedule && rightSchedule) return leftSchedule.rank - rightSchedule.rank;
+        if (leftSchedule) return -1;
+        if (rightSchedule) return 1;
+        return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+      });
+    }
+
+    return rows.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  }, [taskItems, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter, sortMode, scheduleMap]);
 
   const justAssignedTasks = useMemo(() =>
     taskItems
@@ -162,6 +196,53 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
                 </button>
               );
             })}
+          </div>
+        </section>
+      )}
+
+      {recommendedQueue.length > 0 && (
+        <section className="surface-enter mb-5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-orange-600">Recommended order</p>
+              <h2 className="text-base font-semibold text-gray-900">Dynamic task schedule</h2>
+            </div>
+            <span className="hidden rounded-full bg-white px-3 py-1 text-xs font-medium text-gray-500 shadow-card sm:inline-flex">
+              Priority + deadline
+            </span>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            {recommendedQueue.map(item => (
+              <button
+                key={item.task.taskId}
+                type="button"
+                onClick={() => openTask(item.task)}
+                className={cn(
+                  'card flex min-h-[150px] flex-col justify-between p-4 text-left hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus:ring-2 focus:ring-brand-500',
+                  item.risk === 'blocked' && 'border-red-200 bg-red-50',
+                  item.risk === 'at-risk' && 'border-orange-200 bg-orange-50',
+                )}
+              >
+                <div>
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <span className="rounded-full bg-gray-900 px-2 py-0.5 text-[10px] font-semibold text-white">#{item.rank}</span>
+                    <span className={cn('badge text-[10px]', RISK_STYLES[item.risk])}>{RISK_LABELS[item.risk]}</span>
+                  </div>
+                  <p className="line-clamp-2 text-sm font-semibold leading-5 text-gray-900">{item.task.description}</p>
+                  <p className="mt-2 truncate text-xs text-gray-400">{item.task.assignedToName} - {item.task.priority}</p>
+                </div>
+
+                <div className="mt-4 flex items-center justify-between gap-3 text-xs text-gray-500">
+                  <span>{item.daysLeft === null ? 'Date pending' : item.daysLeft < 0 ? `${Math.abs(item.daysLeft)}d late` : `${item.daysLeft}d left`}</span>
+                  {item.conflict && (
+                    <span className="inline-flex items-center gap-1 text-orange-600">
+                      <AlertTriangle size={12} /> Conflict
+                    </span>
+                  )}
+                </div>
+              </button>
+            ))}
           </div>
         </section>
       )}
@@ -251,6 +332,15 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
           <option value="Low">Low</option>
         </select>
 
+        <select
+          value={sortMode}
+          onChange={e => setSortMode(e.target.value as typeof sortMode)}
+          className="input py-2 text-sm w-auto"
+        >
+          <option value="recommended">Recommended Order</option>
+          <option value="newest">Newest First</option>
+        </select>
+
         <div className="flex items-center text-xs text-gray-400">
           {filtered.length} of {taskItems.length}
         </div>
@@ -262,7 +352,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50/50">
-                {['Task ID', 'Description', 'Assignee', 'Priority', 'Status', 'Due Date', ''].map(h => (
+                {['Task ID', 'Description', 'Assignee', 'Priority', 'Status', 'Schedule', 'Due Date', ''].map(h => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500">{h}</th>
                 ))}
               </tr>
@@ -270,13 +360,14 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-400">
+                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-gray-400">
                     No tasks found
                   </td>
                 </tr>
               )}
               {filtered.map(task => {
                 const due = getDueBadge(task.endDate);
+                const scheduled = scheduleMap.get(task.taskId);
                 return (
                   <tr
                     key={task.taskId}
@@ -306,6 +397,21 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
                     </td>
                     <td className="px-4 py-3">
                       <span className={cn('badge', STATUS_COLORS[task.status])}>{task.status}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      {scheduled ? (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="rounded-full bg-gray-900 px-2 py-0.5 text-[10px] font-semibold text-white">#{scheduled.rank}</span>
+                          <span className={cn('badge text-[10px]', RISK_STYLES[scheduled.risk])}>{RISK_LABELS[scheduled.risk]}</span>
+                          {scheduled.conflict && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-medium text-orange-700">
+                              <AlertTriangle size={11} /> Conflict
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-400">Done</span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <span className={cn('badge', due.color)}>{due.label}</span>

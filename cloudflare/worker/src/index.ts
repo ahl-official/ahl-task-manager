@@ -464,6 +464,7 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     const binds: unknown[] = [nowIso()];
     for (const [field, column] of [
       ['status', 'status'],
+      ['priority', 'priority'],
       ['startDate', 'start_date'],
       ['endDate', 'end_date'],
       ['delayedDate', 'delayed_date'],

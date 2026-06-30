@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2 } from 'lucide-react';
 import { cn, formatDate, formatDateTime, STATUS_COLORS, PRIORITY_COLORS, PRIORITY_DOT, getDueBadge } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -22,6 +22,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
   const [acceptStartDate, setAcceptStartDate] = useState('');
   const [acceptEndDate, setAcceptEndDate] = useState('');
   const [remark, setRemark] = useState('');
+  const [priorityValue, setPriorityValue] = useState(task.priority);
 
   const isAssignee = task.assignedTo === currentUid;
   const isHandoff  = task.handoffUid === currentUid;
@@ -29,6 +30,10 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
   const due        = getDueBadge(task.endDate);
   const needsDates = isAssignee && task.status === 'In Progress' && (!task.startDate || !task.endDate);
   const canChangeDead = isAssignee || isHandoff || isAdmin;
+
+  useEffect(() => {
+    setPriorityValue(task.priority);
+  }, [task.priority]);
 
   async function doAction(action: string, extra: Record<string, string> = {}) {
     setLoading(action);
@@ -48,6 +53,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
         dead: 'Task flagged Dead',
         remark: 'Remark added',
         revive: 'Task revived',
+        'update-priority': 'Priority updated and schedule recalculated',
       };
       toast.success(successMessage[action] ?? 'Task updated successfully');
       if (['dead', 'remark', 'revive'].includes(action)) setRemark('');
@@ -143,6 +149,30 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
               <Detail icon={Calendar} label="Delayed To" value={formatDate(task.delayedDate)} className="col-span-2" />
             )}
           </div>
+
+          {task.status !== 'Completed' && task.status !== 'Verified' && (isAssignee || isHandoff || isAdmin) && (
+            <div className="rounded-md border border-gray-200 bg-white p-3">
+              <p className="mb-2 text-xs font-semibold text-gray-700">Dynamic priority</p>
+              <div className="flex flex-wrap gap-2">
+                <select
+                  value={priorityValue}
+                  onChange={event => setPriorityValue(event.target.value as typeof task.priority)}
+                  className="input min-w-[160px] py-2 text-sm"
+                >
+                  <option value="High">High Priority</option>
+                  <option value="Medium">Medium Priority</option>
+                  <option value="Low">Low Priority</option>
+                </select>
+                <ActionButton
+                  label="Update Priority"
+                  onClick={() => doAction('update-priority', { priority: priorityValue })}
+                  loading={loading === 'update-priority'}
+                  color="blue"
+                />
+              </div>
+              <p className="mt-2 text-[11px] text-gray-400">Changing priority recalculates the recommended task order in the list.</p>
+            </div>
+          )}
 
           {task.notes && (
             <div className="bg-gray-50 rounded-xl p-3">
