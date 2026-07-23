@@ -413,8 +413,11 @@ export async function adminGetAllTasks(filters?: {
     if (filters?.status) params.set('status', filters.status);
     if (filters?.department) params.set('department', filters.department);
     params.set('limit', filters?.limit === null ? 'all' : String(filters?.limit ?? DEFAULT_TASK_READ_LIMIT));
-    const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
-    return tasks.map(cfTask).filter(Boolean) as Task[];
+    const key = `tasks:all:${filters?.department ?? 'any'}:${filters?.status ?? 'any'}:${filters?.limit ?? DEFAULT_TASK_READ_LIMIT}`;
+    return cachedFirestoreRead(key, 2 * 60 * 1000, async () => {
+      const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
+      return tasks.map(cfTask).filter(Boolean) as Task[];
+    });
   }
 
   try {

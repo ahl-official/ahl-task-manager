@@ -10,6 +10,35 @@ type TaskFilter = 'all' | 'Pending Accept' | 'In Progress' | 'Completed' | 'Veri
 const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Dead']);
 const NEW_ASSIGNMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+type TaskCounts = {
+  total: number;
+  pending: number;
+  inProgress: number;
+  completed: number;
+  verified: number;
+  overdue: number;
+};
+
+// Create a zeroed task-count object for the dashboard, department, and user rollups.
+function emptyCounts(): TaskCounts {
+  return { total: 0, pending: 0, inProgress: 0, completed: 0, verified: 0, overdue: 0 };
+}
+
+// Add one task to a rollup, keeping every displayed status count consistent.
+function addTaskToCounts(counts: TaskCounts, task: TaskSerialized) {
+  counts.total += 1;
+  if (task.status === 'Pending Accept') counts.pending += 1;
+  if (task.status === 'In Progress') counts.inProgress += 1;
+  if (task.status === 'Completed') counts.completed += 1;
+  if (task.status === 'Verified') counts.verified += 1;
+  if (task.status === 'Overdue') counts.overdue += 1;
+}
+
+// Match a task to the currently selected dashboard status filter.
+function matchesFilter(task: TaskSerialized, filter: TaskFilter) {
+  return filter === 'all' || task.status === filter;
+}
+
 function getTimeAgo(iso: string) {
   const diffMs = Math.max(0, Date.now() - new Date(iso).getTime());
   const minutes = Math.floor(diffMs / 60000);
@@ -53,68 +82,68 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
   const departments = useMemo(() => {
     const userDepartments = users.map((u: any) => u.department).filter(Boolean);
     const savedDepartments = initialDepartments.map(d => d.name).filter(Boolean);
-    return ['all', ...Array.from(new Set([...savedDepartments, ...userDepartments])).sort((a, b) => a.localeCompare(b))];
-  }, [initialDepartments, users]);
+    const taskDepartments = taskItems.map(task => task.department).filter(Boolean);
+    return ['all', ...Array.from(new Set([...savedDepartments, ...userDepartments, ...taskDepartments])).sort((a, b) => a.localeCompare(b))];
+  }, [initialDepartments, taskItems, users]);
 
-  const activeUsers = users.filter((u: any) => u.isActive);
+  const activeUsers = useMemo(() => users.filter((u: any) => u.isActive), [users]);
 
-  function getTasksForUser(uid: string) {
-    let userTasks = taskItems.filter(t => t.assignedTo === uid);
-    if (filter !== 'all') userTasks = userTasks.filter(t => t.status === filter);
-    return userTasks;
-  }
+  const taskMetrics = useMemo(() => {
+    const overall = emptyCounts();
+    const byUser = new Map<string, TaskCounts>();
+    const byDepartment = new Map<string, TaskCounts>();
+    const tasksByUser = new Map<string, TaskSerialized[]>();
 
-  function getCounts(uid: string) {
-    const ut = taskItems.filter(t => t.assignedTo === uid);
-    return {
-      all:       ut.length,
-      pending:   ut.filter(t => t.status === 'Pending Accept').length,
-      inProgress:ut.filter(t => t.status === 'In Progress').length,
-      completed: ut.filter(t => t.status === 'Completed').length,
-      verified:  ut.filter(t => t.status === 'Verified').length,
-      overdue:   ut.filter(t => t.status === 'Overdue').length,
-    };
-  }
+    for (const task of taskItems) {
+      addTaskToCounts(overall, task);
+      const userCounts = byUser.get(task.assignedTo) ?? emptyCounts();
+      addTaskToCounts(userCounts, task);
+      byUser.set(task.assignedTo, userCounts);
+      const department = task.department || 'Unassigned';
+      const departmentCounts = byDepartment.get(department) ?? emptyCounts();
+      addTaskToCounts(departmentCounts, task);
+      byDepartment.set(department, departmentCounts);
+      const userTasks = tasksByUser.get(task.assignedTo) ?? [];
+      userTasks.push(task);
+      tasksByUser.set(task.assignedTo, userTasks);
+    }
+
+    return { overall, byUser, byDepartment, tasksByUser };
+  }, [taskItems]);
 
   const scoreMap = useMemo(() =>
     Object.fromEntries(scores.map((s: any) => [s.uid, s])),
     [scores]
   );
 
-  const departmentBlocks = departments
+  const departmentBlocks = useMemo(() => departments
     .filter(department => department !== 'all')
     .filter(department => deptFilter === 'all' || department === deptFilter)
     .map(department => {
       const departmentUsers = activeUsers.filter((u: any) => u.department === department);
-      const userIds = new Set(departmentUsers.map((u: any) => u.uid));
-      const departmentTasks = taskItems.filter(t => userIds.has(t.assignedTo));
-      const visibleUsers = departmentUsers.filter((u: any) => filter === 'all' || getTasksForUser(u.uid).length > 0);
+      const visibleUsers = departmentUsers.filter((u: any) =>
+        filter === 'all' || (taskMetrics.tasksByUser.get(u.uid) ?? []).some(task => matchesFilter(task, filter))
+      );
 
       return {
         name: department,
         users: visibleUsers,
         totalUsers: departmentUsers.length,
         counts: {
-          total: departmentTasks.length,
-          pending: departmentTasks.filter(t => t.status === 'Pending Accept').length,
-          inProgress: departmentTasks.filter(t => t.status === 'In Progress').length,
-          done: departmentTasks.filter(t => ['Completed', 'Verified'].includes(t.status)).length,
-          overdue: departmentTasks.filter(t => t.status === 'Overdue').length,
+          ...(taskMetrics.byDepartment.get(department) ?? emptyCounts()),
+          done: (taskMetrics.byDepartment.get(department)?.completed ?? 0) + (taskMetrics.byDepartment.get(department)?.verified ?? 0),
         },
       };
     })
-    .filter(block => filter === 'all' || block.counts.total > 0 || block.totalUsers > 0);
+    .filter(block => filter === 'all' || block.users.length > 0 || block.totalUsers > 0), [activeUsers, departments, deptFilter, filter, taskMetrics]);
 
   const selectedDepartmentBlock = selectedDepartment
     ? departmentBlocks.find(block => block.name === selectedDepartment)
     : null;
 
   const overallStats = {
-    total:     taskItems.length,
-    pending:   taskItems.filter(t => t.status === 'Pending Accept').length,
-    inProgress:taskItems.filter(t => t.status === 'In Progress').length,
-    overdue:   taskItems.filter(t => t.status === 'Overdue').length,
-    completed: taskItems.filter(t => ['Completed', 'Verified'].includes(t.status)).length,
+    ...taskMetrics.overall,
+    done: taskMetrics.overall.completed + taskMetrics.overall.verified,
   };
 
   const justAssignedTasks = useMemo(() =>
@@ -140,7 +169,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
           { label: 'Pending',     value: overallStats.pending,    color: 'text-yellow-700', bg: 'bg-yellow-50', filter: 'Pending Accept' as TaskFilter },
           { label: 'In Progress', value: overallStats.inProgress, color: 'text-blue-700',   bg: 'bg-blue-50',   filter: 'In Progress' as TaskFilter },
           { label: 'Overdue',     value: overallStats.overdue,    color: 'text-red-700',    bg: 'bg-red-50',    filter: 'Overdue' as TaskFilter },
-          { label: 'Done',        value: overallStats.completed,  color: 'text-green-700',  bg: 'bg-green-50',  filter: 'Completed' as TaskFilter },
+          { label: 'Done',        value: overallStats.done,       color: 'text-green-700',  bg: 'bg-green-50',  filter: 'Completed' as TaskFilter },
         ].map(stat => (
           <button
             key={stat.label}
@@ -336,9 +365,9 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
               )}
 
               {selectedDepartmentBlock.users.map((user: any) => {
-                const counts = getCounts(user.uid);
+                const counts = taskMetrics.byUser.get(user.uid) ?? emptyCounts();
                 const score = scoreMap[user.uid];
-                const userTasks = getTasksForUser(user.uid);
+                const userTasks = (taskMetrics.tasksByUser.get(user.uid) ?? []).filter(task => matchesFilter(task, filter));
                 const isSelected = selectedUser === user.uid;
 
                 return (
@@ -363,7 +392,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
 
                       <div className="grid grid-cols-4 gap-2 lg:w-[360px]">
                         {[
-                          { label: 'Total', value: counts.all, color: 'text-gray-700' },
+                          { label: 'Total', value: counts.total, color: 'text-gray-700' },
                           { label: 'Active', value: counts.inProgress, color: 'text-blue-700' },
                           { label: 'Done', value: counts.completed + counts.verified, color: 'text-green-700' },
                           { label: 'OD', value: counts.overdue, color: 'text-red-700' },

@@ -1,5 +1,5 @@
 import { adminGetAllUsers } from '@/lib/firebase/users';
-import { adminGetActiveTasks, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetAllTasks, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllScores } from '@/lib/firebase/scores';
 import { adminGetDepartments, serializeDepartment } from '@/lib/firebase/departments';
 import AdminDashboardClient from '@/components/admin/AdminDashboardClient';
@@ -8,7 +8,7 @@ import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 export default async function AdminDashboardPage() {
   const [users, tasks, scores, departments] = await Promise.all([
     adminGetAllUsers(),
-    adminGetActiveTasks(300),
+    adminGetAllTasks({ limit: null }),
     adminGetAllScores(),
     adminGetDepartments(),
   ]);
