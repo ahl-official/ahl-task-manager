@@ -43,10 +43,11 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json() as Omit<AHLUser, 'uid' | 'createdAt' | 'updatedAt'>;
     const role = normalizeRole(body.role) as AHLUser['role'];
+    const waNumber = normalizeWa(body.waNumber);
 
     if (hasCloudflareApi()) {
-      const uid = userIdFromInput(body);
-      await adminCreateUser({ ...body, role, uid });
+      const uid = userIdFromInput({ ...body, waNumber });
+      await adminCreateUser({ ...body, waNumber, role, uid });
       return NextResponse.json({ success: true, data: { uid } }, { status: 201 });
     }
 
@@ -54,12 +55,12 @@ export async function POST(req: NextRequest) {
     const authUser = await adminAuth.createUser({
       displayName: body.name,
     });
-    await adminCreateUser({ ...body, role, uid: authUser.uid });
+    await adminCreateUser({ ...body, waNumber, role, uid: authUser.uid });
     // Set custom claims
     await adminAuth.setCustomUserClaims(authUser.uid, {
       role,
       department: body.department,
-      waNumber:   body.waNumber,
+      waNumber,
       name:       body.name,
     });
 

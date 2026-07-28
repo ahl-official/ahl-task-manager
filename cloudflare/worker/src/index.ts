@@ -29,8 +29,14 @@ function json(data: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), { ...init, headers: { ...JSON_HEADERS, ...(init.headers ?? {}) } });
 }
 
+/** Digits only; ensures Indian country code 91 when missing (no double-prefix). */
 function normalizeWa(raw: unknown) {
-  return String(raw ?? '').replace(/\D/g, '');
+  const digits = String(raw ?? '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('91') && digits.length >= 12) return digits;
+  const last10 = digits.slice(-10);
+  if (last10.length === 10) return `91${last10}`;
+  return digits;
 }
 
 function waLast10(raw: unknown) {

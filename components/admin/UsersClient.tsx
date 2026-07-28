@@ -10,6 +10,21 @@ function normalizeRole(role: string) {
   return role === 'user' ? 'member' : role;
 }
 
+/** Keep only the local 10 digits for the input (strip leading 91 if pasted). */
+function localWaDigits(raw: string) {
+  let digits = raw.replace(/\D/g, '');
+  if (digits.startsWith('91') && digits.length > 10) digits = digits.slice(2);
+  return digits.slice(0, 10);
+}
+
+/** Full WA number for API/DB: 91 + 10 digits, without doubling 91. */
+function fullWaNumber(localOrFull: string) {
+  const digits = localOrFull.replace(/\D/g, '');
+  if (digits.startsWith('91') && digits.length >= 12) return digits;
+  const last10 = digits.slice(-10);
+  return last10.length === 10 ? `91${last10}` : digits;
+}
+
 export default function UsersClient({
   users: initial,
   departments: initialDepartments,
@@ -37,7 +52,7 @@ export default function UsersClient({
     setEditingUser({
       uid: user.uid,
       name: user.name,
-      waNumber: user.waNumber,
+      waNumber: localWaDigits(user.waNumberLast10 || user.waNumber || ''),
       role: normalizeRole(user.role),
       department: user.department,
       isActive: user.isActive,
@@ -116,12 +131,16 @@ export default function UsersClient({
 
   async function createUser(e: React.FormEvent) {
     e.preventDefault();
+    if (form.waNumber.length !== 10) {
+      toast.error('Enter a valid 10-digit WhatsApp number');
+      return;
+    }
     setLoading('create');
     try {
       const res = await fetch('/api/users', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(form),
+        body:    JSON.stringify({ ...form, waNumber: fullWaNumber(form.waNumber) }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -158,18 +177,23 @@ export default function UsersClient({
   async function updateUser(e: React.FormEvent) {
     e.preventDefault();
     if (!editingUser) return;
+    if (String(editingUser.waNumber).length !== 10) {
+      toast.error('Enter a valid 10-digit WhatsApp number');
+      return;
+    }
 
     setLoading('edit');
     try {
+      const payload = { ...editingUser, waNumber: fullWaNumber(editingUser.waNumber) };
       const res = await fetch('/api/users', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editingUser),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      const updated = data.data ?? editingUser;
+      const updated = data.data ?? payload;
       setUsers(us => us.map(u => u.uid === editingUser.uid ? { ...u, ...updated } : u));
       setEditingUser(null);
       toast.success('User updated');
@@ -285,13 +309,24 @@ export default function UsersClient({
               </div>
               <div>
                 <label className="label">WhatsApp Number *</label>
-                <input
-                  value={form.waNumber}
-                  onChange={e => setF('waNumber', e.target.value)}
-                  placeholder="919876543210"
-                  className="input"
-                  required
-                />
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-gray-500 pointer-events-none">
+                    +91
+                  </span>
+                  <input
+                    type="tel"
+                    value={form.waNumber}
+                    onChange={e => setF('waNumber', localWaDigits(e.target.value))}
+                    placeholder="9876543210"
+                    className="input pl-12"
+                    inputMode="numeric"
+                    autoComplete="tel"
+                    required
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-1.5">
+                  Enter the 10-digit number.
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -310,7 +345,7 @@ export default function UsersClient({
                 </div>
               </div>
               <div className="flex gap-3 pt-1">
-                <button type="submit" disabled={loading === 'create'} className="btn-primary">
+                <button type="submit" disabled={loading === 'create' || form.waNumber.length !== 10} className="btn-primary">
                   {loading === 'create' && <Loader2 size={14} className="animate-spin" />}
                   Create User
                 </button>
@@ -338,13 +373,24 @@ export default function UsersClient({
               </div>
               <div>
                 <label className="label">WhatsApp Number *</label>
-                <input
-                  value={editingUser.waNumber}
-                  onChange={e => setEditF('waNumber', e.target.value)}
-                  placeholder="919876543210"
-                  className="input"
-                  required
-                />
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-gray-500 pointer-events-none">
+                    +91
+                  </span>
+                  <input
+                    type="tel"
+                    value={editingUser.waNumber}
+                    onChange={e => setEditF('waNumber', localWaDigits(e.target.value))}
+                    placeholder="9876543210"
+                    className="input pl-12"
+                    inputMode="numeric"
+                    autoComplete="tel"
+                    required
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-1.5">
+                  Enter the 10-digit number.
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -371,7 +417,7 @@ export default function UsersClient({
                 Active user
               </label>
               <div className="flex gap-3 pt-1">
-                <button type="submit" disabled={loading === 'edit'} className="btn-primary">
+                <button type="submit" disabled={loading === 'edit' || String(editingUser.waNumber).length !== 10} className="btn-primary">
                   {loading === 'edit' && <Loader2 size={14} className="animate-spin" />}
                   Save Changes
                 </button>

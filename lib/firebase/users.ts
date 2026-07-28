@@ -15,8 +15,15 @@ const COL = 'users';
 
 // ─── Normalize WA number ────────────────────────────────────────────────────
 
+/** Digits only; ensures Indian country code 91 when missing (no double-prefix). */
 export function normalizeWa(raw: string): string {
-  return raw.replace(/\D/g, '');
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return '';
+  // Already has 91 + 10-digit local number
+  if (digits.startsWith('91') && digits.length >= 12) return digits;
+  const last10 = digits.slice(-10);
+  if (last10.length === 10) return `91${last10}`;
+  return digits;
 }
 
 export function waLast10(raw: string): string {
