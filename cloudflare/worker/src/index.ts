@@ -406,7 +406,10 @@ async function nextTaskId(env: Env): Promise<string> {
 }
 
 function periodFields(dateValue?: string | null) {
-  const date = dateValue ? new Date(dateValue) : new Date();
+  let date = dateValue ? new Date(dateValue) : new Date();
+  if (isNaN(date.getTime())) {
+    date = new Date();
+  }
   const dayKey = date.toISOString().slice(0, 10);
   const monthKey = date.toISOString().slice(0, 7);
   return { dayKey, monthKey };
@@ -472,13 +475,15 @@ async function routeTasks(req: Request, env: Env, url: URL) {
       if (!assignee) return json({ success: false, error: 'Selected assignee was not found' }, { status: 400 });
       const taskId = await nextTaskId(env);
       const now = nowIso();
-      const createdAt = data.createdAt || data.startDate || data.endDate || now;
-      const pf = periodFields(data.endDate || data.startDate || now);
+      const startDateVal = data.startDate && String(data.startDate).trim() ? data.startDate : null;
+      const endDateVal = data.endDate && String(data.endDate).trim() ? data.endDate : null;
+      const createdAt = data.createdAt || startDateVal || endDateVal || now;
+      const pf = periodFields(endDateVal || startDateVal || now);
       const status = data.skipAcceptance ? 'In Progress' : 'Pending Accept';
       await env.DB.prepare(
         `INSERT INTO tasks_current (task_id, description, assigned_to, assigned_to_name, assigned_to_wa, created_by, created_by_name, handoff_uid, handoff_name, handoff_wa, category, priority, status, department, start_date, end_date, delayed_date, delay_reason, revision_status, notes, accepted_at, completed_at, verified_at, created_at, updated_at, day_key, month_key)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'none', ?, ?, NULL, NULL, ?, ?, ?, ?)`
-      ).bind(taskId, data.description || '', assignee.uid, assignee.name, assignee.waNumber, creator?.uid || data.creatorUid || 'admin', creator?.name || 'Admin', handoff?.uid || data.handoffUid || 'admin', handoff?.name || 'Admin', handoff?.waNumber || '', data.category || 'One Time', data.priority || 'Medium', status, assignee.department || data.department || '', data.startDate || null, data.endDate || null, data.notes || null, data.skipAcceptance ? now : null, createdAt, now, pf.dayKey, pf.monthKey).run();
+      ).bind(taskId, data.description || '', assignee.uid, assignee.name, assignee.waNumber, creator?.uid || data.creatorUid || 'admin', creator?.name || 'Admin', handoff?.uid || data.handoffUid || 'admin', handoff?.name || 'Admin', handoff?.waNumber || '', data.category || 'One Time', data.priority || 'Medium', status, assignee.department || data.department || '', startDateVal, endDateVal, data.notes || null, data.skipAcceptance ? now : null, createdAt, now, pf.dayKey, pf.monthKey).run();
       await log(env, 'TASK_CREATED', `Task ${taskId} created`, { taskId, uid: creator?.uid });
       return json({ success: true, data: taskFromRow(await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id = ?').bind(taskId).first()) }, { status: 201 });
     } catch (err: any) {
