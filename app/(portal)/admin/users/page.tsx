@@ -16,9 +16,9 @@ export default async function AdminUsersPage() {
 
   return (
     <div className="p-6">
-      <div className="mb-6">
+      <div className="mb-6 pr-14">
         <h1 className="text-xl font-semibold text-gray-900">Team</h1>
-        <p className="text-sm text-gray-500 mt-0.5">{users.length} registered users</p>
+        <p className="mt-0.5 text-sm text-gray-500">{users.length} registered users</p>
       </div>
       <UsersClient users={serialized} departments={departments.map(serializeDepartment)} />
     </div>

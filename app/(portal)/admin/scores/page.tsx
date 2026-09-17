@@ -5,6 +5,19 @@ import { adminGetDepartments, serializeDepartment } from '@/lib/firebase/departm
 import ScoresClient from '@/components/shared/ScoresClient';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
+function scoreLastUpdatedIso(value: unknown): string {
+  if (!value) return new Date().toISOString();
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value && typeof (value as { toDate?: () => Date }).toDate === 'function') {
+    try {
+      return (value as { toDate: () => Date }).toDate().toISOString();
+    } catch {
+      return new Date().toISOString();
+    }
+  }
+  return new Date().toISOString();
+}
+
 export default async function AdminScoresPage() {
   const [scores, tasks, users, departments] = await Promise.all([
     adminGetAllScores(),
@@ -14,7 +27,7 @@ export default async function AdminScoresPage() {
   ]);
   const serialized = scores.map(s => ({
     ...s,
-    lastUpdated: s.lastUpdated.toDate().toISOString(),
+    lastUpdated: scoreLastUpdatedIso(s.lastUpdated),
   }));
   const hydratedTasks = hydrateTasksWithUsers(tasks, users);
 
@@ -29,9 +42,11 @@ export default async function AdminScoresPage() {
 
   return (
     <div className="p-6">
-      <div className="mb-6">
+      <div className="mb-6 pr-14">
         <h1 className="text-xl font-semibold text-gray-900">MIS Scores</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Department and individual performance rankings</p>
+        <p className="mt-0.5 text-sm text-gray-500">
+          Open a department → member to view the MIS report (Checklist + Delegation + FMS) and download PDF.
+        </p>
       </div>
       <ScoresClient
         scores={serialized}

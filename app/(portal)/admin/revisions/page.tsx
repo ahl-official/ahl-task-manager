@@ -28,9 +28,9 @@ export default async function AdminRevisionsPage() {
 
   return (
     <div className="p-6">
-      <div className="mb-6">
+      <div className="mb-6 pr-14">
         <h1 className="text-xl font-semibold text-gray-900">Revision Requests</h1>
-        <p className="text-sm text-gray-500 mt-0.5">{revisions.length} revision requests</p>
+        <p className="mt-0.5 text-sm text-gray-500">{revisions.length} revision requests</p>
       </div>
       <RevisionsClient revisions={revisions} tasks={serializedTasks} role="admin" currentUid={session.uid} />
     </div>

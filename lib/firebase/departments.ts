@@ -141,9 +141,17 @@ export async function adminClearDepartments(): Promise<void> {
 }
 
 export function serializeDepartment(department: Department) {
+  const toIso = (value: { toDate?: () => Date } | string | null | undefined) => {
+    if (!value) return new Date().toISOString();
+    if (typeof value === 'string') return value;
+    if (typeof value.toDate === 'function') return value.toDate().toISOString();
+    return new Date().toISOString();
+  };
   return {
-    ...department,
-    createdAt: department.createdAt.toDate().toISOString(),
-    updatedAt: department.updatedAt.toDate().toISOString(),
+    id: department.id,
+    name: department.name,
+    isActive: department.isActive !== false,
+    createdAt: toIso(department.createdAt as any),
+    updatedAt: toIso(department.updatedAt as any),
   };
 }

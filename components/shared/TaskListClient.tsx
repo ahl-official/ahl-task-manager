@@ -64,6 +64,11 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
   const [categoryFilter, setCategory] = useState('all');
   const [sortMode, setSortMode] = useState<'recommended' | 'newest'>('recommended');
   const [selectedTask, setSelected] = useState<TaskSerialized | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     setTaskItems(tasks);
@@ -77,6 +82,11 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
 
     setTaskItems(current => current.map(task => task.taskId === updated.taskId ? updated : task));
     setSelected(updated);
+  }
+
+  function removeTask(taskId: string) {
+    setTaskItems(current => current.filter(task => task.taskId !== taskId));
+    setSelected(null);
   }
 
   const departments = useMemo(() =>
@@ -99,8 +109,9 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
 
   const filtered = useMemo(() => {
     const rows = taskItems.filter(t => {
+      const isOverdueTask = t.status === 'Overdue' || (Boolean(t.endDate) && new Date(t.endDate!) < new Date() && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status));
       const matchSearch   = !search || t.description.toLowerCase().includes(search.toLowerCase()) || t.taskId.toLowerCase().includes(search.toLowerCase());
-      const matchStatus   = statusFilter === 'all' || t.status === statusFilter;
+      const matchStatus   = statusFilter === 'all' || (statusFilter === 'Overdue' ? isOverdueTask : t.status === statusFilter);
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
       const matchDepartment = departmentFilter === 'all' || t.department === departmentFilter;
       const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
@@ -109,7 +120,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
     });
 
     if (sortMode === 'recommended') {
-      return rows.sort((left, right) => {
+      return [...rows].sort((left, right) => {
         const leftSchedule = scheduleMap.get(left.taskId);
         const rightSchedule = scheduleMap.get(right.taskId);
         if (leftSchedule && rightSchedule) return leftSchedule.rank - rightSchedule.rank;
@@ -119,11 +130,11 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
       });
     }
 
-    return rows.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+    return [...rows].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
   }, [taskItems, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter, sortMode, scheduleMap]);
 
   const justAssignedTasks = useMemo(() =>
-    taskItems
+    [...taskItems]
       .filter(task => ACTIVE_STATUSES.has(task.status))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, 4),
@@ -402,7 +413,9 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
                       {scheduled ? (
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className="rounded-full bg-gray-900 px-2 py-0.5 text-[10px] font-semibold text-white">#{scheduled.rank}</span>
-                          <span className={cn('badge text-[10px]', RISK_STYLES[scheduled.risk])}>{RISK_LABELS[scheduled.risk]}</span>
+                          <span className={cn('badge text-[10px]', RISK_STYLES[scheduled.risk])}>
+                            {scheduled.daysLeft !== null && scheduled.daysLeft < 0 ? `${Math.abs(scheduled.daysLeft)}d late` : RISK_LABELS[scheduled.risk]}
+                          </span>
                           {scheduled.conflict && (
                             <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-medium text-orange-700">
                               <AlertTriangle size={11} /> Conflict
@@ -450,6 +463,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [] }: 
           role={role}
           currentUid={currentUid}
           onUpdate={updateTask}
+          onDelete={removeTask}
         />
       )}
     </>

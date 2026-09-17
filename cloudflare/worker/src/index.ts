@@ -214,7 +214,7 @@ function automationFromRow(row: any) {
 
 async function sendWhatsApp(env: Env, to: string, message: string) {
   const base = env.WAHA_URL?.replace(/\/$/, '');
-  const session = env.WAHA_SESSION || 'ahlaiteam';
+  const session = env.WAHA_SESSION;
   if (!base) return { ok: false, error: 'WAHA_URL is not configured' };
 
   const res = await fetch(`${base}/api/sendText`, {
@@ -381,10 +381,28 @@ async function routeDepartments(req: Request, env: Env, url: URL) {
   return null;
 }
 
-async function nextTaskId(env: Env) {
-  await env.DB.prepare("INSERT OR IGNORE INTO task_counters (id, current_value) VALUES ('tasks', 0)").run();
-  const row = await env.DB.prepare("UPDATE task_counters SET current_value = current_value + 1 WHERE id = 'tasks' RETURNING current_value").first<any>();
-  return `T-${String(row?.current_value || Date.now()).padStart(4, '0')}`;
+async function nextTaskId(env: Env): Promise<string> {
+  try {
+    await env.DB.prepare("INSERT OR IGNORE INTO task_counters (id, current_value) VALUES ('tasks', 0)").run();
+    const row = await env.DB.prepare("UPDATE task_counters SET current_value = current_value + 1 WHERE id = 'tasks' RETURNING current_value").first<any>();
+    if (row?.current_value) {
+      return `T-${String(row.current_value).padStart(4, '0')}`;
+    }
+  } catch {}
+
+  const row = await env.DB.prepare(
+    "SELECT task_id FROM tasks_current WHERE task_id LIKE 'T-%' ORDER BY CAST(SUBSTR(task_id, 3) AS INTEGER) DESC LIMIT 1"
+  ).first<{ task_id: string }>();
+
+  let nextNum = 1;
+  if (row?.task_id) {
+    const match = row.task_id.match(/T-(\d+)/i);
+    if (match) {
+      nextNum = parseInt(match[1], 10) + 1;
+    }
+  }
+
+  return `T-${String(nextNum).padStart(4, '0')}`;
 }
 
 function periodFields(dateValue?: string | null) {
@@ -412,7 +430,7 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     if (department) { clauses.push('department = ?'); binds.push(department); }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const limitClause = limit ? 'LIMIT ?' : '';
-    const rows = await env.DB.prepare(`SELECT * FROM tasks_current ${where} ORDER BY created_at DESC ${limitClause}`)
+    const rows = await env.DB.prepare(`SELECT * FROM tasks_current ${where} ORDER BY COALESCE(start_date, end_date, created_at) DESC, task_id DESC ${limitClause}`)
       .bind(...binds, ...(limit ? [limit] : []))
       .all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
@@ -421,7 +439,7 @@ async function routeTasks(req: Request, env: Env, url: URL) {
   if (url.pathname === '/tasks/active' && req.method === 'GET') {
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 500), 1), 1000);
     const placeholders = ACTIVE_STATUSES.map(() => '?').join(',');
-    const rows = await env.DB.prepare(`SELECT * FROM tasks_current WHERE status IN (${placeholders}) ORDER BY created_at DESC LIMIT ?`).bind(...ACTIVE_STATUSES, limit).all();
+    const rows = await env.DB.prepare(`SELECT * FROM tasks_current WHERE status IN (${placeholders}) ORDER BY COALESCE(start_date, end_date, created_at) DESC, task_id DESC LIMIT ?`).bind(...ACTIVE_STATUSES, limit).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
 
@@ -446,50 +464,77 @@ async function routeTasks(req: Request, env: Env, url: URL) {
   }
 
   if (url.pathname === '/tasks' && req.method === 'POST') {
-    const data = await body<any>(req);
-    const creator = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.creatorUid).first()) || data.creatorFallback;
-    const assignee = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.assignedTo).first());
-    const handoff = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.handoffUid || data.creatorUid).first()) || creator;
-    if (!assignee) return json({ success: false, error: 'Selected assignee was not found' }, { status: 400 });
-    const taskId = await nextTaskId(env);
-    const now = nowIso();
-    const pf = periodFields(data.endDate || data.startDate || now);
-    const status = data.skipAcceptance ? 'In Progress' : 'Pending Accept';
-    await env.DB.prepare(
-      `INSERT INTO tasks_current (task_id, description, assigned_to, assigned_to_name, assigned_to_wa, created_by, created_by_name, handoff_uid, handoff_name, handoff_wa, category, priority, status, department, start_date, end_date, delayed_date, delay_reason, revision_status, notes, accepted_at, completed_at, verified_at, created_at, updated_at, day_key, month_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'none', ?, ?, NULL, NULL, ?, ?, ?, ?)`
-    ).bind(taskId, data.description || '', assignee.uid, assignee.name, assignee.waNumber, creator?.uid || data.creatorUid || 'admin', creator?.name || 'Admin', handoff?.uid || data.handoffUid || 'admin', handoff?.name || 'Admin', handoff?.waNumber || '', data.category || 'One Time', data.priority || 'Medium', status, assignee.department || data.department || '', data.startDate || null, data.endDate || null, data.notes || null, data.skipAcceptance ? now : null, now, now, pf.dayKey, pf.monthKey).run();
-    await log(env, 'TASK_CREATED', `Task ${taskId} created`, { taskId, uid: creator?.uid });
-    return json({ success: true, data: taskFromRow(await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id = ?').bind(taskId).first()) }, { status: 201 });
+    try {
+      const data = await body<any>(req);
+      const creator = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.creatorUid).first()) || data.creatorFallback;
+      const assignee = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.assignedTo).first());
+      const handoff = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.handoffUid || data.creatorUid).first()) || creator;
+      if (!assignee) return json({ success: false, error: 'Selected assignee was not found' }, { status: 400 });
+      const taskId = await nextTaskId(env);
+      const now = nowIso();
+      const createdAt = data.createdAt || data.startDate || data.endDate || now;
+      const pf = periodFields(data.endDate || data.startDate || now);
+      const status = data.skipAcceptance ? 'In Progress' : 'Pending Accept';
+      await env.DB.prepare(
+        `INSERT INTO tasks_current (task_id, description, assigned_to, assigned_to_name, assigned_to_wa, created_by, created_by_name, handoff_uid, handoff_name, handoff_wa, category, priority, status, department, start_date, end_date, delayed_date, delay_reason, revision_status, notes, accepted_at, completed_at, verified_at, created_at, updated_at, day_key, month_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'none', ?, ?, NULL, NULL, ?, ?, ?, ?)`
+      ).bind(taskId, data.description || '', assignee.uid, assignee.name, assignee.waNumber, creator?.uid || data.creatorUid || 'admin', creator?.name || 'Admin', handoff?.uid || data.handoffUid || 'admin', handoff?.name || 'Admin', handoff?.waNumber || '', data.category || 'One Time', data.priority || 'Medium', status, assignee.department || data.department || '', data.startDate || null, data.endDate || null, data.notes || null, data.skipAcceptance ? now : null, createdAt, now, pf.dayKey, pf.monthKey).run();
+      await log(env, 'TASK_CREATED', `Task ${taskId} created`, { taskId, uid: creator?.uid });
+      return json({ success: true, data: taskFromRow(await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id = ?').bind(taskId).first()) }, { status: 201 });
+    } catch (err: any) {
+      console.error('POST /tasks worker error:', err);
+      return json({ success: false, error: err.message || String(err) }, { status: 500 });
+    }
   }
 
   if (url.pathname.startsWith('/tasks/') && req.method === 'PATCH') {
+    try {
+      const id = decodeURIComponent(url.pathname.slice('/tasks/'.length));
+      const data = await body<any>(req);
+      const updates: string[] = ['updated_at = ?'];
+      const binds: unknown[] = [nowIso()];
+      for (const [field, column] of [
+        ['status', 'status'],
+        ['priority', 'priority'],
+        ['startDate', 'start_date'],
+        ['endDate', 'end_date'],
+        ['delayedDate', 'delayed_date'],
+        ['delayReason', 'delay_reason'],
+        ['revisionStatus', 'revision_status'],
+        ['notes', 'notes'],
+        ['acceptedAt', 'accepted_at'],
+        ['completedAt', 'completed_at'],
+        ['verifiedAt', 'verified_at'],
+      ] as const) {
+        if (data[field] === null) {
+          updates.push(`${column} = NULL`);
+        } else if (data[field] !== undefined) {
+          updates.push(`${column} = ?`);
+          binds.push(data[field]);
+        }
+      }
+      binds.push(id);
+      await env.DB.prepare(`UPDATE tasks_current SET ${updates.join(', ')} WHERE task_id = ?`).bind(...binds).run();
+      if (data.scoreIncrement?.uid && data.scoreIncrement?.field) {
+        const col = data.scoreIncrement.field === 'tasksCompleted' ? 'tasks_completed' : data.scoreIncrement.field === 'onTimeCount' ? 'on_time_count' : data.scoreIncrement.field === 'lateCount' ? 'late_count' : 'tasks_assigned';
+        await env.DB.prepare(`UPDATE scores SET ${col} = ${col} + 1, last_updated = ? WHERE uid = ?`).bind(nowIso(), data.scoreIncrement.uid).run();
+      }
+      return json({ success: true, data: taskFromRow(await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id = ?').bind(id).first()) });
+    } catch (err: any) {
+      return json({ success: false, error: err.stack || err.message || String(err) }, { status: 500 });
+    }
+  }
+
+  if (url.pathname.startsWith('/tasks/') && req.method === 'DELETE') {
     const id = decodeURIComponent(url.pathname.slice('/tasks/'.length));
-    const data = await body<any>(req);
-    const updates: string[] = ['updated_at = ?'];
-    const binds: unknown[] = [nowIso()];
-    for (const [field, column] of [
-      ['status', 'status'],
-      ['priority', 'priority'],
-      ['startDate', 'start_date'],
-      ['endDate', 'end_date'],
-      ['delayedDate', 'delayed_date'],
-      ['delayReason', 'delay_reason'],
-      ['revisionStatus', 'revision_status'],
-      ['notes', 'notes'],
-      ['acceptedAt', 'accepted_at'],
-      ['completedAt', 'completed_at'],
-      ['verifiedAt', 'verified_at'],
-    ] as const) {
-      if (data[field] !== undefined) { updates.push(`${column} = ?`); binds.push(data[field]); }
-    }
-    binds.push(id);
-    await env.DB.prepare(`UPDATE tasks_current SET ${updates.join(', ')} WHERE task_id = ?`).bind(...binds).run();
-    if (data.scoreIncrement?.uid && data.scoreIncrement?.field) {
-      const col = data.scoreIncrement.field === 'tasksCompleted' ? 'tasks_completed' : data.scoreIncrement.field === 'onTimeCount' ? 'on_time_count' : data.scoreIncrement.field === 'lateCount' ? 'late_count' : 'tasks_assigned';
-      await env.DB.prepare(`UPDATE scores SET ${col} = ${col} + 1, last_updated = ? WHERE uid = ?`).bind(nowIso(), data.scoreIncrement.uid).run();
-    }
-    return json({ success: true, data: taskFromRow(await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id = ?').bind(id).first()) });
+    const existing = await env.DB.prepare('SELECT task_id FROM tasks_current WHERE task_id = ? LIMIT 1').bind(id).first();
+    if (!existing) return json({ success: false, error: 'Not found' }, { status: 404 });
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM revisions WHERE task_id = ?').bind(id),
+      env.DB.prepare('DELETE FROM tasks_current WHERE task_id = ?').bind(id),
+    ]);
+    await log(env, 'TASK_DELETED', `Task ${id} deleted`, { taskId: id });
+    return json({ success: true, data: { taskId: id, deleted: true } });
   }
 
   return null;
@@ -672,6 +717,222 @@ async function routeAutomations(req: Request, env: Env, url: URL) {
   return null;
 }
 
+function parseBucketJson(raw: unknown) {
+  try {
+    const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return {
+      planned: Number(value?.planned ?? 0),
+      done: Number(value?.done ?? 0),
+      onTime: Number(value?.onTime ?? 0),
+    };
+  } catch {
+    return { planned: 0, done: 0, onTime: 0 };
+  }
+}
+
+function misWeeklyFromRow(row: any) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    uid: row.uid || null,
+    name: row.name,
+    department: row.department || '',
+    waNumber: row.wa_number || '',
+    checklist: parseBucketJson(row.checklist_json),
+    delegation: parseBucketJson(row.delegation_json),
+    fms: parseBucketJson(row.fms_json),
+    planned: Number(row.planned ?? 0),
+    done: Number(row.done ?? 0),
+    onTime: Number(row.on_time ?? 0),
+    gapPercent: row.gap_percent == null ? null : Number(row.gap_percent),
+    gapDecimal: row.gap_decimal == null ? null : Number(row.gap_decimal),
+    onTimeGapPercent: row.on_time_gap_percent == null ? null : Number(row.on_time_gap_percent),
+    weekKey: row.week_key,
+    weekStart: row.week_start,
+    weekEnd: row.week_end,
+    weekNumber: Number(row.week_number ?? 0),
+    monthName: row.month_name,
+    year: Number(row.year ?? 0),
+    combinedWeek: row.combined_week || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function misArchiveFromRow(row: any) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    timestamp: row.timestamp,
+    name: row.name,
+    uid: row.uid || null,
+    h4: row.h4 == null ? null : Number(row.h4),
+    h5: row.h5 == null ? null : Number(row.h5),
+    weekKey: row.week_key,
+    weekStart: row.week_start,
+    weekEnd: row.week_end,
+    createdAt: row.created_at,
+  };
+}
+
+async function routeMis(req: Request, env: Env, url: URL) {
+  if (url.pathname === '/mis/weekly' && req.method === 'GET') {
+    const weekKey = url.searchParams.get('weekKey');
+    const year = url.searchParams.get('year');
+    const monthName = url.searchParams.get('monthName');
+    const name = url.searchParams.get('name');
+    const clauses: string[] = [];
+    const binds: unknown[] = [];
+    if (weekKey) { clauses.push('week_key = ?'); binds.push(weekKey); }
+    if (year) { clauses.push('year = ?'); binds.push(Number(year)); }
+    if (monthName) { clauses.push('month_name = ?'); binds.push(monthName); }
+    if (name) { clauses.push('LOWER(name) = ?'); binds.push(String(name).trim().toLowerCase()); }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = await env.DB.prepare(
+      `SELECT * FROM mis_weekly ${where} ORDER BY week_start ASC, name ASC`
+    ).bind(...binds).all();
+    return json({ success: true, data: rows.results.map(misWeeklyFromRow) });
+  }
+
+  if (url.pathname === '/mis/weekly/latest' && req.method === 'GET') {
+    const rows = await env.DB.prepare('SELECT * FROM mis_weekly ORDER BY week_start DESC, name ASC').all();
+    const latest = new Map<string, any>();
+    for (const row of rows.results) {
+      const mapped = misWeeklyFromRow(row);
+      if (!mapped) continue;
+      const key = String(mapped.name || '').trim().toLowerCase();
+      const existing = latest.get(key);
+      if (!existing || mapped.weekStart > existing.weekStart) latest.set(key, mapped);
+    }
+    return json({ success: true, data: Array.from(latest.values()).sort((a, b) => a.name.localeCompare(b.name)) });
+  }
+
+  if (url.pathname === '/mis/weekly/batch' && req.method === 'POST') {
+    const data = await body<{ rows?: any[] }>(req);
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    if (rows.length === 0) return json({ success: true, data: { written: 0 } });
+
+    const now = nowIso();
+    const statements: D1PreparedStatement[] = [];
+    for (const row of rows) {
+      const id = String(row.id || '');
+      if (!id || !row.name || !row.weekKey) continue;
+      statements.push(
+        env.DB.prepare(
+          `INSERT INTO mis_weekly (
+            id, uid, name, department, wa_number,
+            checklist_json, delegation_json, fms_json,
+            planned, done, on_time, gap_percent, gap_decimal, on_time_gap_percent,
+            week_key, week_start, week_end, week_number, month_name, year, combined_week,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            uid = excluded.uid,
+            name = excluded.name,
+            department = excluded.department,
+            wa_number = excluded.wa_number,
+            checklist_json = excluded.checklist_json,
+            delegation_json = excluded.delegation_json,
+            fms_json = excluded.fms_json,
+            planned = excluded.planned,
+            done = excluded.done,
+            on_time = excluded.on_time,
+            gap_percent = excluded.gap_percent,
+            gap_decimal = excluded.gap_decimal,
+            on_time_gap_percent = excluded.on_time_gap_percent,
+            week_key = excluded.week_key,
+            week_start = excluded.week_start,
+            week_end = excluded.week_end,
+            week_number = excluded.week_number,
+            month_name = excluded.month_name,
+            year = excluded.year,
+            combined_week = excluded.combined_week,
+            updated_at = excluded.updated_at`
+        ).bind(
+          id,
+          row.uid || null,
+          row.name,
+          row.department || '',
+          row.waNumber || '',
+          JSON.stringify(row.checklist || { planned: 0, done: 0, onTime: 0 }),
+          JSON.stringify(row.delegation || { planned: 0, done: 0, onTime: 0 }),
+          JSON.stringify(row.fms || { planned: 0, done: 0, onTime: 0 }),
+          Number(row.planned ?? 0),
+          Number(row.done ?? 0),
+          Number(row.onTime ?? 0),
+          row.gapPercent == null ? null : Number(row.gapPercent),
+          row.gapDecimal == null ? null : Number(row.gapDecimal),
+          row.onTimeGapPercent == null ? null : Number(row.onTimeGapPercent),
+          row.weekKey,
+          row.weekStart,
+          row.weekEnd,
+          Number(row.weekNumber ?? 0),
+          row.monthName || '',
+          Number(row.year ?? 0),
+          row.combinedWeek || '',
+          row.createdAt || now,
+          row.updatedAt || now,
+        ),
+      );
+    }
+
+    for (let i = 0; i < statements.length; i += 50) {
+      await env.DB.batch(statements.slice(i, i + 50));
+    }
+    return json({ success: true, data: { written: statements.length } });
+  }
+
+  if (url.pathname === '/mis/archive' && req.method === 'GET') {
+    const weekKey = url.searchParams.get('weekKey');
+    const clauses: string[] = [];
+    const binds: unknown[] = [];
+    if (weekKey) { clauses.push('week_key = ?'); binds.push(weekKey); }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = await env.DB.prepare(
+      `SELECT * FROM mis_archive ${where} ORDER BY timestamp DESC LIMIT 2000`
+    ).bind(...binds).all();
+    return json({ success: true, data: rows.results.map(misArchiveFromRow) });
+  }
+
+  if (url.pathname === '/mis/archive/batch' && req.method === 'POST') {
+    const data = await body<{ rows?: any[] }>(req);
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    if (rows.length === 0) return json({ success: true, data: { written: 0 } });
+
+    const now = nowIso();
+    const statements: D1PreparedStatement[] = [];
+    for (const row of rows) {
+      const id = String(row.id || randomId('misarch_'));
+      if (!row.name || !row.weekKey) continue;
+      statements.push(
+        env.DB.prepare(
+          `INSERT INTO mis_archive (
+            id, timestamp, name, uid, h4, h5, week_key, week_start, week_end, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          id,
+          row.timestamp || now,
+          row.name,
+          row.uid || null,
+          row.h4 == null ? null : Number(row.h4),
+          row.h5 == null ? null : Number(row.h5),
+          row.weekKey,
+          row.weekStart || '',
+          row.weekEnd || '',
+          row.createdAt || now,
+        ),
+      );
+    }
+
+    for (let i = 0; i < statements.length; i += 50) {
+      await env.DB.batch(statements.slice(i, i + 50));
+    }
+    return json({ success: true, data: { written: statements.length } });
+  }
+
+  return null;
+}
+
 async function routeChecklist(req: Request, env: Env, url: URL) {
   if (url.pathname === '/checklist/completions' && req.method === 'GET') {
     const uid = url.searchParams.get('uid');
@@ -728,6 +989,7 @@ export default {
       await routeRevisions(req, env, url) ||
       await routeCrm(req, env, url) ||
       await routeAutomations(req, env, url) ||
+      await routeMis(req, env, url) ||
       await routeChecklist(req, env, url) ||
       json({ success: false, error: 'Not found' }, { status: 404 });
     return new Response(response.body, { status: response.status, headers: { ...Object.fromEntries(response.headers), ...corsHeaders(env) } });

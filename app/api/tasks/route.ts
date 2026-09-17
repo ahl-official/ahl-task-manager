@@ -19,6 +19,7 @@ import { filterTasksForSession } from '@/lib/utils/access';
 import { adminDb } from '@/lib/firebase/admin';
 import { adminGetUserByUid } from '@/lib/firebase/users';
 import { hasCloudflareApi } from '@/lib/cloudflare/api';
+import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils/timelyDashboard';
 
 function normalizeRole(role: string) {
   return role === 'user' ? 'member' : role;
@@ -48,7 +49,11 @@ export async function GET(req: NextRequest) {
     } else if (scope === 'handoff') {
       tasks = await adminGetTasksByHandoff(session.uid);
     } else {
-      tasks = await adminGetTasksByAssignee(session.uid);
+      const [databaseTasks, timelyTasks] = await Promise.all([
+        adminGetTasksByAssignee(session.uid),
+        getPersonalTimelyTasks(session),
+      ]);
+      tasks = mergePersonalDashboardTasks(databaseTasks, timelyTasks);
     }
 
     return NextResponse.json({ success: true, data: tasks.map(serializeTask) });
@@ -92,13 +97,6 @@ export async function POST(req: NextRequest) {
       }, { status: 403 });
     }
 
-    if ((body.startDate && !body.endDate) || (!body.startDate && body.endDate)) {
-      return NextResponse.json({
-        success: false,
-        error: 'Please provide both start date and due date, or leave both empty.',
-      }, { status: 400 });
-    }
-
     if (body.startDate && body.endDate && new Date(body.endDate) < new Date(body.startDate)) {
       return NextResponse.json({
         success: false,
@@ -118,9 +116,15 @@ export async function POST(req: NextRequest) {
     // Score: tasks assigned
     await adminIncrementScore(task.assignedTo, 'tasksAssigned');
 
-    // WA notifications
-    const endDateStr = task.endDate
-      ? formatDate(task.endDate.toDate().toISOString())
+    // WA notifications safely handling string or Timestamp endDate
+    const endDateIso = !task.endDate
+      ? null
+      : typeof (task.endDate as any).toDate === 'function'
+        ? (task.endDate as any).toDate().toISOString()
+        : String(task.endDate);
+
+    const endDateStr = endDateIso
+      ? formatDate(endDateIso)
       : skipAcceptance
         ? 'Set by assignee in portal'
         : 'Set by assignee on accept';

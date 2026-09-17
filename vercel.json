@@ -1,3 +1,24 @@
 {
-  "crons": []
+  "crons": [
+    {
+      "path": "/api/mis/cron?action=weekly",
+      "schedule": "0 18 * * 2"
+    },
+    {
+      "path": "/api/mis/cron?action=runMonthlyReports",
+      "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/reminders/daily-priority?mode=today",
+      "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/reminders",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/reminders/high-priority",
+      "schedule": "30 8 * * *"
+    }
+  ]
 }

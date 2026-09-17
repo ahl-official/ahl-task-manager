@@ -103,7 +103,7 @@ const quickRules = [
 export default function PortalHelpPage() {
   return (
     <div className="p-6 space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div className="flex flex-col gap-4 pr-14 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex items-center gap-2 text-sm font-medium text-brand-700">
             <HelpCircle size={17} />

@@ -70,3 +70,16 @@ ehthumbs.db
 .wrangler/
 .dev.vars
 outputs/
+
+# AppsScript cloned code & reference dumps
+APPSCRIPT CODES/
+appscript/
+appscripts/
+newdelegation/
+*.gs
+
+# Temporary scratch and migration scripts
+scratch/
+scripts/
+*.sql
+*.mjs

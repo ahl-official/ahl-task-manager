@@ -24,6 +24,13 @@ function emptyCounts(): TaskCounts {
   return { total: 0, pending: 0, inProgress: 0, completed: 0, verified: 0, overdue: 0 };
 }
 
+function isOverdue(task: TaskSerialized): boolean {
+  if (task.status === 'Overdue') return true;
+  if (!task.endDate) return false;
+  if (task.status !== 'Pending Accept' && task.status !== 'In Progress' && task.status !== 'Delay Requested') return false;
+  return new Date(task.endDate) < new Date();
+}
+
 // Add one task to a rollup, keeping every displayed status count consistent.
 function addTaskToCounts(counts: TaskCounts, task: TaskSerialized) {
   counts.total += 1;
@@ -31,12 +38,14 @@ function addTaskToCounts(counts: TaskCounts, task: TaskSerialized) {
   if (task.status === 'In Progress') counts.inProgress += 1;
   if (task.status === 'Completed') counts.completed += 1;
   if (task.status === 'Verified') counts.verified += 1;
-  if (task.status === 'Overdue') counts.overdue += 1;
+  if (isOverdue(task)) counts.overdue += 1;
 }
 
 // Match a task to the currently selected dashboard status filter.
 function matchesFilter(task: TaskSerialized, filter: TaskFilter) {
-  return filter === 'all' || task.status === filter;
+  if (filter === 'all') return true;
+  if (filter === 'Overdue') return isOverdue(task);
+  return task.status === filter;
 }
 
 function getTimeAgo(iso: string) {
@@ -77,6 +86,11 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
 
     setTaskItems(current => current.map(task => task.taskId === updated.taskId ? updated : task));
     setSelectedTask(updated);
+  }
+
+  function removeTask(taskId: string) {
+    setTaskItems(current => current.filter(task => task.taskId !== taskId));
+    setSelectedTask(null);
   }
 
   const departments = useMemo(() => {
@@ -157,9 +171,11 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-xl font-semibold text-gray-900">Delegation Dashboard</h1>
-        <p className="text-sm text-gray-500 mt-0.5">{activeUsers.length} active team members</p>
+      <div className="flex items-start justify-between gap-4 pr-14">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">Delegation Dashboard</h1>
+          <p className="mt-0.5 text-sm text-gray-500">{activeUsers.length} active team members</p>
+        </div>
       </div>
 
       {/* Overall stats */}
@@ -453,6 +469,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
           role="admin"
           currentUid=""
           onUpdate={updateTask}
+          onDelete={removeTask}
         />
       )}
     </div>

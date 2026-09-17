@@ -195,6 +195,7 @@ export type LogType =
   | 'TASK_DONE'
   | 'TASK_VERIFIED'
   | 'TASK_UPDATED'
+  | 'TASK_DELETED'
   | 'SEND_WA'
   | 'INBOUND_WA'
   | 'WEBHOOK_RAW'

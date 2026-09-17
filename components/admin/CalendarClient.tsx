@@ -36,6 +36,11 @@ export default function CalendarClient({ tasks, users }: Props) {
     setSelectedTask(updated);
   }
 
+  function removeTask(taskId: string) {
+    setTaskItems(current => current.filter(task => task.taskId !== taskId));
+    setSelectedTask(null);
+  }
+
   const days = useMemo(() => {
     const start = startOfMonth(currentDate);
     const end   = endOfMonth(currentDate);
@@ -83,7 +88,7 @@ export default function CalendarClient({ tasks, users }: Props) {
   return (
     <div className="p-6 space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 pr-14">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Calendar</h1>
           <p className="text-sm text-gray-500">Task due dates overview</p>
@@ -239,6 +244,7 @@ export default function CalendarClient({ tasks, users }: Props) {
           role="admin"
           currentUid=""
           onUpdate={updateTask}
+          onDelete={removeTask}
         />
       )}
     </div>

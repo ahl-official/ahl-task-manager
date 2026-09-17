@@ -235,17 +235,6 @@ export default function UsersClient({
             <p className="text-xs text-gray-500 mt-0.5">{departments.length} departments available for the team</p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
-            {departments.length > 0 && (
-              <button
-                type="button"
-                onClick={clearDepartments}
-                disabled={loading === 'departments-clear'}
-                className="btn-secondary shrink-0 text-red-600 hover:bg-red-50"
-              >
-                {loading === 'departments-clear' ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                Clear All
-              </button>
-            )}
             <form onSubmit={createDepartment} className="flex gap-2 md:min-w-[360px]">
               <input
                 value={departmentName}

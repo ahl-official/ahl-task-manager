@@ -1,27 +1,17 @@
 import { type ClassValue, clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { format, isToday, isTomorrow, isPast, differenceInDays } from 'date-fns';
+import { formatIndiaDate, formatIndiaDateTime, indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
 export function formatDate(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  try {
-    return format(new Date(iso), 'dd MMM yyyy');
-  } catch {
-    return '—';
-  }
+  return formatIndiaDate(iso);
 }
 
 export function formatDateTime(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  try {
-    return format(new Date(iso), 'dd MMM yyyy, h:mm a');
-  } catch {
-    return '—';
-  }
+  return formatIndiaDateTime(iso);
 }
 
 export function getDueBadge(endDate: string | null | undefined): {
@@ -29,12 +19,14 @@ export function getDueBadge(endDate: string | null | undefined): {
   color: string;
 } {
   if (!endDate) return { label: 'Date pending', color: 'bg-gray-100 text-gray-600' };
-  const d = new Date(endDate);
-  if (isPast(d) && !isToday(d)) return { label: 'Overdue', color: 'bg-red-100 text-red-700' };
-  if (isToday(d))                return { label: 'Due Today', color: 'bg-orange-100 text-orange-700' };
-  if (isTomorrow(d))             return { label: 'Due Tomorrow', color: 'bg-yellow-100 text-yellow-700' };
-  const days = differenceInDays(d, new Date());
-  if (days <= 3)                 return { label: `${days}d left`, color: 'bg-yellow-50 text-yellow-600' };
+  const dueKey = indiaDateKey(endDate);
+  const todayKey = indiaTodayKey();
+  if (!dueKey) return { label: 'Date pending', color: 'bg-gray-100 text-gray-600' };
+  const days = indiaDayOffset(todayKey, dueKey);
+  if (days < 0) return { label: 'Overdue', color: 'bg-red-100 text-red-700' };
+  if (days === 0) return { label: 'Due Today', color: 'bg-orange-100 text-orange-700' };
+  if (days === 1) return { label: 'Due Tomorrow', color: 'bg-yellow-100 text-yellow-700' };
+  if (days <= 3) return { label: `${days}d left`, color: 'bg-yellow-50 text-yellow-600' };
   return { label: formatDate(endDate), color: 'bg-gray-100 text-gray-600' };
 }
 

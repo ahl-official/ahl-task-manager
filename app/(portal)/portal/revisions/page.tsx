@@ -33,9 +33,9 @@ export default async function PortalRevisionsPage() {
 
   return (
     <div className="p-6">
-      <div className="mb-6">
+      <div className="mb-6 pr-14">
         <h1 className="text-xl font-semibold text-gray-900">Revision Requests</h1>
-        <p className="text-sm text-gray-500 mt-0.5">{visibleRevisions.length} submitted or pending requests</p>
+        <p className="mt-0.5 text-sm text-gray-500">{visibleRevisions.length} submitted or pending requests</p>
       </div>
       <RevisionsClient revisions={serializedRevisions} tasks={serializedTasks} role="user" currentUid={session.uid} />
     </div>

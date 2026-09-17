@@ -1,5 +1,5 @@
 import type { AHLUser, Task, UserScore, RevisionLog } from '@/types';
-import { timestamp } from './timestamp';
+import { nowTimestamp, timestamp } from './timestamp';
 import type { Department } from '@/lib/firebase/departments';
 
 export function cfUser(row: any): AHLUser | null {
@@ -38,7 +38,7 @@ export function cfScore(row: any): UserScore | null {
   if (!row) return null;
   return {
     ...row,
-    lastUpdated: timestamp(row.lastUpdated)!,
+    lastUpdated: timestamp(row.lastUpdated) ?? nowTimestamp(),
   };
 }
 

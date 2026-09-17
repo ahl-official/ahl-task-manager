@@ -5,15 +5,18 @@ import TaskListClient from '@/components/shared/TaskListClient';
 import { Trophy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
+import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils/timelyDashboard';
 
 export default async function PortalPage() {
   const session = await getSession();
   if (!session) return null;
 
-  const [tasks, score] = await Promise.all([
+  const [databaseTasks, score, timelyTasks] = await Promise.all([
     adminGetTasksByAssignee(session.uid),
     adminGetScore(session.uid),
+    getPersonalTimelyTasks(session),
   ]);
+  const tasks = mergePersonalDashboardTasks(databaseTasks, timelyTasks);
   const hydratedTasks = hydrateTasksWithUsers(tasks, [{
     uid: session.uid,
     name: session.name,
@@ -31,10 +34,10 @@ export default async function PortalPage() {
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-4 pr-14">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">My Tasks</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Welcome back, {session.name}</p>
+          <p className="mt-0.5 text-sm text-gray-500">Welcome back, {session.name}</p>
         </div>
 
         {/* MIS Score badge */}

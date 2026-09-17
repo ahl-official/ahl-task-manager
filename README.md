@@ -162,11 +162,21 @@ https://yourdomain.com/api/webhook
 
 Events to subscribe: `message`, `message.any`
 
-### 7. Reminders Cron
+### 7. One Time Reminders Cron (replaces newdelegation)
 
-**Vercel:** `vercel.json` is already configured — runs daily at 7am UTC.
+Configured in `vercel.json` (requires `CRON_SECRET`):
 
-**Other hosts:** Call `GET /api/reminders` with header `x-cron-secret: YOUR_CRON_SECRET` from any cron service (cron-job.org, EasyCron, etc.)
+| Path | Schedule (UTC) | IST (approx) | Replaces |
+|------|----------------|--------------|----------|
+| `/api/reminders/daily-priority?mode=today` | `30 5 * * *` | ~11:00 | Morning “Today’s Task Reminder” |
+| `/api/reminders` | `0 6 * * *` | ~11:30 | Overdue / 48h / 24h / due-soon (once daily) |
+| `/api/reminders/high-priority` | `30 8 * * *` | ~14:00 | Red Ball 🔴 high-priority (once daily) |
+
+Data source: **Cloudflare One Time tasks** (not the newdelegation Master sheet).
+
+**Cutover:** disable time-driven triggers in the newdelegation Apps Script project (`sendDailyTaskReminderMorning`, WhatsApp Automation / Daily Reminder, `sendTaskReminders2hour`). Create-time WAHA already runs from `POST /api/tasks`.
+
+Manual test: `GET` any path above with header `x-cron-secret: YOUR_CRON_SECRET`.
 
 ---
 
@@ -225,12 +235,36 @@ Overdue is set automatically by the reminders cron when `endDate < now` and stat
 
 ## Scores (MIS)
 
+### Portal MIS (on-time)
 Score = `(onTimeCount / tasksAssigned) * 100`
 
 Updated automatically on:
 - Task created → `tasksAssigned++`
 - Task completed on time → `tasksCompleted++`, `onTimeCount++`
 - Task completed late → `tasksCompleted++`, `lateCount++`
+
+### PDF MIS (in-app Master formulas)
+Score = `ROUND(done / planned * 100 - 100, 2)` (0% = all planned done)
+
+Buckets for a business week (Wed–Tue IST):
+- **Checklist** — Office / Salon / Weekly-Monthly Master sheets (same sources as Checklist Scoring)
+- **Delegation** — Cloudflare One Time tasks (replaces sheet Delegation Scoring)
+- **FMS** — MIS Report workbook FMS tabs (full Master step catalog)
+
+Scores UI (`mode=master`) shows KRA/KPI rollups + per-parameter planned/done/on-time.
+
+**Persistence**
+- Weekly cron `action=weekly` → Cloudflare `mis_weekly` (app-computed G4)
+- Monthly cron `action=monthly` / `runMonthlyReports` → WhatsApp PDFs from `mis_weekly` (not sheet Week/Month Report)
+
+APIs: `GET /api/mis` (`live` | `master` | `weekly` | `monthly`), `POST /api/mis/cron` (`weekly` | `monthly` | `archive`)
+
+Production crons (see `vercel.json`):
+- Tue 18:00 UTC — weekly MIS → `mis_weekly`
+- Daily 03:30 UTC — monthly MIS send (runs only on 30th / Feb 28 IST)
+- Daily 05:30 UTC — One Time due-today morning reminder (~11:00 IST)
+- Daily 06:00 UTC — One Time overdue / due-soon (~11:30 IST)
+- Daily 08:30 UTC — High-priority (Red Ball) One Time reminder (~14:00 IST)
 
 ---
 

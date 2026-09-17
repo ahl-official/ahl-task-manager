@@ -4,19 +4,24 @@ import { adminGetAllUsers } from '@/lib/firebase/users';
 import TaskListClient from '@/components/shared/TaskListClient';
 import { filterTasksForSession, filterUsersForSession } from '@/lib/utils/access';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
+import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils/timelyDashboard';
 
 export default async function DepartmentTasksPage() {
   const session = await getSession();
   if (!session) return null;
 
-  const [allTasks, allUsers] = await Promise.all([
+  const [allTasks, allUsers, timelyTasks] = await Promise.all([
     session.role === 'leader'
       ? adminGetAllTasks({ department: session.department, limit: null })
       : adminGetAllTasks({ limit: null }),
     adminGetAllUsers(),
+    session.role === 'leader' ? Promise.resolve([]) : getPersonalTimelyTasks(session),
   ]);
   const visibleUsers = filterUsersForSession(session, allUsers);
-  const tasks = filterTasksForSession(session, hydrateTasksWithUsers(allTasks, visibleUsers));
+  const databaseTasks = filterTasksForSession(session, hydrateTasksWithUsers(allTasks, visibleUsers));
+  const tasks = session.role === 'leader'
+    ? databaseTasks
+    : mergePersonalDashboardTasks(databaseTasks, timelyTasks);
 
   const serialized = tasks.map(serializeTask);
   const serializedUsers = visibleUsers.map(user => ({
@@ -29,11 +34,11 @@ export default async function DepartmentTasksPage() {
 
   return (
     <div className="p-6">
-      <div className="mb-6">
+      <div className="mb-6 pr-14">
         <h1 className="text-xl font-semibold text-gray-900">
           {session.role === 'leader' ? 'Department Tasks' : 'My Tasks'}
         </h1>
-        <p className="text-sm text-gray-500 mt-0.5">{session.department} - {tasks.length} tasks</p>
+        <p className="mt-0.5 text-sm text-gray-500">{session.department} - {tasks.length} tasks</p>
       </div>
       <TaskListClient tasks={serialized} role="user" currentUid={session.uid} users={serializedUsers} />
     </div>

@@ -122,10 +122,6 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
       toast.error('Please fill in all required fields');
       return;
     }
-    if ((form.startDate && !form.endDate) || (!form.startDate && form.endDate)) {
-      toast.error('Add both start date and due date, or leave both empty');
-      return;
-    }
     if (form.startDate && form.endDate && new Date(form.endDate) < new Date(form.startDate)) {
       toast.error('Due date must be after start date');
       return;

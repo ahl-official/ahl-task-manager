@@ -27,9 +27,9 @@ export default async function CreateTaskPage() {
 
   return (
     <div className="p-6 max-w-2xl">
-      <div className="mb-6">
+      <div className="mb-6 pr-14">
         <h1 className="text-xl font-semibold text-gray-900">Create Task</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Delegate a new task to a team member</p>
+        <p className="mt-0.5 text-sm text-gray-500">Delegate a new task to a team member</p>
       </div>
       <CreateTaskForm users={activeUsers as any} currentUser={currentUser as any} redirectTo="/admin" />
     </div>

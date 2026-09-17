@@ -1,18 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/utils/auth';
-import { adminGetTask, adminUpdateTaskStatus, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetTask, adminUpdateTaskStatus, adminDeleteTask, serializeTask } from '@/lib/firebase/tasks';
 import { adminIncrementScores, adminLog } from '@/lib/firebase/scores';
 import { sendWhatsApp, msgTaskAccepted, msgTaskCompleted, msgTaskVerified } from '@/lib/waha';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { TaskPriority, TaskStatus } from '@/types';
 import { canViewTask } from '@/lib/utils/access';
+import { completeTimelySheetTaskById, isTimelySheetTaskId } from '@/lib/google/sheets';
+import { getTimelyTaskForSession } from '@/lib/utils/timelyDashboard';
 
 // GET /api/tasks/[id]
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const task = await adminGetTask(params.id);
+  const task = isTimelySheetTaskId(params.id)
+    ? await getTimelyTaskForSession(session, params.id)
+    : await adminGetTask(params.id);
   if (!task) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
 
   if (!canViewTask(session, task)) {
@@ -27,6 +31,34 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+  if (isTimelySheetTaskId(params.id)) {
+    const timelyTask = await getTimelyTaskForSession(session, params.id);
+    if (!timelyTask) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
+    if (!canViewTask(session, timelyTask)) {
+      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
+    }
+
+    const { action } = await req.json();
+    if (action !== 'complete') {
+      return NextResponse.json({
+        success: false,
+        error: 'Timely sheet tasks can only be marked complete. They are not stored in the database.',
+      }, { status: 400 });
+    }
+    if (timelyTask.assignedTo !== session.uid && session.role !== 'admin') {
+      return NextResponse.json({ success: false, error: 'Only assignee can complete' }, { status: 403 });
+    }
+
+    try {
+      await completeTimelySheetTaskById(params.id);
+      const updated = await getTimelyTaskForSession(session, params.id, true);
+      return NextResponse.json({ success: true, data: serializeTask(updated ?? timelyTask) });
+    } catch (err: any) {
+      console.error(`PATCH /api/tasks/${params.id} timely error`, err);
+      return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+    }
+  }
 
   const task = await adminGetTask(params.id);
   if (!task) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
@@ -47,16 +79,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (!actorIsAssignee && !isAdmin) {
         return NextResponse.json({ success: false, error: 'Only assignee can accept' }, { status: 403 });
       }
-      if (!isAdmin && (!startDate || !endDate)) {
-        return NextResponse.json({ success: false, error: 'Start date and due date are required when accepting' }, { status: 400 });
-      }
       if (startDate && endDate && new Date(endDate) < new Date(startDate)) {
         return NextResponse.json({ success: false, error: 'Due date must be after start date' }, { status: 400 });
       }
+      const newStartDate = startDate ? Timestamp.fromDate(new Date(startDate)) : (task.startDate ?? now);
+      const newEndDate = endDate ? Timestamp.fromDate(new Date(endDate)) : task.endDate;
       updatedTask = await adminUpdateTaskStatus(params.id, 'In Progress', {
         acceptedAt: now,
-        startDate: startDate ? Timestamp.fromDate(new Date(startDate)) : task.startDate,
-        endDate: endDate ? Timestamp.fromDate(new Date(endDate)) : task.endDate,
+        startDate: newStartDate,
+        endDate: newEndDate,
       });
       await adminLog('TASK_ACCEPTED', `${params.id} accepted by ${session.name}`, {
         taskId: params.id, uid: session.uid,
@@ -65,17 +96,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     else if (action === 'set-dates') {
       if (!actorIsAssignee && !isAdmin) {
-        return NextResponse.json({ success: false, error: 'Only assignee can set dates' }, { status: 403 });
+        return NextResponse.json({ success: false, error: 'Only assignee or admin can set dates' }, { status: 403 });
       }
-      if (!startDate || !endDate) {
-        return NextResponse.json({ success: false, error: 'Start date and due date are required' }, { status: 400 });
+      if (!startDate && !endDate) {
+        return NextResponse.json({ success: false, error: 'Select a due date to save' }, { status: 400 });
       }
-      if (new Date(endDate) < new Date(startDate)) {
-        return NextResponse.json({ success: false, error: 'Due date must be after start date' }, { status: 400 });
+      const newStartDate = startDate ? Timestamp.fromDate(new Date(startDate)) : (task.startDate ?? task.acceptedAt ?? now);
+      const newEndDate = endDate ? Timestamp.fromDate(new Date(endDate)) : task.endDate;
+      const startMs = newStartDate ? (typeof (newStartDate as any).toDate === 'function' ? (newStartDate as any).toDate().getTime() : new Date(newStartDate as any).getTime()) : null;
+      const endMs = newEndDate ? (typeof (newEndDate as any).toDate === 'function' ? (newEndDate as any).toDate().getTime() : new Date(newEndDate as any).getTime()) : null;
+      if (startMs && endMs && endMs < startMs) {
+        return NextResponse.json({ success: false, error: 'Due date must be on or after start date' }, { status: 400 });
       }
       updatedTask = await adminUpdateTaskStatus(params.id, 'In Progress', {
-        startDate: Timestamp.fromDate(new Date(startDate)),
-        endDate: Timestamp.fromDate(new Date(endDate)),
+        startDate: newStartDate,
+        endDate: newEndDate,
         acceptedAt: task.acceptedAt ?? now,
       });
       await adminLog('TASK_ACCEPTED', `${params.id} dates set by ${session.name}`, {
@@ -211,6 +246,56 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ success: true, data: serializeTask(updated!) });
   } catch (err: any) {
     console.error(`PATCH /api/tasks/${params.id} error`, err);
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  }
+}
+
+// DELETE /api/tasks/[id] — admin only, portal-created tasks (wrong assignee fix)
+export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  if (session.role !== 'admin') {
+    return NextResponse.json({ success: false, error: 'Only admin can delete tasks' }, { status: 403 });
+  }
+  if (isTimelySheetTaskId(params.id)) {
+    return NextResponse.json({
+      success: false,
+      error: 'Timely sheet tasks cannot be deleted here. Update the Master sheet instead.',
+    }, { status: 400 });
+  }
+
+  try {
+    const task = await adminGetTask(params.id);
+    if (!task) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
+    if (task.category !== 'One Time') {
+      return NextResponse.json({
+        success: false,
+        error: 'Only One Time tasks can be deleted. Daily, Weekly, and Monthly tasks cannot be deleted.',
+      }, { status: 400 });
+    }
+    if (task.status === 'Completed' || task.status === 'Verified') {
+      return NextResponse.json({
+        success: false,
+        error: 'Completed or verified tasks cannot be deleted.',
+      }, { status: 400 });
+    }
+
+    const deleted = await adminDeleteTask(params.id);
+    if (!deleted) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
+
+    await adminLog('TASK_DELETED', `${params.id} deleted by ${session.name}`, {
+      taskId: params.id,
+      uid: session.uid,
+      meta: {
+        assignedTo: task.assignedToName,
+        category: task.category,
+        description: task.description.slice(0, 120),
+      },
+    });
+
+    return NextResponse.json({ success: true, data: { taskId: params.id, deleted: true } });
+  } catch (err: any) {
+    console.error(`DELETE /api/tasks/${params.id} error`, err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }

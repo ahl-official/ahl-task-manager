@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertOctagon, CheckCircle2, Circle, MessageSquare, Loader2, RefreshCw, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn, formatDate } from '@/lib/utils';
+import { namesEqual, normalizePersonName } from '@/lib/utils/names';
 
 type ChecklistCategory = 'Daily' | 'Weekly' | 'Monthly';
 
@@ -29,6 +30,7 @@ interface ChecklistRow {
   label: string;
   canComplete: boolean;
   canManage: boolean;
+  mine?: boolean;
 }
 
 const CATEGORY_OPTIONS: ChecklistCategory[] = ['Daily', 'Weekly', 'Monthly'];
@@ -40,29 +42,41 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   const [ticking, setTicking] = useState<string | null>(null);
   const [department, setDepartment] = useState('');
   const [individual, setIndividual] = useState('');
+  const [mineOnly, setMineOnly] = useState(false);
+  const [elevated, setElevated] = useState(false);
+  const [currentUserName, setCurrentUserName] = useState('');
   const [date, setDate] = useState('');
   const [activeRemarkRow, setActiveRemarkRow] = useState<string | null>(null);
   const [remark, setRemark] = useState('');
 
-  const departments = useMemo(() => Array.from(new Set(rows.map(row => row.department).filter(Boolean))).sort(), [rows]);
-  const individuals = useMemo(() => Array.from(new Set(
-    rows
-      .filter(row => !department || row.department === department)
-      .map(row => row.userName)
-      .filter(Boolean),
-  )).sort(), [rows, department]);
+  const departments = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const row of rows) {
+      const key = normalizePersonName(row.department);
+      if (!key || seen.has(key)) continue;
+      seen.set(key, row.department);
+    }
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [rows]);
+  const individuals = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const row of rows) {
+      if (department && !namesEqual(row.department, department)) continue;
+      const key = normalizePersonName(row.userName);
+      if (!key || seen.has(key)) continue;
+      seen.set(key, row.userName);
+    }
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [rows, department]);
   const visibleRows = useMemo(() => rows.filter(row => {
-    const selected = date ? new Date(`${date}T12:00:00`) : null;
-    const due = row.dueDate ? new Date(row.dueDate) : null;
-    const start = row.periodStart ? new Date(row.periodStart) : null;
-    const end = row.periodEnd ? new Date(row.periodEnd) : null;
-    const matchesDate = !selected ||
-      (due && !Number.isNaN(due.valueOf()) && due.toDateString() === selected.toDateString()) ||
-      (start && end && !Number.isNaN(start.valueOf()) && !Number.isNaN(end.valueOf()) && selected >= start && selected <= end);
-    return (!department || row.department === department) &&
-      (!individual || row.userName === individual) &&
+    const matchesDate = !date || row.dueDate === date ||
+      (row.periodStart && row.periodEnd && date >= row.periodStart && date <= row.periodEnd);
+    const matchesMine = !mineOnly || Boolean(row.mine) || namesEqual(row.userName, currentUserName);
+    return matchesMine &&
+      (!department || namesEqual(row.department, department)) &&
+      (!individual || namesEqual(row.userName, individual)) &&
       Boolean(matchesDate);
-  }), [rows, department, individual, date]);
+  }), [rows, department, individual, date, mineOnly, currentUserName]);
   const completedCount = useMemo(() => visibleRows.filter(row => row.completed).length, [visibleRows]);
 
   async function loadRows(nextCategory = category) {
@@ -72,6 +86,8 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       setRows(data.data);
+      setElevated(Boolean(data.meta?.elevated));
+      setCurrentUserName(String(data.meta?.currentUserName ?? ''));
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to load checklist');
     } finally {
@@ -139,13 +155,29 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+      <div className="flex flex-col gap-3 pr-14 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Checklist</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Tick recurring tasks for the current period</p>
+          <p className="mt-0.5 text-sm text-gray-500">
+            {elevated
+              ? 'Team view of timely sheet tasks. Use Show my tasks to filter and complete your own.'
+              : 'Tick recurring tasks for the current period'}
+          </p>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {elevated && (
+            <button
+              type="button"
+              onClick={() => {
+                setMineOnly(current => !current);
+                if (!mineOnly) setIndividual('');
+              }}
+              className={cn('btn-secondary py-2', mineOnly && 'bg-brand-50 text-brand-700 border-brand-200')}
+            >
+              {mineOnly ? 'Showing my tasks' : 'Show my tasks'}
+            </button>
+          )}
           <select
             value={category}
             onChange={e => {
@@ -154,7 +186,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
               setIndividual('');
               setDate('');
             }}
-            className="input py-2 text-sm w-auto"
+            className="input w-auto py-2 text-sm"
           >
             {CATEGORY_OPTIONS.map(option => (
               <option key={option} value={option}>{option} Tasks</option>
@@ -172,22 +204,24 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <label className="space-y-1">
-          <span className="text-xs font-medium text-gray-500">Department</span>
-          <select
-            value={department}
-            onChange={event => {
-              setDepartment(event.target.value);
-              setIndividual('');
-            }}
-            className="input w-full py-2 text-sm"
-            disabled={loading || departments.length === 0}
-          >
-            <option value="">All departments</option>
-            {departments.map(option => <option key={option} value={option}>{option}</option>)}
-          </select>
-        </label>
+      <div className={cn('grid gap-3', elevated ? 'sm:grid-cols-3' : 'sm:grid-cols-1 max-w-xs')}>
+        {elevated && (
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-gray-500">Department</span>
+            <select
+              value={department}
+              onChange={event => {
+                setDepartment(event.target.value);
+                setIndividual('');
+              }}
+              className="input w-full py-2 text-sm"
+              disabled={loading || departments.length === 0}
+            >
+              <option value="">All departments</option>
+              {departments.map(option => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </label>
+        )}
 
         <label className="space-y-1">
           <span className="text-xs font-medium text-gray-500">Date</span>
@@ -206,18 +240,20 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
           </div>
         </label>
 
-        <label className="space-y-1">
-          <span className="text-xs font-medium text-gray-500">Individual</span>
-          <select
-            value={individual}
-            onChange={event => setIndividual(event.target.value)}
-            className="input w-full py-2 text-sm"
-            disabled={loading || individuals.length === 0}
-          >
-            <option value="">All individuals</option>
-            {individuals.map(option => <option key={option} value={option}>{option}</option>)}
-          </select>
-        </label>
+        {elevated && (
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-gray-500">Individual</span>
+            <select
+              value={individual}
+              onChange={event => setIndividual(event.target.value)}
+              className="input w-full py-2 text-sm"
+              disabled={loading || individuals.length === 0}
+            >
+              <option value="">All individuals</option>
+              {individuals.map(option => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </label>
+        )}
       </div>
 
       <div className="grid gap-3 md:grid-cols-3">
@@ -259,6 +295,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
                     <span className="font-mono text-xs text-brand-600">{row.taskId}</span>
                     <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">{row.label}</span>
                     <span className={cn('badge text-[10px]', row.completed ? 'bg-green-100 text-green-700' : row.dead ? 'bg-red-600 text-white' : 'bg-amber-100 text-amber-700')}>{row.status}</span>
+                    {row.mine && <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-700">Mine</span>}
                   </div>
                   <p className="text-sm font-semibold text-gray-900">{row.description}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-400">

@@ -1,10 +1,17 @@
 import { createSign } from 'crypto';
 import type { SessionUser, TaskCategory } from '@/types';
+import { namesEqual, normalizePersonName } from '@/lib/utils/names';
+import { indiaTodayKey, parseSheetDate, sheetDateFormula } from '@/lib/utils/indiaDate';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const DEFAULT_COMPLETIONS_SHEET = 'Checklist Completions';
+const WEEKDAY_NAMES = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+
+const DEFAULT_OFFICE_DAILY_ID = '1CE0ydiaeYYAPU31QJiZxMk444odWVXHgxj4O1nXu6Vc';
+const DEFAULT_SALON_DAILY_ID = '1I3hRSp9vSiwAorQub27r6rdulg7Ryp730K7IlA98eOE';
+const DEFAULT_WEEKLY_MONTHLY_ID = '13vWQz1G99hAsbvo0qDs9i92421RVAWuLY33clG_rBqg';
 
 const CHECKLIST_HEADERS = ['id', 'taskId', 'uid', 'category', 'periodKey', 'completedAt'];
 
@@ -29,6 +36,18 @@ function spreadsheetId() {
   return process.env.CHECKLIST_SPREADSHEET_ID || '';
 }
 
+function timelySources() {
+  return [
+    { key: 'office', id: process.env.CHECKLIST_OFFICE_DAILY_ID || DEFAULT_OFFICE_DAILY_ID },
+    { key: 'salon', id: process.env.CHECKLIST_SALON_DAILY_ID || DEFAULT_SALON_DAILY_ID },
+    { key: 'weekly', id: process.env.CHECKLIST_WEEKLY_MONTHLY_ID || DEFAULT_WEEKLY_MONTHLY_ID },
+  ].filter(source => source.id);
+}
+
+export function hasTimelyMasterSheets() {
+  return timelySources().length === 3;
+}
+
 function completionsSheetName() {
   return process.env.CHECKLIST_COMPLETIONS_SHEET || DEFAULT_COMPLETIONS_SHEET;
 }
@@ -37,8 +56,16 @@ function quoteSheetName(name: string) {
   return `'${name.replace(/'/g, "''")}'`;
 }
 
+export function hasGoogleSheetsAuth() {
+  return Boolean(clientEmail() && envPrivateKey());
+}
+
 export function hasChecklistSheets() {
-  return Boolean(spreadsheetId() && clientEmail() && envPrivateKey());
+  return Boolean(spreadsheetId() && hasGoogleSheetsAuth());
+}
+
+export function hasChecklistBackend() {
+  return hasGoogleSheetsAuth() && hasTimelyMasterSheets();
 }
 
 async function getAccessToken() {
@@ -78,14 +105,15 @@ async function getAccessToken() {
   return cachedToken.token;
 }
 
-async function sheetsFetch(path: string, init: RequestInit = {}) {
-  if (!hasChecklistSheets()) throw new Error('Checklist Google Sheets is not configured');
+async function sheetsFetch(path: string, init: RequestInit = {}, targetId = spreadsheetId()) {
+  if (!hasGoogleSheetsAuth()) throw new Error('Checklist Google Sheets is not configured');
+  if (!targetId) throw new Error('Spreadsheet id is missing');
   const token = await getAccessToken();
   const headers = new Headers(init.headers);
   headers.set('authorization', `Bearer ${token}`);
   headers.set('content-type', headers.get('content-type') || 'application/json');
 
-  const res = await fetch(`${SHEETS_API}/${spreadsheetId()}${path}`, {
+  const res = await fetch(`${SHEETS_API}/${targetId}${path}`, {
     ...init,
     headers,
     cache: 'no-store',
@@ -96,6 +124,33 @@ async function sheetsFetch(path: string, init: RequestInit = {}) {
     throw new Error(message);
   }
   return data;
+}
+
+/** Read one or more A1 ranges from any spreadsheet the service account can access. */
+export async function readSpreadsheetValues(
+  targetId: string,
+  ranges: string | string[],
+  valueRenderOption: 'FORMATTED_VALUE' | 'UNFORMATTED_VALUE' | 'FORMULA' = 'UNFORMATTED_VALUE',
+): Promise<unknown[][][]> {
+  if (!hasGoogleSheetsAuth()) throw new Error('Google Sheets is not configured');
+  if (!targetId) throw new Error('Spreadsheet id is missing');
+
+  const list = Array.isArray(ranges) ? ranges : [ranges];
+  if (list.length === 0) return [];
+
+  if (list.length === 1) {
+    const data = await sheetsFetch(
+      `/values/${encodeURIComponent(list[0])}?majorDimension=ROWS&valueRenderOption=${valueRenderOption}`,
+      {},
+      targetId,
+    );
+    return [(data.values ?? []) as unknown[][]];
+  }
+
+  const params = new URLSearchParams({ majorDimension: 'ROWS', valueRenderOption });
+  list.forEach(range => params.append('ranges', range));
+  const data = await sheetsFetch(`/values:batchGet?${params.toString()}`, {}, targetId);
+  return ((data.valueRanges ?? []) as Array<{ values?: unknown[][] }>).map(range => range.values ?? []);
 }
 
 async function ensureChecklistSheet() {
@@ -199,6 +254,7 @@ export interface SheetChecklistUser {
   phone: string;
   portalUserId: string;
   active: boolean;
+  sourceNames: string[];
 }
 
 export interface SheetChecklistTask {
@@ -224,6 +280,10 @@ export interface SheetChecklistTask {
   deadAt: string;
   remark: string;
   remarkBy: string;
+  category?: ChecklistSheetCategory;
+  sourceKey?: string;
+  sourceSpreadsheetId?: string;
+  sourceSheetName?: string;
 }
 
 interface ChecklistSheetData {
@@ -232,7 +292,16 @@ interface ChecklistSheetData {
 }
 
 const sheetDataCache = new Map<ChecklistSheetCategory, { expiresAt: number; data: ChecklistSheetData }>();
+let timelyBundleCache: { expiresAt: number; data: ChecklistSheetData } | null = null;
+let timelyAllPeriodsCache: { expiresAt: number; data: ChecklistSheetData } | null = null;
 const SHEET_CACHE_MS = 15_000;
+const MIS_ALL_PERIODS_CACHE_MS = 60_000;
+
+function clearTimelyCache() {
+  timelyBundleCache = null;
+  timelyAllPeriodsCache = null;
+  sheetDataCache.clear();
+}
 
 function cell(row: unknown[], index: number) {
   return String(row[index] ?? '').trim();
@@ -246,15 +315,92 @@ function sheetBoolean(value: unknown, defaultValue = false) {
 }
 
 function normalizeName(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
+  return normalizePersonName(value);
 }
 
 function lastTenDigits(value: string) {
   return value.replace(/\D/g, '').slice(-10);
+}
+
+function pad(n: number) {
+  return String(n).padStart(2, '0');
+}
+
+function addUtcDays(isoDate: string, days: number) {
+  const [year, month, day] = isoDate.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+function utcWeekday(isoDate: string) {
+  const [year, month, day] = isoDate.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+function weekBounds(isoDate: string) {
+  const daysSinceWednesday = (utcWeekday(isoDate) - 3 + 7) % 7;
+  const periodStart = addUtcDays(isoDate, -daysSinceWednesday);
+  const periodEnd = addUtcDays(periodStart, 6);
+  return {
+    periodKey: `${periodStart}_${periodEnd}`,
+    periodStart,
+    periodEnd,
+  };
+}
+
+function monthBounds(isoDate: string) {
+  const [year, month] = isoDate.split('-');
+  const lastDay = new Date(Date.UTC(Number(year), Number(month), 0)).getUTCDate();
+  return {
+    periodKey: `${year}-${month}`,
+    periodStart: `${year}-${month}-01`,
+    periodEnd: `${year}-${month}-${pad(lastDay)}`,
+  };
+}
+
+function categoryFromFreq(freq: string): ChecklistSheetCategory | null {
+  const value = freq.trim().toUpperCase();
+  if (value === 'D' || value === 'DAILY') return 'Daily';
+  if (value === 'W' || value === 'F' || value === 'WEEKLY') return 'Weekly';
+  if (value === 'M' || value === 'Q' || value === 'Y' || value.startsWith('E')) return 'Monthly';
+  return null;
+}
+
+function scheduleFor(category: ChecklistSheetCategory, freq: string, dueDate: string) {
+  if (category === 'Daily') return { scheduleRule: 'EVERY_WORKING_DAY', scheduleValue: '' };
+  if (category === 'Weekly') {
+    return {
+      scheduleRule: freq.toUpperCase() === 'F' ? 'FORTNIGHTLY' : 'DAY_OF_WEEK',
+      scheduleValue: WEEKDAY_NAMES[utcWeekday(dueDate)] || '',
+    };
+  }
+  return { scheduleRule: 'DAY_OF_MONTH', scheduleValue: String(Number(dueDate.slice(-2))) };
+}
+
+function periodFor(category: ChecklistSheetCategory, dueDate: string) {
+  if (category === 'Daily') return { periodKey: dueDate, periodStart: dueDate, periodEnd: dueDate };
+  if (category === 'Weekly') return weekBounds(dueDate);
+  return monthBounds(dueDate);
+}
+
+function inCurrentPeriod(category: ChecklistSheetCategory, dueDate: string, today = indiaTodayKey()) {
+  const period = periodFor(category, dueDate);
+  const current = periodFor(category, today);
+  return period.periodKey === current.periodKey;
+}
+
+function isMasterCompleted(actual: string, status: string) {
+  if (/^(done|completed|complete|yes)$/i.test(status)) return true;
+  return Boolean(actual);
+}
+
+function matchDirectoryUser(users: SheetChecklistUser[], name: string, email: string) {
+  const normalized = normalizeName(name);
+  const emailKey = email.trim().toLowerCase();
+  return users.find(user => normalizeName(user.displayName) === normalized)
+    || users.find(user => user.sourceNames.some(alias => normalizeName(alias) === normalized))
+    || (emailKey ? users.find(user => user.email.trim().toLowerCase() === emailKey) : undefined)
+    || null;
 }
 
 function rowToSheetUser(row: unknown[], index: number): SheetChecklistUser | null {
@@ -270,61 +416,176 @@ function rowToSheetUser(row: unknown[], index: number): SheetChecklistUser | nul
     phone: lastTenDigits(cell(row, 4)),
     portalUserId: cell(row, 5),
     active: sheetBoolean(row[6], true),
-  };
-}
-
-function rowToSheetTask(row: unknown[], index: number): SheetChecklistTask | null {
-  const taskId = cell(row, 0);
-  const userId = cell(row, 1);
-  const task = cell(row, 4);
-  if (!taskId || !userId || !task) return null;
-  return {
-    rowNumber: index + 2,
-    taskId,
-    userId,
-    userName: cell(row, 2),
-    department: cell(row, 3),
-    task,
-    scheduleRule: cell(row, 5),
-    scheduleValue: cell(row, 6),
-    periodKey: cell(row, 7),
-    periodStart: cell(row, 8),
-    periodEnd: cell(row, 9),
-    dueDate: cell(row, 10),
-    completed: sheetBoolean(row[11]),
-    completedAt: cell(row, 12),
-    status: cell(row, 13) || 'PENDING',
-    phone: lastTenDigits(cell(row, 16)),
-    email: cell(row, 17),
-    active: sheetBoolean(row[18], true),
-    dead: sheetBoolean(row[19]),
-    deadAt: cell(row, 20),
-    remark: cell(row, 21),
-    remarkBy: cell(row, 22),
+    sourceNames: cell(row, 8).split('|').map(value => value.trim()).filter(Boolean),
   };
 }
 
 export async function getChecklistSheetData(category: ChecklistSheetCategory, force = false): Promise<ChecklistSheetData> {
-  const cached = sheetDataCache.get(category);
-  if (!force && cached && cached.expiresAt > Date.now()) return cached.data;
+  const all = await loadAllTimelyTasks(force);
+  return {
+    users: all.users,
+    tasks: all.tasks.filter(task => task.category === category),
+  };
+}
 
-  const params = new URLSearchParams({
-    majorDimension: 'ROWS',
-    valueRenderOption: 'FORMATTED_VALUE',
-  });
-  params.append('ranges', `${quoteSheetName('Users')}!A2:G`);
-  params.append('ranges', `${quoteSheetName(category)}!A2:W`);
-  const response = await sheetsFetch(`/values:batchGet?${params.toString()}`);
-  const ranges = response.valueRanges ?? [];
-  const users = ((ranges[0]?.values ?? []) as unknown[][])
-    .map(rowToSheetUser)
-    .filter(Boolean) as SheetChecklistUser[];
-  const tasks = ((ranges[1]?.values ?? []) as unknown[][])
-    .map(rowToSheetTask)
-    .filter(Boolean) as SheetChecklistTask[];
+export async function getAllTimelyChecklistData(
+  force = false,
+  options?: { includeAllPeriods?: boolean },
+) {
+  return loadAllTimelyTasks(force, options);
+}
+
+export function isTimelySheetTaskId(taskId: string) {
+  return /^(office|salon|weekly)-/i.test(taskId);
+}
+
+async function loadAllTimelyTasks(
+  force = false,
+  options?: { includeAllPeriods?: boolean },
+): Promise<ChecklistSheetData> {
+  const includeAllPeriods = Boolean(options?.includeAllPeriods);
+  if (includeAllPeriods && !force && timelyAllPeriodsCache && timelyAllPeriodsCache.expiresAt > Date.now()) {
+    return timelyAllPeriodsCache.data;
+  }
+  if (!includeAllPeriods && !force && timelyBundleCache && timelyBundleCache.expiresAt > Date.now()) {
+    return timelyBundleCache.data;
+  }
+
+  const sources = timelySources();
+  const sourceResults = await Promise.all(sources.map(async source => {
+    try {
+      const params = new URLSearchParams({
+        majorDimension: 'ROWS',
+        valueRenderOption: 'FORMATTED_VALUE',
+      });
+      params.append('ranges', `${quoteSheetName('Master')}!A2:J`);
+      params.append('ranges', `${quoteSheetName('Doer List')}!A2:C`);
+      const response = await sheetsFetch(`/values:batchGet?${params.toString()}`, {}, source.id);
+      const ranges = response.valueRanges ?? [];
+      return {
+        source,
+        master: (ranges[0]?.values ?? []) as unknown[][],
+        doers: (ranges[1]?.values ?? []) as unknown[][],
+      };
+    } catch (err) {
+      console.error(`Failed to read ${source.key} timely sheet`, err);
+      return { source, master: [] as unknown[][], doers: [] as unknown[][] };
+    }
+  }));
+
+  const users = await loadDirectoryUsers(sourceResults.map(result => ({ source: result.source, values: result.doers })));
+  const tasks: SheetChecklistTask[] = [];
+  for (const { source, master } of sourceResults) {
+    master.forEach((row, index) => {
+      const task = masterRowToTask(row, index, source, users, { includeAllPeriods });
+      if (task) tasks.push(task);
+    });
+  }
+
   const data = { users, tasks };
-  sheetDataCache.set(category, { expiresAt: Date.now() + SHEET_CACHE_MS, data });
+  if (includeAllPeriods) {
+    timelyAllPeriodsCache = { expiresAt: Date.now() + MIS_ALL_PERIODS_CACHE_MS, data };
+  } else {
+    timelyBundleCache = { expiresAt: Date.now() + SHEET_CACHE_MS, data };
+  }
   return data;
+}
+
+async function loadDirectoryUsers(doerLists: Array<{ source: { key: string; id: string }; values: unknown[][] }>) {
+  const users: SheetChecklistUser[] = [];
+
+  if (spreadsheetId()) {
+    try {
+      const response = await sheetsFetch(`/values/${encodeURIComponent(`${quoteSheetName('Users')}!A2:J`)}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`);
+      users.push(...(((response.values ?? []) as unknown[][]).map(rowToSheetUser).filter(Boolean) as SheetChecklistUser[]));
+    } catch (err) {
+      console.error('Failed to read optional Users directory overlay', err);
+    }
+  }
+
+  for (const { source, values } of doerLists) {
+    values.forEach((row, index) => {
+      const name = cell(row, 0);
+      const department = cell(row, 1);
+      const email = cell(row, 2);
+      if (!name) return;
+      const existing = matchDirectoryUser(users, name, email);
+      if (existing) {
+        if (!existing.email && email) existing.email = email;
+        if (!existing.sourceNames.includes(name)) existing.sourceNames.push(name);
+        return;
+      }
+      users.push({
+        rowNumber: index + 2,
+        userId: `doer-${source.key}-${normalizeName(name).replace(/\s+/g, '-')}`,
+        displayName: name,
+        department,
+        email,
+        phone: '',
+        portalUserId: '',
+        active: true,
+        sourceNames: [name],
+      });
+    });
+  }
+
+  return users;
+}
+
+function masterRowToTask(
+  row: unknown[],
+  index: number,
+  source: { key: string; id: string },
+  users: SheetChecklistUser[],
+  options?: { includeAllPeriods?: boolean },
+): SheetChecklistTask | null {
+  const name = cell(row, 0);
+  const task = cell(row, 5);
+  const freq = cell(row, 4);
+  const mappedCategory = categoryFromFreq(freq);
+  if (!name || !task || !mappedCategory) return null;
+
+  const dueDate = parseSheetDate(row[6]);
+  if (!dueDate) return null;
+  if (!options?.includeAllPeriods && !inCurrentPeriod(mappedCategory, dueDate)) return null;
+
+  const email = cell(row, 1);
+  const matched = matchDirectoryUser(users, name, email);
+  const period = periodFor(mappedCategory, dueDate);
+  const schedule = scheduleFor(mappedCategory, freq, dueDate);
+  const actual = cell(row, 7);
+  const status = cell(row, 8);
+  const completed = isMasterCompleted(actual, status);
+  const sourceTaskId = cell(row, 3) || String(index + 2);
+
+  return {
+    rowNumber: index + 2,
+    taskId: `${source.key}-${sourceTaskId}`,
+    userId: matched?.userId || `unmapped-${source.key}-${normalizeName(name).replace(/\s+/g, '-')}`,
+    userName: matched?.displayName || name,
+    department: matched?.department || cell(row, 2),
+    task,
+    scheduleRule: schedule.scheduleRule,
+    scheduleValue: schedule.scheduleValue,
+    periodKey: period.periodKey,
+    periodStart: period.periodStart,
+    periodEnd: period.periodEnd,
+    dueDate,
+    completed,
+    completedAt: completed ? (parseSheetDate(actual) || dueDate) : '',
+    status: completed ? 'COMPLETED' : 'PENDING',
+    phone: matched?.phone || '',
+    email: matched?.email || email,
+    active: matched ? matched.active : true,
+    dead: false,
+    deadAt: '',
+    remark: '',
+    remarkBy: '',
+    category: mappedCategory,
+    sourceKey: source.key,
+    sourceSpreadsheetId: source.id,
+    sourceSheetName: 'Master',
+  };
 }
 
 export function findChecklistSheetUser(users: SheetChecklistUser[], session: SessionUser) {
@@ -338,18 +599,32 @@ export function findChecklistSheetUser(users: SheetChecklistUser[], session: Ses
     if (byPhone) return byPhone;
   }
 
-  const sessionName = normalizeName(session.name);
-  return activeUsers.find(user => normalizeName(user.displayName) === sessionName) ?? null;
+  return activeUsers.find(user => namesEqual(user.displayName, session.name))
+    || activeUsers.find(user => user.sourceNames.some(alias => namesEqual(alias, session.name)))
+    || null;
+}
+
+export function taskBelongsToSession(
+  row: Pick<SheetChecklistTask, 'userId' | 'userName'>,
+  session: SessionUser,
+  sheetUser?: SheetChecklistUser | null,
+) {
+  if (sheetUser && row.userId === sheetUser.userId) return true;
+  if (sheetUser && namesEqual(row.userName, sheetUser.displayName)) return true;
+  if (sheetUser?.sourceNames.some(alias => namesEqual(row.userName, alias))) return true;
+  return namesEqual(row.userName, session.name);
 }
 
 export async function linkChecklistSheetUser(user: SheetChecklistUser, portalUserId: string) {
+  if (!spreadsheetId()) return;
   if (!portalUserId || user.portalUserId === portalUserId) return;
+  if (user.userId.startsWith('doer-') || user.userId.startsWith('unmapped-')) return;
   const range = `${quoteSheetName('Users')}!F${user.rowNumber}`;
   await sheetsFetch(`/values/${encodeURIComponent(range)}?valueInputOption=RAW`, {
     method: 'PUT',
     body: JSON.stringify({ values: [[portalUserId]] }),
   });
-  sheetDataCache.clear();
+  clearTimelyCache();
 }
 
 export async function completeChecklistSheetTask(input: {
@@ -360,26 +635,45 @@ export async function completeChecklistSheetTask(input: {
 }) {
   const data = await getChecklistSheetData(input.category, true);
   const user = findChecklistSheetUser(data.users, input.session);
-  if (!user) throw new Error('Your portal account is not linked to the checklist user directory');
-
   const task = data.tasks.find(row =>
     row.taskId === input.taskId &&
     row.periodKey === input.periodKey &&
-    row.userId === user.userId
+    taskBelongsToSession(row, input.session, user)
   );
   if (!task) throw new Error('Checklist task was not found for your account and current period');
   if (!task.active) throw new Error('This checklist task is inactive');
   if (task.completed) throw new Error('This checklist task is already completed');
   if (task.dead) throw new Error('Revive this task before marking it complete');
+  if (!task.sourceSpreadsheetId) {
+    throw new Error('This checklist task is not linked to a timely Master sheet');
+  }
 
-  const completedAt = new Date().toISOString();
-  const range = `${quoteSheetName(input.category)}!L${task.rowNumber}:N${task.rowNumber}`;
+  const today = indiaTodayKey();
+  const sheetName = task.sourceSheetName || 'Master';
+  const range = `${quoteSheetName(sheetName)}!H${task.rowNumber}:I${task.rowNumber}`;
   await sheetsFetch(`/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`, {
     method: 'PUT',
-    body: JSON.stringify({ values: [[true, completedAt, 'COMPLETED']] }),
-  });
-  sheetDataCache.delete(input.category);
-  return { taskId: task.taskId, periodKey: task.periodKey, completedAt };
+    body: JSON.stringify({ values: [[sheetDateFormula(today), 'Done']] }),
+  }, task.sourceSpreadsheetId);
+  clearTimelyCache();
+  return { taskId: task.taskId, periodKey: task.periodKey, completedAt: today };
+}
+
+export async function completeTimelySheetTaskById(taskId: string) {
+  const all = await loadAllTimelyTasks(true);
+  const task = all.tasks.find(row => row.taskId === taskId);
+  if (!task) return null;
+  if (task.completed) return task;
+  if (!task.sourceSpreadsheetId) throw new Error('This checklist task is not linked to a timely Master sheet');
+  const today = indiaTodayKey();
+  const sheetName = task.sourceSheetName || 'Master';
+  const range = `${quoteSheetName(sheetName)}!H${task.rowNumber}:I${task.rowNumber}`;
+  await sheetsFetch(`/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`, {
+    method: 'PUT',
+    body: JSON.stringify({ values: [[sheetDateFormula(today), 'Done']] }),
+  }, task.sourceSpreadsheetId);
+  clearTimelyCache();
+  return { ...task, completed: true, completedAt: today, status: 'COMPLETED' };
 }
 
 export async function updateChecklistSheetTask(input: {
@@ -396,9 +690,12 @@ export async function updateChecklistSheetTask(input: {
   const task = data.tasks.find(row =>
     row.taskId === input.taskId &&
     row.periodKey === input.periodKey &&
-    (elevated || row.userId === user?.userId)
+    (elevated || taskBelongsToSession(row, input.session, user))
   );
   if (!task) throw new Error('Checklist task was not found or you cannot update it');
+  if (task.sourceSpreadsheetId) {
+    throw new Error('Dead and remarks are not available on the live timely Master sheets. Mark the task complete instead.');
+  }
   if (!task.active) throw new Error('This checklist task is inactive');
   if (task.completed && input.action !== 'remark') throw new Error('Completed checklist tasks cannot be flagged Dead');
 

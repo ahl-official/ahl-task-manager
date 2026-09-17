@@ -4,8 +4,9 @@ import {
   completeChecklistSheetTask,
   findChecklistSheetUser,
   getChecklistSheetData,
-  hasChecklistSheets,
+  hasChecklistBackend,
   linkChecklistSheetUser,
+  taskBelongsToSession,
   updateChecklistSheetTask,
   type ChecklistSheetCategory,
 } from '@/lib/google/sheets';
@@ -25,14 +26,15 @@ export async function GET(req: NextRequest) {
   if (!isChecklistCategory(category)) {
     return NextResponse.json({ success: false, error: 'Invalid checklist category' }, { status: 400 });
   }
-  if (!hasChecklistSheets()) {
-    return NextResponse.json({ success: false, error: 'Checklist Google Sheet is not configured' }, { status: 503 });
+  if (!hasChecklistBackend()) {
+    return NextResponse.json({ success: false, error: 'Timely task sheets are not configured' }, { status: 503 });
   }
 
   const data = await getChecklistSheetData(category);
   const elevated = session.role === 'admin' || session.role === 'leader';
-  const sheetUser = elevated ? null : findChecklistSheetUser(data.users, session);
-  if (!elevated && !sheetUser) {
+  const sheetUser = findChecklistSheetUser(data.users, session);
+  const rows = data.tasks.filter(row => row.active && (elevated || taskBelongsToSession(row, session, sheetUser)));
+  if (!elevated && rows.length === 0 && !sheetUser) {
     return NextResponse.json({
       success: false,
       error: `No checklist profile is linked to ${session.name}. Ask an admin to verify your name or WhatsApp number in the Users sheet.`,
@@ -41,11 +43,16 @@ export async function GET(req: NextRequest) {
   if (sheetUser && !sheetUser.portalUserId) {
     await linkChecklistSheetUser(sheetUser, session.uid);
   }
-
-  const rows = data.tasks.filter(row => row.active && (elevated || row.userId === sheetUser?.userId));
   return NextResponse.json({
     success: true,
-    data: rows.map(row => ({
+    meta: {
+      currentUserName: session.name,
+      currentUserId: sheetUser?.userId ?? null,
+      elevated,
+    },
+    data: rows.map(row => {
+      const mine = taskBelongsToSession(row, session, sheetUser);
+      return {
       id: `${category}:${row.rowNumber}:${row.taskId}:${row.periodKey}`,
       taskId: row.taskId,
       userId: row.userId,
@@ -65,9 +72,11 @@ export async function GET(req: NextRequest) {
       remark: row.remark,
       remarkBy: row.remarkBy,
       label: `${category} Task`,
-      canComplete: Boolean(sheetUser && row.userId === sheetUser.userId),
-      canManage: elevated || Boolean(sheetUser && row.userId === sheetUser.userId),
-    })),
+      mine,
+      canComplete: mine,
+      canManage: elevated || mine,
+    };
+    }),
   }, { headers: { 'Cache-Control': 'private, no-store' } });
 }
 
@@ -80,7 +89,7 @@ export async function POST(req: NextRequest) {
     if (!taskId || !periodKey || !isChecklistCategory(category)) {
       throw new Error('Task id, category, and period are required');
     }
-    if (!hasChecklistSheets()) throw new Error('Checklist Google Sheet is not configured');
+    if (!hasChecklistBackend()) throw new Error('Timely task sheets are not configured');
     if (action === 'complete') {
       const completion = await completeChecklistSheetTask({ taskId, category, periodKey, session });
       return NextResponse.json({ success: true, data: completion }, { status: 201 });

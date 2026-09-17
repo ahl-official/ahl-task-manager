@@ -125,6 +125,135 @@ export async function sendWhatsApp(
   }
 }
 
+/** Send a PDF/document via WAHA POST /api/sendFile (base64 body). */
+export async function sendWhatsAppFile(input: {
+  waNumber: string;
+  filename: string;
+  mimetype?: string;
+  data: Buffer | Uint8Array;
+  caption?: string;
+  taskId?: string;
+}): Promise<SendWhatsAppResult> {
+  const resolved = await resolveChatId(input.waNumber);
+  const chatId = resolved.chatId;
+
+  if (!resolved.ok) {
+    await adminLog('SEND_WA', `FAILED file send to ${input.waNumber}`, {
+      taskId: input.taskId,
+      meta: {
+        chatId,
+        status: resolved.status,
+        body: resolved.body,
+        error: resolved.error,
+        filename: input.filename,
+      },
+    });
+    return resolved;
+  }
+
+  const url = `${WAHA_URL}/api/sendFile`;
+  const base64 = Buffer.from(input.data).toString('base64');
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: buildHeaders(),
+      body: JSON.stringify({
+        session: WAHA_SESSION,
+        chatId,
+        caption: input.caption || '',
+        file: {
+          mimetype: input.mimetype || 'application/pdf',
+          filename: input.filename,
+          data: base64,
+        },
+      }),
+    });
+
+    const body = await res.text();
+    await adminLog('SEND_WA', `Sent file to ${input.waNumber}`, {
+      taskId: input.taskId,
+      meta: { chatId, status: res.status, body, filename: input.filename },
+    });
+
+    if (!res.ok) {
+      console.error(`WAHA sendFile failed: ${res.status}`, body);
+      return { ok: false, chatId, status: res.status, body };
+    }
+
+    return { ok: true, chatId, status: res.status, body };
+  } catch (err) {
+    console.error('WAHA sendWhatsAppFile error', err);
+    await adminLog('SEND_WA', `FAILED file send to ${input.waNumber}`, {
+      taskId: input.taskId,
+      meta: { chatId, error: String(err), filename: input.filename },
+    });
+    return { ok: false, chatId, error: String(err) };
+  }
+}
+
+/**
+ * Exact Apps Script helper:
+ * whatsappWaha.sendWhatsAppPdfFromDriveLink(phone, pdfUrl, 'processC', message)
+ * Sends PDF via WAHA using a Drive file URL.
+ */
+export async function sendWhatsAppPdfFromDriveLink(
+  waNumber: string,
+  driveUrl: string,
+  _processName: string,
+  message: string,
+): Promise<SendWhatsAppResult> {
+  const resolved = await resolveChatId(waNumber);
+  const chatId = resolved.chatId;
+
+  if (!resolved.ok) {
+    await adminLog('SEND_WA', `FAILED Drive PDF send to ${waNumber}`, {
+      meta: {
+        chatId,
+        status: resolved.status,
+        body: resolved.body,
+        error: resolved.error,
+        driveUrl,
+        process: _processName,
+      },
+    });
+    return resolved;
+  }
+
+  const url = `${WAHA_URL}/api/sendFile`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: buildHeaders(),
+      body: JSON.stringify({
+        session: WAHA_SESSION,
+        chatId,
+        caption: message,
+        file: {
+          mimetype: 'application/pdf',
+          filename: 'Monthly Report.pdf',
+          url: driveUrl,
+        },
+      }),
+    });
+    const body = await res.text();
+    await adminLog('SEND_WA', `Sent Drive PDF to ${waNumber}`, {
+      meta: { chatId, status: res.status, body, driveUrl, process: _processName },
+    });
+    if (!res.ok) {
+      console.error(`WAHA sendWhatsAppPdfFromDriveLink failed: ${res.status}`, body);
+      return { ok: false, chatId, status: res.status, body };
+    }
+    return { ok: true, chatId, status: res.status, body };
+  } catch (err) {
+    console.error('WAHA sendWhatsAppPdfFromDriveLink error', err);
+    await adminLog('SEND_WA', `FAILED Drive PDF send to ${waNumber}`, {
+      meta: { chatId, error: String(err), driveUrl, process: _processName },
+    });
+    return { ok: false, chatId, error: String(err) };
+  }
+}
+
 // ─── Message templates ──────────────────────────────────────────────────────
 
 export function msgTaskAssigned(task: {
@@ -282,6 +411,64 @@ export function msgDailyHighPriorityTasks(input: {
     `Please check the rest of your tasks on the portal: ${PORTAL_URL}`,
   ].join('\n');
 }
+
+/** Matches newdelegation sendDailyTaskReminderMorning tone. */
+export function msgDailyTasksDueToday(input: {
+  name: string;
+  dateLabel: string;
+  tasks: { description: string; endDate: string }[];
+}): string {
+  if (input.tasks.length === 0) {
+    return [
+      `📌 *Today's Task Reminder*`,
+      ``,
+      `📅 *Date: ${input.dateLabel}*`,
+      ``,
+      `Hi ${input.name}, you have no one-time tasks due today.`,
+      ``,
+      `Portal: ${PORTAL_URL}`,
+    ].join('\n');
+  }
+
+  const list = input.tasks
+    .map((task, index) => `${index + 1}. ${task.description}\n   Due: ${task.endDate}`)
+    .join('\n\n');
+
+  return [
+    `📌 *Today's Task Reminder*`,
+    ``,
+    `📅 *Date: ${input.dateLabel}*`,
+    ``,
+    `Hi ${input.name}, here is your assigned task for today:`,
+    ``,
+    list,
+    ``,
+    `Portal: ${PORTAL_URL}`,
+  ].join('\n');
+}
+
+/** Matches newdelegation 2hourRedBallReminder message. */
+export function msgHighPriorityRedBall(input: {
+  name: string;
+  tasks: { description: string; deadline: string }[];
+}): string {
+  const list = input.tasks
+    .map((task, index) => `${index + 1}. ${task.description}\nDeadline: ${task.deadline}`)
+    .join('\n\n');
+
+  return [
+    `Hello ${input.name},`,
+    ``,
+    `Below is the High Priority Task 🔴. Please Complete it as soon as possible because it may cause problems in the future.`,
+    ``,
+    list,
+    ``,
+    `If Already Done then Please Let me know by typing the Task No and Done in the Chat.`,
+    ``,
+    `Or mark done in the portal: ${PORTAL_URL}`,
+  ].join('\n');
+}
+
 
 export function msgChecklistReminder(input: {
   name: string;

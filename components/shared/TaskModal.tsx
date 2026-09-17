@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2 } from 'lucide-react';
+import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2, Trash2 } from 'lucide-react';
 import { cn, formatDate, formatDateTime, STATUS_COLORS, PRIORITY_COLORS, PRIORITY_DOT, getDueBadge } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { TaskSerialized } from '@/types';
@@ -12,9 +12,10 @@ interface Props {
   role: 'admin' | 'user';
   currentUid: string;
   onUpdate: (task?: TaskSerialized) => void;
+  onDelete?: (taskId: string) => void;
 }
 
-export default function TaskModal({ task, onClose, role, currentUid, onUpdate }: Props) {
+export default function TaskModal({ task, onClose, role, currentUid, onUpdate, onDelete }: Props) {
   const [loading, setLoading] = useState<string | null>(null);
   const [showRevision, setShowRevision] = useState(false);
   const [revisionDate, setRevisionDate] = useState('');
@@ -23,13 +24,16 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
   const [acceptEndDate, setAcceptEndDate] = useState('');
   const [remark, setRemark] = useState('');
   const [priorityValue, setPriorityValue] = useState(task.priority);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const isAssignee = task.assignedTo === currentUid;
   const isHandoff  = task.handoffUid === currentUid;
   const isAdmin    = role === 'admin';
+  const isTimelySheet = task.createdBy === 'timely-sheet' || /^(office|salon|weekly)-/i.test(task.taskId);
+  const canDelete = isAdmin && !isTimelySheet;
   const due        = getDueBadge(task.endDate);
   const needsDates = isAssignee && task.status === 'In Progress' && (!task.startDate || !task.endDate);
-  const canChangeDead = isAssignee || isHandoff || isAdmin;
+  const canChangeDead = !isTimelySheet && (isAssignee || isHandoff || isAdmin);
 
   useEffect(() => {
     setPriorityValue(task.priority);
@@ -62,6 +66,23 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
       toast.error(err.message ?? 'Action failed');
     } finally {
       setLoading(null);
+    }
+  }
+
+  async function deleteTask() {
+    setLoading('delete');
+    try {
+      const res = await fetch(`/api/tasks/${task.taskId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      toast.success('Task deleted');
+      onDelete?.(task.taskId);
+      onClose();
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to delete task');
+    } finally {
+      setLoading(null);
+      setConfirmDelete(false);
     }
   }
 
@@ -142,7 +163,12 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
               icon={Calendar}
               label="Due Date"
               value={
-                <span className={cn('badge', due.color)}>{due.label}</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm font-medium text-gray-800">{formatDate(task.endDate)}</span>
+                  {due.label === 'Overdue' && task.status !== 'Completed' && task.status !== 'Verified' && (
+                    <span className="badge bg-red-100 text-red-700">Overdue</span>
+                  )}
+                </div>
               }
             />
             {task.delayedDate && (
@@ -150,7 +176,13 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
             )}
           </div>
 
-          {task.status !== 'Completed' && task.status !== 'Verified' && (isAssignee || isHandoff || isAdmin) && (
+          {isTimelySheet && (
+            <p className="rounded-xl bg-brand-50 px-3 py-2 text-xs text-brand-800">
+              This timely task comes from the Master sheet. Marking it complete writes Done there and does not change MIS scores or the admin dashboard.
+            </p>
+          )}
+
+          {task.status !== 'Completed' && task.status !== 'Verified' && (isAssignee || isHandoff || isAdmin) && !isTimelySheet && (
             <div className="rounded-md border border-gray-200 bg-white p-3">
               <p className="mb-2 text-xs font-semibold text-gray-700">Dynamic priority</p>
               <div className="flex flex-wrap gap-2">
@@ -200,6 +232,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
 
           {/* ── Actions ── */}
           <div className="border-t border-gray-100 pt-4 space-y-3">
+            {!isTimelySheet && (
             <div className="rounded-md border border-gray-200 bg-white p-3">
               <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-700">
                 <MessageSquare size={13} /> Add remark
@@ -248,59 +281,14 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
                 )}
               </div>
             </div>
+            )}
 
-            {/* Assignee actions */}
+            {/* Assignee / Admin actions */}
             {(isAssignee || isAdmin) && (
               <div className="flex gap-2 flex-wrap">
                 {task.status === 'Pending Accept' && (
                   <div className="w-full rounded-xl bg-blue-50 p-3">
-                    <p className="mb-2 text-xs font-semibold text-blue-800">
-                      {isAdmin ? 'Admin override' : 'Accept and set timeline'}
-                    </p>
-                    {!isAdmin && (
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        <div>
-                          <label className="label text-blue-700">Start Date</label>
-                          <input
-                            type="date"
-                            value={acceptStartDate}
-                            onChange={e => setAcceptStartDate(e.target.value)}
-                            className="input"
-                            min={new Date().toISOString().split('T')[0]}
-                          />
-                        </div>
-                        <div>
-                          <label className="label text-blue-700">Due Date</label>
-                          <input
-                            type="date"
-                            value={acceptEndDate}
-                            onChange={e => setAcceptEndDate(e.target.value)}
-                            className="input"
-                            min={acceptStartDate || new Date().toISOString().split('T')[0]}
-                          />
-                        </div>
-                      </div>
-                    )}
-                    <div className="mt-3">
-                      <ActionButton
-                        label={isAdmin ? 'Accept Anyway' : 'Accept Task'}
-                        onClick={() => {
-                          if (!isAdmin && (!acceptStartDate || !acceptEndDate)) {
-                            toast.error('Set start and due date before accepting');
-                            return;
-                          }
-                          doAction('accept', { startDate: acceptStartDate, endDate: acceptEndDate });
-                        }}
-                        loading={loading === 'accept'}
-                        color="blue"
-                      />
-                    </div>
-                  </div>
-                )}
-                {!isAdmin && needsDates && (
-                  <div className="w-full rounded-xl bg-blue-50 p-3">
-                    <p className="mb-2 text-xs font-semibold text-blue-800">Set task timeline</p>
-                    <p className="mb-3 text-xs text-blue-700">This admin-assigned task is active. Add the start and due date before marking it complete.</p>
+                    <p className="mb-2 text-xs font-semibold text-blue-800">Accept and set timeline</p>
                     <div className="grid gap-2 sm:grid-cols-2">
                       <div>
                         <label className="label text-blue-700">Start Date</label>
@@ -325,36 +313,66 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
                     </div>
                     <div className="mt-3">
                       <ActionButton
-                        label="Save Dates"
+                        label="Accept Task"
                         onClick={() => {
-                          if (!acceptStartDate || !acceptEndDate) {
-                            toast.error('Set start and due date first');
-                            return;
-                          }
-                          doAction('set-dates', { startDate: acceptStartDate, endDate: acceptEndDate });
+                          doAction('accept', { startDate: acceptStartDate, endDate: acceptEndDate });
                         }}
-                        loading={loading === 'set-dates'}
+                        loading={loading === 'accept'}
                         color="blue"
                       />
                     </div>
                   </div>
                 )}
-                {!isAdmin && ['In Progress', 'Delay Requested'].includes(task.status) && task.startDate && task.endDate && (
+
+                {['In Progress', 'Delay Requested'].includes(task.status) && (
                   <ActionButton label="Mark Complete" onClick={() => doAction('complete')} loading={loading === 'complete'} color="green" />
                 )}
-                {isAdmin && task.status !== 'Dead' && task.status !== 'Completed' && task.status !== 'Verified' && (
-                  <ActionButton label="Complete and Verify" onClick={() => doAction('complete')} loading={loading === 'complete'} color="green" />
+              </div>
+            )}
+
+            {/* Delete Task Section for Admins */}
+            {canDelete && (
+              <div className="border-t border-gray-100 pt-3">
+                {confirmDelete ? (
+                  <div className="flex items-center justify-between rounded-xl bg-red-50 p-3">
+                    <span className="text-xs font-semibold text-red-700">Are you sure you want to delete this task?</span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={deleteTask}
+                        disabled={loading === 'delete'}
+                        className="rounded-lg bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
+                      >
+                        {loading === 'delete' ? 'Deleting...' : 'Yes, Delete'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete(false)}
+                        className="rounded-lg bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-300"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(true)}
+                    className="inline-flex items-center gap-1.5 text-xs text-red-600 font-medium hover:text-red-700 hover:underline"
+                  >
+                    <Trash2 size={13} /> Delete Task
+                  </button>
                 )}
               </div>
             )}
 
             {/* Handoff actions */}
-            {(isHandoff || isAdmin) && task.status === 'Completed' && (
+            {!isTimelySheet && (isHandoff || isAdmin) && task.status === 'Completed' && (
               <ActionButton label="Verify Task" onClick={() => doAction('verify')} loading={loading === 'verify'} color="brand" />
             )}
 
             {/* ── Date Management ── */}
-            {isAssignee && task.status === 'In Progress' && task.endDate && (
+            {!isTimelySheet && isAssignee && task.status === 'In Progress' && task.endDate && (
               <div className="bg-orange-50 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-xs font-semibold text-orange-800 flex items-center gap-1.5">
@@ -405,7 +423,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
             )}
 
             {/* Revision decision for handoff */}
-            {(isHandoff || isAdmin) && task.revisionStatus === 'requested' && (
+            {!isTimelySheet && (isHandoff || isAdmin) && task.revisionStatus === 'requested' && (
               <div className="bg-yellow-50 rounded-xl p-3">
                 <p className="text-xs font-semibold text-yellow-800 mb-2 flex items-center gap-1.5">
                   <RefreshCw size={13} /> Revision Requested
@@ -429,6 +447,8 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate }:
                 </div>
               </div>
             )}
+
+            {/* End of actions */}
           </div>
         </div>
       </div>

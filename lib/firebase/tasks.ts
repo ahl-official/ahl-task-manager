@@ -210,7 +210,14 @@ export async function generateTaskId(): Promise<string> {
 // ─── Serialize Timestamps for client ────────────────────────────────────────
 
 export function serializeTask(task: Task): TaskSerialized {
-  const tsToIso = (ts: { toDate: () => Date } | null) => ts ? ts.toDate().toISOString() : null;
+  const tsToIso = (ts: { toDate: () => Date } | null | undefined) => {
+    if (!ts || typeof ts.toDate !== 'function') return null;
+    try {
+      return ts.toDate().toISOString();
+    } catch {
+      return null;
+    }
+  };
   return {
     ...task,
     startDate:   tsToIso(task.startDate),
@@ -219,8 +226,8 @@ export function serializeTask(task: Task): TaskSerialized {
     acceptedAt:  tsToIso(task.acceptedAt),
     completedAt: tsToIso(task.completedAt),
     verifiedAt:  tsToIso(task.verifiedAt),
-    createdAt:   task.createdAt.toDate().toISOString(),
-    updatedAt:   task.updatedAt.toDate().toISOString(),
+    createdAt:   tsToIso(task.createdAt) ?? new Date().toISOString(),
+    updatedAt:   tsToIso(task.updatedAt) ?? new Date().toISOString(),
     weekStart:   tsToIso(task.weekStart ?? null),
     weekEnd:     tsToIso(task.weekEnd ?? null),
   };
@@ -332,6 +339,27 @@ export async function adminUpdateTaskStatus(
   clearFirestoreReadCache('tasks:');
   clearFirestoreReadCache('scores:');
   return adminGetTask(taskId);
+}
+
+export async function adminDeleteTask(taskId: string): Promise<boolean> {
+  if (hasCloudflareApi()) {
+    await cfApi(`/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+    return true;
+  }
+
+  const ref = adminDb.collection(COL).doc(taskId);
+  const snap = await ref.get();
+  if (!snap.exists) return false;
+
+  const revisionSnap = await adminDb.collection('revisions').where('taskId', '==', taskId).get();
+  const batch = adminDb.batch();
+  revisionSnap.docs.forEach(doc => batch.delete(doc.ref));
+  batch.delete(ref);
+  await batch.commit();
+  clearFirestoreReadCache('tasks:');
+  clearFirestoreReadCache('revisions:');
+  clearFirestoreReadCache('scores:');
+  return true;
 }
 
 export async function adminGetTask(taskId: string): Promise<Task | null> {
