@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
       tasks = await adminGetAllTasks({ status: status as any, department, limit: maxResults });
       tasks = filterTasksForSession(session, tasks);
     } else if (scope === 'handoff') {
-      tasks = await adminGetTasksByHandoff(session.uid);
+      tasks = await adminGetTasksByHandoff(session.uid, status as any);
     } else {
       const [databaseTasks, timelyTasks] = await Promise.all([
         adminGetTasksByAssignee(session.uid),

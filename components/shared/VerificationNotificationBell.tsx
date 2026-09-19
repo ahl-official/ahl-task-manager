@@ -31,7 +31,7 @@ export default function VerificationNotificationBell({
     try {
       const url = isAdmin
         ? '/api/tasks?scope=all&status=Completed&limit=100'
-        : '/api/tasks?scope=handoff&limit=100';
+        : '/api/tasks?scope=handoff&status=Completed&limit=100';
       const res = await fetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to load notifications');
@@ -91,8 +91,9 @@ export default function VerificationNotificationBell({
         <button
           type="button"
           onClick={() => {
-            setOpen(current => !current);
-            if (!open) load(true);
+            const nextOpen = !open;
+            setOpen(nextOpen);
+            if (nextOpen) load(items.length > 0);
           }}
           className={cn(
             'relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-900',

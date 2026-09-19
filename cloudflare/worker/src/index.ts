@@ -430,17 +430,16 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     if (scope === 'mine' && uid) { clauses.push('assigned_to = ?'); binds.push(uid); }
     if (scope === 'handoff' && uid) { clauses.push('handoff_uid = ?'); binds.push(uid); }
     if (status) {
-      if (status === 'Completed') {
-        clauses.push("status IN ('Completed', 'Verified')");
-      } else {
-        clauses.push('status = ?');
-        binds.push(status);
-      }
+      clauses.push('status = ?');
+      binds.push(status);
     }
     if (department) { clauses.push('department = ?'); binds.push(department); }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const limitClause = limit ? 'LIMIT ?' : '';
-    const rows = await env.DB.prepare(`SELECT * FROM tasks_current ${where} ORDER BY COALESCE(start_date, end_date, created_at) DESC, task_id DESC ${limitClause}`)
+    const orderClause = status === 'Completed'
+      ? 'ORDER BY COALESCE(completed_at, updated_at, created_at) DESC, task_id DESC'
+      : 'ORDER BY COALESCE(start_date, end_date, created_at) DESC, task_id DESC';
+    const rows = await env.DB.prepare(`SELECT * FROM tasks_current ${where} ${orderClause} ${limitClause}`)
       .bind(...binds, ...(limit ? [limit] : []))
       .all();
     return json({ success: true, data: rows.results.map(taskFromRow) });

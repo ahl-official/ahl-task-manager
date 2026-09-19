@@ -409,20 +409,26 @@ export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
   }
 }
 
-export async function adminGetTasksByHandoff(uid: string): Promise<Task[]> {
+export async function adminGetTasksByHandoff(uid: string, status?: TaskStatus): Promise<Task[]> {
   if (hasCloudflareApi()) {
-    const tasks = await cfApi<any[]>(`/tasks?scope=handoff&uid=${encodeURIComponent(uid)}&limit=${MAX_TASK_READ_LIMIT}`);
+    const params = new URLSearchParams({ scope: 'handoff', uid });
+    if (status) params.set('status', status);
+    params.set('limit', String(MAX_TASK_READ_LIMIT));
+    const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
     return tasks.map(cfTask).filter(Boolean) as Task[];
   }
 
   try {
-    return await cachedFirestoreRead(`tasks:handoff:${uid}`, 2 * 60 * 1000, async () => {
-      const snap = await adminDb
+    const key = `tasks:handoff:${uid}:${status ?? 'any'}`;
+    return await cachedFirestoreRead(key, 2 * 60 * 1000, async () => {
+      let ref: Query = adminDb
         .collection(COL)
-        .where('handoffUid', '==', uid)
-        .orderBy('createdAt', 'desc')
-        .limit(MAX_TASK_READ_LIMIT)
-        .get();
+        .where('handoffUid', '==', uid);
+      if (status) {
+        ref = ref.where('status', '==', status);
+      }
+      ref = ref.orderBy('createdAt', 'desc').limit(MAX_TASK_READ_LIMIT);
+      const snap = await ref.get();
       return sortNewestFirst(snap.docs.map(d => normalizeTaskDoc(d.id, d.data())));
     });
   } catch (err) {
