@@ -432,15 +432,46 @@ export async function buildWeeklyMisPdfAsync(
     return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(2)}%`;
   }
 
-  function formatDateDmy(iso: string) {
-    if (!iso) return '';
-    const [y, m, d] = iso.split('-');
-    return `${d}/${m}/${y}`;
+  function formatDateDmy(val?: string) {
+    if (!val) return '';
+    const str = String(val).trim();
+    if (!str || str === 'undefined' || str === 'null') return '';
+    // If already in DD/MM/YYYY format
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(str)) {
+      const parts = str.split('/');
+      return `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
+    }
+    // If in YYYY-MM-DD format
+    if (/^\d{4}-\d{1,2}-\d{1,2}/.test(str)) {
+      const parts = str.slice(0, 10).split('-');
+      return `${parts[2].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[0]}`;
+    }
+    // If general parsable Date
+    const parsed = new Date(str);
+    if (!isNaN(parsed.getTime())) {
+      const d = String(parsed.getDate()).padStart(2, '0');
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const y = parsed.getFullYear();
+      return `${d}/${m}/${y}`;
+    }
+    return str;
+  }
+
+  function getWeekNum(meta: { weekNumber?: number | string; weekKey?: string; weekStart?: string }): string {
+    if (meta.weekNumber != null && String(meta.weekNumber).trim() && String(meta.weekNumber) !== 'undefined') {
+      const cleaned = String(meta.weekNumber).replace(/\D/g, '');
+      if (cleaned) return String(Number(cleaned));
+    }
+    if (meta.weekKey && meta.weekKey !== 'undefined') {
+      const match = meta.weekKey.match(/W(\d+)/i) || meta.weekKey.match(/-W?(\d+)/i);
+      if (match && match[1]) return String(Number(match[1]));
+    }
+    return '';
   }
 
   const startDateDmy = formatDateDmy(weekMeta.weekStart);
   const endDateDmy = formatDateDmy(weekMeta.weekEnd);
-  const weekNumStr = String(weekMeta.weekNumber || weekMeta.weekKey.split('-W')[1] || '').replace(/^0+/, '');
+  const weekNumStr = getWeekNum(weekMeta);
 
   // Layout boundaries
   const startX = 35;

@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Pencil, Plus, Trash2, UserCheck, UserX, Loader2, X } from 'lucide-react';
 import { cn, formatDate } from '@/lib/utils';
 import { roleLabel, TEAM_ROLES } from '@/lib/utils/hierarchy';
@@ -45,6 +46,11 @@ export default function UsersClient({
     department: '',
     isActive:   true,
   });
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   function setF(k: string, v: any) { setForm(f => ({ ...f, [k]: v })); }
 
@@ -281,8 +287,8 @@ export default function UsersClient({
       </div>
 
       {/* Create user modal */}
-      {showForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30">
+      {showForm && mounted && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px] w-screen h-screen">
           <div className="bg-white rounded-2xl shadow-modal w-full max-w-md p-6">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-base font-semibold">Add New User</h2>
@@ -342,11 +348,12 @@ export default function UsersClient({
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
-      {editingUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30">
+      {editingUser && mounted && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px] w-screen h-screen">
           <div className="bg-white rounded-2xl shadow-modal w-full max-w-md p-6">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-base font-semibold">Edit User</h2>
@@ -414,7 +421,8 @@ export default function UsersClient({
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Users table */}

@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Clock,
   Download,
+  Loader2,
   Search,
   TrendingUp,
   Trophy,
@@ -135,6 +136,11 @@ export default function ScoresClient({
   const [misLoading, setMisLoading] = useState(true);
   const [nameQuery, setNameQuery] = useState('');
   const [nameMenuOpen, setNameMenuOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const weekOptions = useMemo(() => listRecentMisWeeks(16), []);
   const defaultWeek = useMemo(() => getMisWeekPeriod(), []);
@@ -621,6 +627,13 @@ export default function ScoresClient({
         <span className="hidden whitespace-nowrap text-xs text-gray-500 sm:inline font-medium">
           {selectedWeekMeta.weekKey} · {isCurrentWeek ? 'current' : 'completed'}
         </span>
+
+        {misLoading && (
+          <span className="inline-flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700 animate-pulse">
+            <Loader2 size={13} className="animate-spin text-brand-600" />
+            Loading week…
+          </span>
+        )}
       </div>
     </div>
   );
@@ -634,7 +647,16 @@ export default function ScoresClient({
             PDF MIS (gap % for week {pdfWeekLabel}): 0% means all planned work done
           </p>
         )}
-        <ScoreList scores={scoresWithPdf} {...listProps} />
+        {misLoading && scoresWithPdf.length === 0 ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-sm text-gray-400">
+            <Loader2 size={18} className="animate-spin text-brand-600" />
+            Loading scores for {selectedWeekMeta.weekKey}…
+          </div>
+        ) : (
+          <div className={cn('transition-opacity duration-200', misLoading && 'opacity-60 pointer-events-none')}>
+            <ScoreList scores={scoresWithPdf} {...listProps} />
+          </div>
+        )}
         {selectedTask && (
           <TaskModal
             task={selectedTask}
@@ -653,10 +675,17 @@ export default function ScoresClient({
     <div className="space-y-5">
       {dateFilterBar}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div className={cn('grid gap-4 md:grid-cols-2 xl:grid-cols-3 transition-opacity duration-200', misLoading && 'opacity-70')}>
         {departmentBlocks.length === 0 && (
           <div className="card p-10 text-center text-sm text-gray-400 md:col-span-2 xl:col-span-3">
-            No department score data yet
+            {misLoading ? (
+              <div className="flex items-center justify-center gap-2 text-brand-600">
+                <Loader2 size={18} className="animate-spin" />
+                Loading department scores…
+              </div>
+            ) : (
+              'No department score data yet'
+            )}
           </div>
         )}
 
@@ -705,8 +734,8 @@ export default function ScoresClient({
         ))}
       </div>
 
-      {selectedBlock && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/40 p-3 sm:p-4">
+      {selectedBlock && mounted && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-[2px] p-3 sm:p-4 w-screen h-screen">
           <div className="flex max-h-[96vh] w-full max-w-[96vw] flex-col overflow-hidden rounded-2xl bg-white shadow-xl lg:max-w-7xl">
             <div className="flex shrink-0 items-start justify-between gap-4 border-b border-gray-100 px-6 py-5">
               <div className="flex items-center gap-3">
@@ -743,41 +772,35 @@ export default function ScoresClient({
                     setSelectedUser(null);
                   }}
                   className="flex h-10 w-10 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-                  aria-label="Close"
                 >
                   <X size={20} />
                 </button>
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto p-6 sm:p-8">
+            <div className="flex-1 overflow-y-auto p-6 scrollbar-thin">
               {selectedUser ? (
                 (() => {
-                  const score = selectedBlock.scores
-                    .map(row => {
-                      const pdf = lookupMis(pdfByKey, row.uid, row.name);
-                      return {
-                        ...row,
-                        pdfGapPercent: pdf?.gapPercent ?? null,
-                        pdfGapLabel: pdf?.gapLabel ?? '—',
-                        mis: pdf,
-                      };
-                    })
-                    .find(row => row.uid === selectedUser);
-                  if (!score) {
-                    return <p className="text-sm text-gray-400">Member not found.</p>;
-                  }
-                  if (misLoading && !score.mis) {
+                  const rawScore = selectedBlock.scores.find(s => s.uid === selectedUser);
+                  if (!rawScore) return null;
+                  const mis = lookupMis(pdfByKey, rawScore.uid, rawScore.name);
+                  if (misLoading && !mis) {
                     return <MisReportMasterSkeleton />;
                   }
+                  const score = {
+                    ...rawScore,
+                    mis: mis ?? null,
+                    pdfGapPercent: mis?.gapPercent ?? null,
+                    pdfGapLabel: mis?.gapLabel ?? '—',
+                  };
                   return (
                     <MisReportMasterView
                       score={score}
-                      mis={score.mis ?? null}
+                      mis={mis ?? null}
                       weekLabel={pdfWeekLabel}
                       onDownload={() => {
-                        if (!score.mis) return;
-                        downloadMisPdf(score.mis, score.monthlyScore ?? 0);
+                        if (!mis) return;
+                        downloadMisPdf(mis, score.monthlyScore ?? 0);
                       }}
                     />
                   );
@@ -793,20 +816,26 @@ export default function ScoresClient({
                         ...score,
                         pdfGapPercent: pdf?.gapPercent ?? null,
                         pdfGapLabel: pdf?.gapLabel ?? '—',
+                        mis: pdf ?? null,
                       };
                     })
-                    .sort((a, b) => (b.monthlyScore ?? 0) - (a.monthlyScore ?? 0))
-                    .map((score, index) => {
-                      const initials = String(score.name || '?').trim().slice(0, 2).toUpperCase() || '?';
+                    .sort((a, b) => (b.pdfGapPercent ?? -999) - (a.pdfGapPercent ?? -999))
+                    .map(score => {
+                      const initials = (score.name || 'Unknown')
+                        .split(' ')
+                        .map((part: string) => part[0])
+                        .slice(0, 2)
+                        .join('')
+                        .toUpperCase();
+
                       return (
                       <button
-                        key={score.uid || `member-${index}`}
+                        key={score.uid}
                         type="button"
                         onClick={() => setSelectedUser(score.uid)}
-                        className="flex w-full items-center gap-4 rounded-xl border border-gray-100 bg-white px-4 py-3 text-left hover:bg-gray-50"
+                        className="flex w-full items-center justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50/50 p-4 text-left transition hover:border-brand-200 hover:bg-brand-50/30"
                       >
-                        <span className="w-8 text-center text-sm font-bold text-gray-400">#{index + 1}</span>
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 text-sm font-semibold text-gray-700">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-100 font-semibold text-brand-700">
                           {initials}
                         </div>
                         <div className="min-w-0 flex-1">
@@ -824,7 +853,8 @@ export default function ScoresClient({
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {selectedTask && (

@@ -210,10 +210,10 @@ export default async function PortalScorePage() {
 
         <div className="mt-4 rounded-xl bg-white/80 px-4 py-3">
           <p className={cn('text-2xl font-bold', gapColor(pdfGapPercent))}>{pdfGapLabel}</p>
-          <p className="text-xs text-gray-400 mt-0.5">PDF MIS this week (done/planned − 100). 0% = all planned done</p>
+          <p className="text-xs text-gray-500 mt-0.5">Weekly MIS Performance (0.00% is best — 100% planned work achieved)</p>
           {liveMis && (
             <p className="mt-1 text-[11px] text-gray-400">
-              {liveMis.weekStart} → {liveMis.weekEnd} · planned {liveMis.planned} · done {liveMis.done}
+              {liveMis.weekStart} → {liveMis.weekEnd} · Planned: {liveMis.planned} · Done: {liveMis.done} · On-Time: {liveMis.onTime}
             </p>
           )}
         </div>
@@ -232,14 +232,13 @@ export default async function PortalScorePage() {
       </div>
 
       <div className="card p-4">
-        <p className="text-sm font-semibold text-gray-700 mb-1">MIS Weekly history</p>
+        <p className="text-sm font-semibold text-gray-700 mb-1">Weekly History</p>
         <p className="mb-3 text-xs text-gray-400">
-          Saved by Tuesday cron into Cloudflare <code className="text-[10px]">mis_weekly</code>
+          Weekly performance records calculated for each week cycle
         </p>
         {weeklyRows.length === 0 ? (
-          <p className="text-sm text-gray-500">
-            No weekly snapshots yet. They appear after the weekly MIS cron runs (or an admin triggers{' '}
-            <code className="text-xs">/api/mis/cron?action=weekly</code>).
+          <p className="text-sm text-gray-500 py-3 text-center">
+            No past weekly records found yet.
           </p>
         ) : (
           <div className="space-y-2">
@@ -251,7 +250,7 @@ export default async function PortalScorePage() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-gray-900">{row.weekKey}</p>
                   <p className="text-[11px] text-gray-400">
-                    {row.weekStart} → {row.weekEnd} · planned {row.planned} · done {row.done}
+                    {row.weekStart} → {row.weekEnd} · Planned: {row.planned} · Done: {row.done}
                   </p>
                 </div>
                 <p className={cn('text-base font-bold', gapColor(row.gapPercent))}>{row.gapLabel}</p>
@@ -263,17 +262,17 @@ export default async function PortalScorePage() {
 
       {liveMis && (
         <div className="card p-4">
-          <p className="text-sm font-semibold text-gray-700 mb-3">This week buckets (live)</p>
+          <p className="text-sm font-semibold text-gray-700 mb-3">Current Week Execution</p>
           <div className="space-y-2 text-sm">
             {[
               { label: 'Checklist', bucket: liveMis.checklist },
-              { label: 'Delegation', bucket: liveMis.delegation },
+              { label: 'One Time', bucket: liveMis.delegation },
               { label: 'FMS', bucket: liveMis.fms },
             ].map(row => (
-              <div key={row.label} className="flex items-center gap-3">
-                <span className="w-24 text-gray-600">{row.label}</span>
-                <span className="flex-1 text-xs text-gray-400">
-                  P {row.bucket.planned} · D {row.bucket.done} · OT {row.bucket.onTime}
+              <div key={row.label} className="flex items-center justify-between gap-3 border-b border-gray-50 pb-2 last:border-b-0 last:pb-0">
+                <span className="font-medium text-gray-700">{row.label}</span>
+                <span className="text-xs text-gray-500">
+                  Planned: <strong className="text-gray-800">{row.bucket.planned}</strong> · Done: <strong className="text-gray-800">{row.bucket.done}</strong> · On-Time: <strong className="text-gray-800">{row.bucket.onTime}</strong>
                 </span>
               </div>
             ))}

@@ -15,6 +15,10 @@ export function roleLabel(role: UserRole): string {
 
 export function canAssignTask(creator: Pick<AHLUser, 'uid' | 'role' | 'department'>, assignee: Pick<AHLUser, 'uid' | 'role' | 'department'>): boolean {
   if (creator.role === 'admin') return true;
+  if (creator.role === 'intern') {
+    // Intern can assign tasks to themselves
+    return creator.uid === assignee.uid;
+  }
   if (creator.uid === assignee.uid) return false;
   if (!creator.department || !assignee.department) return false;
 
@@ -40,5 +44,6 @@ export function describeAssignmentRule(role: UserRole): string {
   if (role === 'admin') return 'Admins can assign tasks to anyone.';
   if (role === 'leader') return 'Leaders can assign across departments only to leaders, or down to members and interns inside their own department.';
   if (role === 'member') return 'Members can assign only to interns inside their own department.';
-  return 'Interns cannot assign tasks.';
+  if (role === 'intern') return 'Interns can create tasks for themselves with a department member or intern as checker.';
+  return 'Interns can create tasks for themselves.';
 }

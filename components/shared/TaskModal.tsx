@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2, Trash2 } from 'lucide-react';
 import { cn, formatDate, formatDateTime, STATUS_COLORS, PRIORITY_COLORS, PRIORITY_DOT, getDueBadge } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export default function TaskModal({ task, onClose, role, currentUid, onUpdate, onDelete }: Props) {
+  const [mounted, setMounted] = useState(false);
   const [loading, setLoading] = useState<string | null>(null);
   const [showRevision, setShowRevision] = useState(false);
   const [revisionDate, setRevisionDate] = useState('');
@@ -25,6 +27,10 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const [remark, setRemark] = useState('');
   const [priorityValue, setPriorityValue] = useState(task.priority);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const isAssignee = task.assignedTo === currentUid;
   const isHandoff  = task.handoffUid === currentUid;
@@ -134,8 +140,10 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30">
+  if (!mounted || typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px] w-screen h-screen">
       <div className="bg-white rounded-2xl shadow-modal w-full max-w-lg max-h-[90vh] overflow-y-auto scrollbar-thin">
         {/* Header */}
         <div className="flex items-start justify-between p-5 border-b border-gray-100">
@@ -451,7 +459,8 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

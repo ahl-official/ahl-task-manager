@@ -1,4 +1,5 @@
 import { buildWeeklyMisPdfAsync, weeklyMisPdfFilename } from '@/lib/mis/pdfReport';
+import { getMisWeekPeriod } from '@/lib/mis/week';
 
 export interface MisPersonViewPdf {
   uid?: string | null;
@@ -75,9 +76,11 @@ function sanitizeFileName(name: string) {
  * Generates and directly downloads the official Google Sheet layout MIS report PDF.
  */
 export async function downloadMisWeeklyPdf(person: MisPersonViewPdf, _portalMis?: number) {
-  const weekStart = person.weekStart || '';
-  const weekEnd = person.weekEnd || '';
-  const weekKey = person.weekKey || '';
+  const defaultPeriod = getMisWeekPeriod(person.weekStart || undefined);
+  const weekStart = person.weekStart || defaultPeriod.weekStart;
+  const weekEnd = person.weekEnd || defaultPeriod.weekEnd;
+  const weekKey = person.weekKey || defaultPeriod.weekKey;
+  const weekNumber = defaultPeriod.weekNumber;
 
   const pdfBuffer = await buildWeeklyMisPdfAsync(
     {
@@ -94,9 +97,10 @@ export async function downloadMisWeeklyPdf(person: MisPersonViewPdf, _portalMis?
       parameters: person.parameters as any,
     },
     {
-      weekKey: weekKey || 'Current',
+      weekKey: weekKey || defaultPeriod.weekKey,
       weekStart,
       weekEnd,
+      weekNumber,
     },
   );
 
@@ -108,6 +112,7 @@ export async function downloadMisWeeklyPdf(person: MisPersonViewPdf, _portalMis?
  * Generates and directly downloads the official Google Sheet layout MIS report PDF from Master report data.
  */
 export async function downloadMisMasterPdf(report: MisMasterPersonReportPdf) {
+  const defaultPeriod = getMisWeekPeriod();
   const overall = report.rollups?.[0];
   const checklistRollup = report.rollups?.find(r => /checklist/i.test(r.label) || /checklist/i.test(r.kra));
   const delegationRollup = report.rollups?.find(r => /delegation|one.time/i.test(r.label) || /delegation|one.time/i.test(r.kra));
@@ -119,9 +124,12 @@ export async function downloadMisMasterPdf(report: MisMasterPersonReportPdf) {
 
   const weekNum = typeof report.weekNumber === 'number'
     ? report.weekNumber
-    : report.weekNumber
-      ? Number(String(report.weekNumber).replace(/\D/g, '')) || undefined
-      : undefined;
+    : report.weekNumber && String(report.weekNumber).trim() && String(report.weekNumber) !== 'undefined'
+      ? Number(String(report.weekNumber).replace(/\D/g, '')) || defaultPeriod.weekNumber
+      : defaultPeriod.weekNumber;
+
+  const weekStart = report.weekStartLabel || defaultPeriod.weekStart;
+  const weekEnd = report.weekEndLabel || defaultPeriod.weekEnd;
 
   const pdfBuffer = await buildWeeklyMisPdfAsync(
     {
@@ -137,9 +145,9 @@ export async function downloadMisMasterPdf(report: MisMasterPersonReportPdf) {
       parameters: report.parameters as any,
     },
     {
-      weekKey: String(report.weekNumber ? `W${report.weekNumber}` : 'Report'),
-      weekStart: report.weekStartLabel || '',
-      weekEnd: report.weekEndLabel || '',
+      weekKey: `W${weekNum}`,
+      weekStart,
+      weekEnd,
       weekNumber: weekNum,
     },
   );

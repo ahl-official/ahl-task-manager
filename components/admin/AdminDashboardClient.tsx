@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowRight, Building2, Clock3, X } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS } from '@/lib/utils';
 import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
@@ -77,6 +78,11 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
   const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<TaskSerialized | null>(null);
   const [deptFilter, setDeptFilter]  = useState<string>('all');
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     setTaskItems(tasks);
@@ -339,8 +345,8 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
       </div>
 
       {/* Department users modal */}
-      {selectedDepartmentBlock && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-gray-900/40 p-4">
+      {selectedDepartmentBlock && mounted && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-[2px] p-4 w-screen h-screen">
           <div className="max-h-[86vh] w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-xl">
             <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-5 py-4">
               <div className="flex items-center gap-3">
@@ -358,7 +364,6 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
                 type="button"
                 onClick={() => { setSelectedDepartment(null); setSelectedUser(null); }}
                 className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-                aria-label="Close department users"
               >
                 <X size={18} />
               </button>
@@ -379,7 +384,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
               ))}
             </div>
 
-            <div className="max-h-[58vh] overflow-y-auto">
+            <div className="max-h-[calc(86vh-73px)] divide-y divide-gray-100 overflow-y-auto">
               {selectedDepartmentBlock.users.length === 0 && (
                 <div className="px-5 py-10 text-center text-sm text-gray-400">No users in this department</div>
               )}
@@ -391,26 +396,26 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
                 const isSelected = selectedUser === user.uid;
 
                 return (
-                  <div key={user.uid} className="border-b border-gray-50 last:border-b-0">
+                  <div key={user.uid} className="transition-colors">
                     <button
                       type="button"
                       onClick={() => setSelectedUser(isSelected ? null : user.uid)}
                       className={cn(
-                        'flex w-full flex-col gap-3 px-5 py-4 text-left transition-colors hover:bg-gray-50 lg:flex-row lg:items-center lg:justify-between',
-                        isSelected && 'bg-brand-50/60',
+                        'flex w-full items-center justify-between gap-4 px-5 py-3.5 text-left transition-colors',
+                        isSelected ? 'bg-brand-50/40' : 'hover:bg-gray-50/70',
                       )}
                     >
                       <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-100 text-sm font-semibold text-brand-700">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 text-xs font-semibold text-gray-700">
                           {user.name.slice(0, 2).toUpperCase()}
                         </div>
                         <div>
-                          <p className="text-sm font-semibold text-gray-900">{user.name}</p>
-                          <p className="text-xs text-gray-400">{score ? `${score.monthlyScore}% MIS` : 'No MIS score yet'}</p>
+                          <p className="text-sm font-medium text-gray-900">{user.name}</p>
+                          <p className="text-[11px] text-gray-400">{score ? `${score.monthlyScore}% MIS` : 'No MIS score yet'}</p>
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-4 gap-2 lg:w-[360px]">
+                      <div className="flex items-center gap-1.5">
                         {[
                           { label: 'Total', value: counts.total, color: 'text-gray-700' },
                           { label: 'In Progress', value: counts.inProgress, color: 'text-blue-700' },
@@ -445,8 +450,14 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
                                 <span className={cn('badge text-[10px] py-0', STATUS_COLORS[task.status])}>
                                   {task.status}
                                 </span>
+                                {task.endDate && (
+                                  <span className="text-[10px] text-gray-400">
+                                    Due {formatDate(task.delayedDate || task.endDate)}
+                                  </span>
+                                )}
                               </div>
                             </div>
+                            <ArrowRight size={13} className="mt-1 text-gray-300" />
                           </button>
                         ))}
                       </div>
@@ -462,7 +473,8 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
               })}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Task detail modal */}

@@ -24,20 +24,31 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const assignableUsers = users.filter(user => canAssignTask(currentUser as any, user as any));
-  const checkerUsers = [
-    { ...currentUser, isActive: true },
-    ...users.filter(user => user.uid !== currentUser.uid),
-  ];
+  const isIntern = currentUser.role === 'intern';
+  const checkerUsers = isIntern
+    ? users.filter(user =>
+        user.uid !== currentUser.uid &&
+        (user.department === currentUser.department || ['admin', 'leader'].includes(user.role))
+      )
+    : [
+        { ...currentUser, isActive: true },
+        ...users.filter(user => user.uid !== currentUser.uid),
+      ];
+
+  const defaultAssignedTo = isIntern ? currentUser.uid : '';
+  const defaultDepartment = isIntern ? currentUser.department : '';
+  const defaultHandoffUid = isIntern ? (checkerUsers[0]?.uid || '') : currentUser.uid;
+
   const [form, setForm] = useState({
     description: '',
-    assignedTo:  '',
+    assignedTo:  defaultAssignedTo,
     category:    'Daily',
     priority:    'Medium',
     startDate:   '',
     endDate:     '',
-    handoffUid:  currentUser.uid,
+    handoffUid:  defaultHandoffUid,
     notes:       '',
-    department:  '',
+    department:  defaultDepartment,
   });
 
   function set(field: string, value: string) {
