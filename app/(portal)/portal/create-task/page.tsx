@@ -18,17 +18,16 @@ export default async function PortalCreateTaskPage() {
     department: session.department,
     role: normalizeRole(session.role),
   };
-  const users = await adminGetAllUsers();
-  const assignableUsers = getAssignableUsers(currentUser as any, users.map(u => ({
-    ...u,
-    role: normalizeRole(u.role),
-  })) as any).map(u => ({
-    uid:        u.uid,
-    name:       u.name,
-    department: u.department,
-    role:       normalizeRole(u.role),
-    isActive:   u.isActive,
-  }));
+  const rawUsers = await adminGetAllUsers();
+  const activeUsers = rawUsers
+    .filter(u => u.isActive)
+    .map(u => ({
+      uid:        u.uid,
+      name:       u.name,
+      department: u.department,
+      role:       normalizeRole(u.role),
+      isActive:   u.isActive,
+    }));
 
   return (
     <div className="p-6 max-w-2xl">
@@ -36,7 +35,7 @@ export default async function PortalCreateTaskPage() {
         <h1 className="text-xl font-semibold text-gray-900">Create Task</h1>
         <p className="mt-0.5 text-sm text-gray-500">Delegate a task to a team member</p>
       </div>
-      <CreateTaskForm users={assignableUsers as any} currentUser={currentUser as any} redirectTo="/portal" />
+      <CreateTaskForm users={activeUsers as any} currentUser={currentUser as any} redirectTo="/portal" />
     </div>
   );
 }

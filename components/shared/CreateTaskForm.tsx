@@ -25,11 +25,12 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
   const audioChunksRef = useRef<Blob[]>([]);
   const assignableUsers = users.filter(user => canAssignTask(currentUser as any, user as any));
   const isIntern = currentUser.role === 'intern';
+  const myDept = (currentUser.department || '').trim().toLowerCase();
   const checkerUsers = isIntern
     ? users.filter(user =>
         user.isActive &&
         user.uid !== currentUser.uid &&
-        (user.department === currentUser.department || ['admin', 'leader'].includes(user.role))
+        (!myDept || (user.department || '').trim().toLowerCase() === myDept || ['admin', 'leader'].includes(user.role))
       )
     : [
         { ...currentUser, isActive: true },
