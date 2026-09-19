@@ -184,7 +184,7 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
           >
             <option value="">Select member…</option>
             {assignableUsers.map(u => (
-              <option key={u.uid} value={u.uid}>{u.name} ({u.department || 'No department'} / {roleLabel(u.role)})</option>
+              <option key={u.uid} value={u.uid}>{u.name} ({roleLabel(u.role)})</option>
             ))}
           </select>
           <p className="mt-1 text-[11px] text-gray-400">{describeAssignmentRule(currentUser.role)}</p>
@@ -199,14 +199,10 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
             className="input"
             required
           >
-            {isIntern ? (
-              <option value="">Select checker from {currentUser.department || 'department'}…</option>
-            ) : (
-              <option value="">Select checker…</option>
-            )}
+            <option value="">Select checker…</option>
             {checkerUsers.map(u => (
               <option key={u.uid} value={u.uid}>
-                {u.name}{u.uid === currentUser.uid ? ' (You)' : ''} ({u.department || 'No dept'} · {roleLabel(u.role)})
+                {u.name}{u.uid === currentUser.uid ? ' (You)' : ''} ({roleLabel(u.role)})
               </option>
             ))}
           </select>
