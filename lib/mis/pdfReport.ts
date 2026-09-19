@@ -452,33 +452,14 @@ export async function buildWeeklyMisPdfAsync(
   const rightBoxWidth = 145;
   const leftTableWidth = contentWidth - rightBoxWidth; // 626.89
 
-  // Save button icon on far left
-  const saveBtnWidth = 75;
-  page.drawEllipse({
-    x: startX + 38,
-    y: startY - 22,
-    xScale: 34,
-    yScale: 14,
-    color: rgb(0.65, 0.82, 0.95),
-    borderColor: rgb(0.3, 0.5, 0.8),
-    borderWidth: 1.5,
-  });
-  page.drawText('SAVE', {
-    x: startX + 22,
-    y: startY - 26,
-    size: 11,
-    font: fontBold,
-    color: rgb(0.1, 0.25, 0.6),
-  });
-
   // Center MIS Report Title Box
-  const misTitleWidth = 320;
-  const metaColsWidth = leftTableWidth - (saveBtnWidth + 10) - misTitleWidth; // ~221.89
-  const metaColW = metaColsWidth / 3;
+  const metaColsWidth = 240;
+  const misTitleWidth = leftTableWidth - metaColsWidth; // ~386.89
+  const metaColW = metaColsWidth / 3; // 80
 
   // Draw MIS Report Cyan Banner
   page.drawRectangle({
-    x: startX + saveBtnWidth + 10,
+    x: startX,
     y: startY - headerHeight,
     width: misTitleWidth,
     height: headerHeight,
@@ -486,8 +467,10 @@ export async function buildWeeklyMisPdfAsync(
     borderColor: grayBorder,
     borderWidth: 1,
   });
-  page.drawText('MIS Report', {
-    x: startX + saveBtnWidth + 65,
+  const titleText = 'MIS Report';
+  const titleWidth = fontBold.widthOfTextAtSize(titleText, 28);
+  page.drawText(titleText, {
+    x: startX + (misTitleWidth - titleWidth) / 2,
     y: startY - 44,
     size: 28,
     font: fontBold,
@@ -495,7 +478,7 @@ export async function buildWeeklyMisPdfAsync(
   });
 
   // Draw Week Meta Grid
-  const metaGridX = startX + saveBtnWidth + 10 + misTitleWidth;
+  const metaGridX = startX + misTitleWidth;
   const metaRowH = headerHeight / 2;
 
   // Header row for Week Meta
@@ -510,8 +493,9 @@ export async function buildWeeklyMisPdfAsync(
       borderColor: grayBorder,
       borderWidth: 1,
     });
+    const tw = fontBold.widthOfTextAtSize(mh, 7.5);
     page.drawText(mh, {
-      x: metaGridX + i * metaColW + 4,
+      x: metaGridX + i * metaColW + Math.max(4, (metaColW - tw) / 2),
       y: startY - 20,
       size: 7.5,
       font: fontBold,
@@ -531,8 +515,9 @@ export async function buildWeeklyMisPdfAsync(
       borderColor: grayBorder,
       borderWidth: 1,
     });
+    const tw = fontBold.widthOfTextAtSize(mv, 8.5);
     page.drawText(mv, {
-      x: metaGridX + i * metaColW + 8,
+      x: metaGridX + i * metaColW + Math.max(4, (metaColW - tw) / 2),
       y: startY - headerHeight + 11,
       size: 8.5,
       font: fontBold,
