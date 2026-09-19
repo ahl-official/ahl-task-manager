@@ -27,17 +27,18 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
   const isIntern = currentUser.role === 'intern';
   const checkerUsers = isIntern
     ? users.filter(user =>
+        user.isActive &&
         user.uid !== currentUser.uid &&
         (user.department === currentUser.department || ['admin', 'leader'].includes(user.role))
       )
     : [
         { ...currentUser, isActive: true },
-        ...users.filter(user => user.uid !== currentUser.uid),
+        ...users.filter(user => user.isActive && user.uid !== currentUser.uid),
       ];
 
   const defaultAssignedTo = isIntern ? currentUser.uid : '';
   const defaultDepartment = isIntern ? currentUser.department : '';
-  const defaultHandoffUid = isIntern ? (checkerUsers[0]?.uid || '') : currentUser.uid;
+  const defaultHandoffUid = isIntern ? '' : currentUser.uid;
 
   const [form, setForm] = useState({
     description: '',
@@ -198,13 +199,22 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
             className="input"
             required
           >
+            {isIntern ? (
+              <option value="">Select checker from {currentUser.department || 'department'}…</option>
+            ) : (
+              <option value="">Select checker…</option>
+            )}
             {checkerUsers.map(u => (
               <option key={u.uid} value={u.uid}>
-                {u.name}{u.uid === currentUser.uid ? ' (You)' : ''} ({roleLabel(u.role)})
+                {u.name}{u.uid === currentUser.uid ? ' (You)' : ''} ({u.department || 'No dept'} · {roleLabel(u.role)})
               </option>
             ))}
           </select>
-          <p className="mt-1 text-[11px] text-gray-400">Defaults to the person assigning this task.</p>
+          <p className="mt-1 text-[11px] text-gray-400">
+            {isIntern
+              ? 'Select another person or leader from your department to verify and check your work.'
+              : 'The person who will verify and accept this task (defaults to you).'}
+          </p>
         </div>
 
         {/* Category */}

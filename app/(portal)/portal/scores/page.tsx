@@ -170,65 +170,75 @@ export default async function PortalScorePage() {
 
   const mis = score?.monthlyScore ?? 0;
 
-  function scoreColor(s: number) {
-    if (s >= 90) return 'text-green-600';
-    if (s >= 70) return 'text-blue-600';
-    if (s >= 50) return 'text-yellow-600';
-    return 'text-red-600';
-  }
-
-  function scoreLabel(s: number) {
-    if (s >= 90) return 'Excellent';
-    if (s >= 70) return 'Good';
-    if (s >= 50) return 'Average';
-    return 'Needs Improvement';
-  }
-
   function gapColor(gap: number | null) {
     if (gap === null) return 'text-gray-400';
-    if (gap >= -5) return 'text-green-600';
-    if (gap >= -20) return 'text-blue-600';
-    if (gap >= -50) return 'text-yellow-600';
+    if (gap >= 0) return 'text-emerald-600';
+    if (gap >= -10) return 'text-green-600';
+    if (gap >= -25) return 'text-blue-600';
+    if (gap >= -50) return 'text-amber-600';
     return 'text-red-600';
   }
+
+  function gapStatusBadge(gap: number | null) {
+    if (gap === null) return { text: 'No Planned Tasks', bg: 'bg-gray-100 text-gray-700' };
+    if (gap >= 0) return { text: 'Perfect (100% Achieved)', bg: 'bg-emerald-100 text-emerald-800' };
+    if (gap >= -10) return { text: 'Excellent', bg: 'bg-green-100 text-green-800' };
+    if (gap >= -25) return { text: 'Good', bg: 'bg-blue-100 text-blue-800' };
+    if (gap >= -50) return { text: 'Average', bg: 'bg-amber-100 text-amber-800' };
+    return { text: 'Needs Improvement', bg: 'bg-red-100 text-red-800' };
+  }
+
+  const badge = gapStatusBadge(pdfGapPercent);
 
   return (
     <div className="max-w-xl space-y-5 p-6">
       <div className="pr-14">
         <h1 className="text-xl font-semibold text-gray-900">My Score</h1>
-        <p className="mt-0.5 text-sm text-gray-500">Your performance metrics</p>
+        <p className="mt-0.5 text-sm text-gray-500">Your weekly performance metrics</p>
       </div>
 
-      {/* Score card */}
-      <div className="card p-6 text-center bg-gradient-to-br from-brand-50 to-white">
-        <div className="w-16 h-16 rounded-2xl bg-brand-600 flex items-center justify-center mx-auto mb-4">
-          <Trophy size={28} className="text-white" />
-        </div>
-        <p className={cn('text-5xl font-bold mb-1', scoreColor(mis))}>{mis}%</p>
-        <p className="text-gray-500 text-sm font-medium">{scoreLabel(mis)}</p>
-        <p className="text-xs text-gray-400 mt-1">Portal MIS (on-time / assigned)</p>
-
-        <div className="mt-4 rounded-xl bg-white/80 px-4 py-3">
-          <p className={cn('text-2xl font-bold', gapColor(pdfGapPercent))}>{pdfGapLabel}</p>
-          <p className="text-xs text-gray-500 mt-0.5">Weekly MIS Performance (0.00% is best — 100% planned work achieved)</p>
-          {liveMis && (
-            <p className="mt-1 text-[11px] text-gray-400">
-              {liveMis.weekStart} → {liveMis.weekEnd} · Planned: {liveMis.planned} · Done: {liveMis.done} · On-Time: {liveMis.onTime}
-            </p>
-          )}
+      {/* Hero Score card */}
+      <div className="card p-6 text-center bg-gradient-to-br from-brand-50/50 via-white to-gray-50 border border-gray-100 shadow-sm">
+        <div className="w-14 h-14 rounded-2xl bg-brand-600 flex items-center justify-center mx-auto mb-3 shadow-sm">
+          <Trophy size={26} className="text-white" />
         </div>
 
-        {/* Progress bar */}
-        <div className="mt-5 h-2.5 bg-gray-100 rounded-full overflow-hidden">
-          <div
-            className={cn('h-full rounded-full transition-all duration-700',
-              mis >= 90 ? 'bg-green-500' :
-              mis >= 70 ? 'bg-blue-500' :
-              mis >= 50 ? 'bg-yellow-500' : 'bg-red-500'
-            )}
-            style={{ width: `${mis}%` }}
-          />
+        <p className={cn('text-5xl font-extrabold tracking-tight mb-1', gapColor(pdfGapPercent))}>
+          {pdfGapLabel}
+        </p>
+        
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold mt-1 mb-2 shadow-2xs" style={{ background: undefined }}>
+          <span className={cn('px-2.5 py-0.5 rounded-full font-medium text-xs', badge.bg)}>
+            {badge.text}
+          </span>
         </div>
+
+        <p className="text-xs font-medium text-gray-500">
+          Weekly MIS Score · <span className="text-emerald-700 font-semibold">0.00% is best</span> (100% planned tasks accomplished)
+        </p>
+
+        {liveMis && (
+          <div className="mt-4 rounded-xl bg-white border border-gray-100 px-4 py-2.5 shadow-2xs text-left">
+            <div className="flex items-center justify-between text-xs text-gray-500 mb-1.5">
+              <span className="font-semibold text-gray-700">Week {liveMis.weekKey || 'Cycle'}</span>
+              <span>{liveMis.weekStart} → {liveMis.weekEnd}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="bg-gray-50 rounded-lg py-1.5 px-2">
+                <span className="text-gray-400 block text-[10px]">Planned</span>
+                <span className="font-bold text-gray-800 text-sm">{liveMis.planned}</span>
+              </div>
+              <div className="bg-green-50/70 rounded-lg py-1.5 px-2">
+                <span className="text-green-600 block text-[10px]">Done</span>
+                <span className="font-bold text-green-800 text-sm">{liveMis.done}</span>
+              </div>
+              <div className="bg-blue-50/70 rounded-lg py-1.5 px-2">
+                <span className="text-blue-600 block text-[10px]">On-Time</span>
+                <span className="font-bold text-blue-800 text-sm">{liveMis.onTime}</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="card p-4">
