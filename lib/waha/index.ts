@@ -11,9 +11,19 @@ function buildHeaders(): Record<string, string> {
   return headers;
 }
 
+/** Digits only; ensures Indian country code 91 when missing (no double-prefix). */
+export function normalizeWa(raw: unknown): string {
+  const digits = String(raw ?? '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('91') && digits.length >= 12) return digits;
+  const last10 = digits.slice(-10);
+  if (last10.length === 10) return `91${last10}`;
+  return digits;
+}
+
 function formatWaId(waNumber: string): string {
   // WAHA expects "919876543210@c.us"
-  const digits = waNumber.replace(/\D/g, '');
+  const digits = normalizeWa(waNumber);
   return `${digits}@c.us`;
 }
 
@@ -31,7 +41,7 @@ export type SendWhatsAppResult = {
 
 async function resolveChatId(waNumber: string): Promise<ResolveChatIdResult> {
   const fallbackChatId = formatWaId(waNumber);
-  const phone = waNumber.replace(/\D/g, '');
+  const phone = normalizeWa(waNumber);
 
   if (!WAHA_URL || !phone) {
     return { ok: true, chatId: fallbackChatId };
@@ -74,27 +84,21 @@ export async function sendWhatsApp(
   text: string,
   taskId?: string,
 ): Promise<SendWhatsAppResult> {
-  const resolved = await resolveChatId(waNumber);
-  const chatId = resolved.chatId;
-
-  if (!resolved.ok) {
-    await adminLog('SEND_WA', `FAILED send to ${waNumber}`, {
-      taskId,
-      meta: {
-        chatId,
-        status: resolved.status,
-        body: resolved.body,
-        error: resolved.error,
-      },
-    });
-    return resolved;
+  if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
+    return { ok: true, chatId: formatWaId(waNumber) };
   }
 
-  const url    = `${WAHA_URL}/api/sendText`;
+  const resolved = await resolveChatId(waNumber);
+  if (!resolved.ok) {
+    console.warn(`[WAHA] Skipped send — number does not exist on WA: ${waNumber}`);
+    return { ok: false, chatId: resolved.chatId, status: resolved.status, error: resolved.error };
+  }
+
+  const chatId = resolved.chatId;
 
   try {
-    const res = await fetch(url, {
-      method:  'POST',
+    const res = await fetch(`${WAHA_URL}/api/sendText`, {
+      method: 'POST',
       headers: buildHeaders(),
       body: JSON.stringify({
         session: WAHA_SESSION,
@@ -104,22 +108,27 @@ export async function sendWhatsApp(
     });
 
     const body = await res.text();
-    await adminLog('SEND_WA', `Sent to ${waNumber}`, {
-      taskId,
-      meta: { chatId, status: res.status, body },
-    });
 
     if (!res.ok) {
-      console.error(`WAHA send failed: ${res.status}`, body);
-      return { ok: false, chatId, status: res.status, body };
+      console.error(`WAHA sendText error: ${res.status}`, body);
+      await adminLog('SEND_WA', `FAILED send to ${waNumber}`, {
+        meta: { chatId, error: body, status: res.status },
+        taskId,
+      });
+      return { ok: false, chatId, status: res.status, body, error: body };
     }
+
+    await adminLog('SEND_WA', `Sent to ${waNumber}: ${text.slice(0, 50)}...`, {
+      meta: { chatId },
+      taskId,
+    });
 
     return { ok: true, chatId, status: res.status, body };
   } catch (err) {
-    console.error('WAHA sendWhatsApp error', err);
-    await adminLog('SEND_WA', `FAILED send to ${waNumber}`, {
-      taskId,
+    console.error('WAHA sendWhatsApp network error', err);
+    await adminLog('SEND_WA', `FAILED network send to ${waNumber}`, {
       meta: { chatId, error: String(err) },
+      taskId,
     });
     return { ok: false, chatId, error: String(err) };
   }
@@ -134,60 +143,46 @@ export async function sendWhatsAppFile(input: {
   caption?: string;
   taskId?: string;
 }): Promise<SendWhatsAppResult> {
-  const resolved = await resolveChatId(input.waNumber);
-  const chatId = resolved.chatId;
-
-  if (!resolved.ok) {
-    await adminLog('SEND_WA', `FAILED file send to ${input.waNumber}`, {
-      taskId: input.taskId,
-      meta: {
-        chatId,
-        status: resolved.status,
-        body: resolved.body,
-        error: resolved.error,
-        filename: input.filename,
-      },
-    });
-    return resolved;
+  if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
+    return { ok: true, chatId: formatWaId(input.waNumber) };
   }
 
-  const url = `${WAHA_URL}/api/sendFile`;
-  const base64 = Buffer.from(input.data).toString('base64');
+  const resolved = await resolveChatId(input.waNumber);
+  if (!resolved.ok) {
+    return { ok: false, chatId: resolved.chatId, error: resolved.error };
+  }
+
+  const chatId = resolved.chatId;
+  const base64 = Buffer.isBuffer(input.data)
+    ? input.data.toString('base64')
+    : Buffer.from(input.data).toString('base64');
+  const mimetype = input.mimetype || 'application/pdf';
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch(`${WAHA_URL}/api/sendFile`, {
       method: 'POST',
       headers: buildHeaders(),
       body: JSON.stringify({
         session: WAHA_SESSION,
         chatId,
-        caption: input.caption || '',
         file: {
-          mimetype: input.mimetype || 'application/pdf',
+          mimetype,
           filename: input.filename,
           data: base64,
         },
+        caption: input.caption,
       }),
     });
 
     const body = await res.text();
-    await adminLog('SEND_WA', `Sent file to ${input.waNumber}`, {
-      taskId: input.taskId,
-      meta: { chatId, status: res.status, body, filename: input.filename },
-    });
-
     if (!res.ok) {
-      console.error(`WAHA sendFile failed: ${res.status}`, body);
-      return { ok: false, chatId, status: res.status, body };
+      console.error(`WAHA sendFile error: ${res.status}`, body);
+      return { ok: false, chatId, status: res.status, body, error: body };
     }
 
     return { ok: true, chatId, status: res.status, body };
   } catch (err) {
-    console.error('WAHA sendWhatsAppFile error', err);
-    await adminLog('SEND_WA', `FAILED file send to ${input.waNumber}`, {
-      taskId: input.taskId,
-      meta: { chatId, error: String(err), filename: input.filename },
-    });
+    console.error('WAHA sendWhatsAppFile network error', err);
     return { ok: false, chatId, error: String(err) };
   }
 }
@@ -203,53 +198,41 @@ export async function sendWhatsAppPdfFromDriveLink(
   _processName: string,
   message: string,
 ): Promise<SendWhatsAppResult> {
-  const resolved = await resolveChatId(waNumber);
-  const chatId = resolved.chatId;
-
-  if (!resolved.ok) {
-    await adminLog('SEND_WA', `FAILED Drive PDF send to ${waNumber}`, {
-      meta: {
-        chatId,
-        status: resolved.status,
-        body: resolved.body,
-        error: resolved.error,
-        driveUrl,
-        process: _processName,
-      },
-    });
-    return resolved;
+  if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
+    return { ok: true, chatId: formatWaId(waNumber) };
   }
 
-  const url = `${WAHA_URL}/api/sendFile`;
+  const resolved = await resolveChatId(waNumber);
+  if (!resolved.ok) {
+    return { ok: false, chatId: resolved.chatId, error: resolved.error };
+  }
+
+  const chatId = resolved.chatId;
+
   try {
-    const res = await fetch(url, {
+    const res = await fetch(`${WAHA_URL}/api/sendFile`, {
       method: 'POST',
       headers: buildHeaders(),
       body: JSON.stringify({
         session: WAHA_SESSION,
         chatId,
-        caption: message,
         file: {
-          mimetype: 'application/pdf',
-          filename: 'Monthly Report.pdf',
           url: driveUrl,
+          filename: 'Monthly_Report.pdf',
         },
+        caption: message,
       }),
     });
+
     const body = await res.text();
-    await adminLog('SEND_WA', `Sent Drive PDF to ${waNumber}`, {
-      meta: { chatId, status: res.status, body, driveUrl, process: _processName },
-    });
     if (!res.ok) {
-      console.error(`WAHA sendWhatsAppPdfFromDriveLink failed: ${res.status}`, body);
-      return { ok: false, chatId, status: res.status, body };
+      console.error(`WAHA sendWhatsAppPdfFromDriveLink error: ${res.status}`, body);
+      return { ok: false, chatId, status: res.status, body, error: body };
     }
+
     return { ok: true, chatId, status: res.status, body };
   } catch (err) {
     console.error('WAHA sendWhatsAppPdfFromDriveLink error', err);
-    await adminLog('SEND_WA', `FAILED Drive PDF send to ${waNumber}`, {
-      meta: { chatId, error: String(err), driveUrl, process: _processName },
-    });
     return { ok: false, chatId, error: String(err) };
   }
 }
@@ -378,6 +361,35 @@ export function msgReminder(task: {
   ].join('\n');
 }
 
+export function msgRecentOverdueTasks(input: {
+  name: string;
+  tasks: {
+    taskId: string;
+    description: string;
+    dueDate: string;
+    daysOverdue: number;
+  }[];
+}): string {
+  const numberEmojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+  const list = input.tasks
+    .map((task, index) => {
+      const prefix = numberEmojis[index] || `${index + 1}.`;
+      const daysText = task.daysOverdue === 1 ? '1 day late' : `${task.daysOverdue} days late`;
+      return `${prefix} *${task.taskId}* - ${task.description}\n   📅 *Due Date:* ${task.dueDate} (${daysText})`;
+    })
+    .join('\n\n');
+
+  return [
+    `🚨 *Overdue Task Reminder*`,
+    ``,
+    `Hi ${input.name}, you have ${input.tasks.length} task(s) from the last 2 days that are pending completion:`,
+    ``,
+    list,
+    ``,
+    `Please complete or request an extension in the portal: ${PORTAL_URL}`,
+  ].join('\n');
+}
+
 export function msgDailyHighPriorityTasks(input: {
   name: string;
   tasks: {
@@ -412,11 +424,11 @@ export function msgDailyHighPriorityTasks(input: {
   ].join('\n');
 }
 
-/** Matches newdelegation sendDailyTaskReminderMorning tone. */
+/** Matches newdelegation sendDailyTaskReminderMorning tone exactly. */
 export function msgDailyTasksDueToday(input: {
   name: string;
   dateLabel: string;
-  tasks: { description: string; endDate: string }[];
+  tasks: { description: string; endDate?: string }[];
 }): string {
   if (input.tasks.length === 0) {
     return [
@@ -424,14 +436,18 @@ export function msgDailyTasksDueToday(input: {
       ``,
       `📅 *Date: ${input.dateLabel}*`,
       ``,
-      `Hi ${input.name}, you have no one-time tasks due today.`,
+      `Hi ${input.name}, you have no tasks due today.`,
       ``,
       `Portal: ${PORTAL_URL}`,
     ].join('\n');
   }
 
+  const numberEmojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
   const list = input.tasks
-    .map((task, index) => `${index + 1}. ${task.description}\n   Due: ${task.endDate}`)
+    .map((task, index) => {
+      const prefix = numberEmojis[index] || `${index + 1}.`;
+      return `${prefix} ${task.description}`;
+    })
     .join('\n\n');
 
   return [
@@ -439,11 +455,9 @@ export function msgDailyTasksDueToday(input: {
     ``,
     `📅 *Date: ${input.dateLabel}*`,
     ``,
-    `Hi ${input.name}, here is your assigned task for today:`,
+    `Here is your assigned task for today:`,
     ``,
     list,
-    ``,
-    `Portal: ${PORTAL_URL}`,
   ].join('\n');
 }
 

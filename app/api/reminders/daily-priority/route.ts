@@ -34,10 +34,6 @@ function taskRank(task: Task) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  }
-
   const mode = new URL(req.url).searchParams.get('mode') || 'today';
   const sent: string[] = [];
   const skipped: string[] = [];

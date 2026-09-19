@@ -6,6 +6,8 @@ import { Trophy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils/timelyDashboard';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export default async function PortalPage() {
   const session = await getSession();

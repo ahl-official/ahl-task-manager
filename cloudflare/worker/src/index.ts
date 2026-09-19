@@ -429,7 +429,14 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     const binds: unknown[] = [];
     if (scope === 'mine' && uid) { clauses.push('assigned_to = ?'); binds.push(uid); }
     if (scope === 'handoff' && uid) { clauses.push('handoff_uid = ?'); binds.push(uid); }
-    if (status) { clauses.push('status = ?'); binds.push(status); }
+    if (status) {
+      if (status === 'Completed') {
+        clauses.push("status IN ('Completed', 'Verified')");
+      } else {
+        clauses.push('status = ?');
+        binds.push(status);
+      }
+    }
     if (department) { clauses.push('department = ?'); binds.push(department); }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const limitClause = limit ? 'LIMIT ?' : '';
@@ -479,11 +486,11 @@ async function routeTasks(req: Request, env: Env, url: URL) {
       const endDateVal = data.endDate && String(data.endDate).trim() ? data.endDate : null;
       const createdAt = data.createdAt || startDateVal || endDateVal || now;
       const pf = periodFields(endDateVal || startDateVal || now);
-      const status = data.skipAcceptance ? 'In Progress' : 'Pending Accept';
+      const status = data.skipAcceptance ? 'In Progress' : (data.status || 'Pending Accept');
       await env.DB.prepare(
         `INSERT INTO tasks_current (task_id, description, assigned_to, assigned_to_name, assigned_to_wa, created_by, created_by_name, handoff_uid, handoff_name, handoff_wa, category, priority, status, department, start_date, end_date, delayed_date, delay_reason, revision_status, notes, accepted_at, completed_at, verified_at, created_at, updated_at, day_key, month_key)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'none', ?, ?, NULL, NULL, ?, ?, ?, ?)`
-      ).bind(taskId, data.description || '', assignee.uid, assignee.name, assignee.waNumber, creator?.uid || data.creatorUid || 'admin', creator?.name || 'Admin', handoff?.uid || data.handoffUid || 'admin', handoff?.name || 'Admin', handoff?.waNumber || '', data.category || 'One Time', data.priority || 'Medium', status, assignee.department || data.department || '', startDateVal, endDateVal, data.notes || null, data.skipAcceptance ? now : null, createdAt, now, pf.dayKey, pf.monthKey).run();
+      ).bind(taskId, data.description || '', assignee.uid, assignee.name, assignee.waNumber, creator?.uid || data.creatorUid || 'admin', creator?.name || 'Admin', handoff?.uid || data.handoffUid || creator?.uid || 'admin', handoff?.name || creator?.name || 'Admin', handoff?.waNumber || creator?.waNumber || '', data.category || 'One Time', data.priority || 'Medium', status, assignee.department || data.department || '', startDateVal, endDateVal, data.notes || null, data.skipAcceptance ? now : null, createdAt, now, pf.dayKey, pf.monthKey).run();
       await log(env, 'TASK_CREATED', `Task ${taskId} created`, { taskId, uid: creator?.uid });
       return json({ success: true, data: taskFromRow(await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id = ?').bind(taskId).first()) }, { status: 201 });
     } catch (err: any) {
@@ -510,6 +517,11 @@ async function routeTasks(req: Request, env: Env, url: URL) {
         ['acceptedAt', 'accepted_at'],
         ['completedAt', 'completed_at'],
         ['verifiedAt', 'verified_at'],
+        ['handoffUid', 'handoff_uid'],
+        ['handoffName', 'handoff_name'],
+        ['category', 'category'],
+        ['handoffWa', 'handoff_wa'],
+        ['newTaskId', 'task_id'],
       ] as const) {
         if (data[field] === null) {
           updates.push(`${column} = NULL`);
@@ -531,15 +543,21 @@ async function routeTasks(req: Request, env: Env, url: URL) {
   }
 
   if (url.pathname.startsWith('/tasks/') && req.method === 'DELETE') {
-    const id = decodeURIComponent(url.pathname.slice('/tasks/'.length));
-    const existing = await env.DB.prepare('SELECT task_id FROM tasks_current WHERE task_id = ? LIMIT 1').bind(id).first();
-    if (!existing) return json({ success: false, error: 'Not found' }, { status: 404 });
-    await env.DB.batch([
-      env.DB.prepare('DELETE FROM revisions WHERE task_id = ?').bind(id),
-      env.DB.prepare('DELETE FROM tasks_current WHERE task_id = ?').bind(id),
-    ]);
-    await log(env, 'TASK_DELETED', `Task ${id} deleted`, { taskId: id });
-    return json({ success: true, data: { taskId: id, deleted: true } });
+    try {
+      const id = decodeURIComponent(url.pathname.slice('/tasks/'.length));
+      const existing = await env.DB.prepare('SELECT task_id FROM tasks_current WHERE task_id = ? LIMIT 1').bind(id).first();
+      if (!existing) return json({ success: false, error: 'Not found' }, { status: 404 });
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM revisions WHERE task_id = ?').bind(id),
+        env.DB.prepare('DELETE FROM tasks_current WHERE task_id = ?').bind(id),
+      ]);
+      try {
+        await log(env, 'TASK_DELETED', `Task ${id} deleted`, { taskId: id });
+      } catch {}
+      return json({ success: true, data: { taskId: id, deleted: true } });
+    } catch (err: any) {
+      return json({ success: false, error: err.message || String(err) }, { status: 500 });
+    }
   }
 
   return null;

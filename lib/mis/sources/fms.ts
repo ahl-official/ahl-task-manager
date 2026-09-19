@@ -53,13 +53,9 @@ function rowInWeek(
 ) {
   const startKey = parseSheetDate(row[step.dateCol]);
   if (!startKey) return false;
-  if (step.endCol != null) {
-    const endKey = parseSheetDate(row[step.endCol]) || startKey;
-    // Master O2D style: start >= weekStart AND end <= weekEnd
-    return startKey >= weekStart && endKey <= weekEnd;
-  }
   return dateKeyInRange(startKey, weekStart, weekEnd);
 }
+
 
 const fmsCache = new Map<string, { expiresAt: number; data: { byName: Map<string, FmsPersonBucket>; stepCounts: FmsStepPersonCount[] } }>();
 
@@ -92,20 +88,19 @@ export async function getFmsDetailedCounts(
   }
 
   const sheetNames = Array.from(new Set(FMS_STEP_CATALOG.map(step => step.sheet)));
-  const ranges = sheetNames.map(name => `${quoteSheet(name)}!A2:AZ`);
-
-  let valueSets: unknown[][][] = [];
-  try {
-    valueSets = await readSpreadsheetValues(misReportSpreadsheetId(), ranges, 'UNFORMATTED_VALUE');
-  } catch (err) {
-    console.error('MIS FMS sheet read failed', err);
-    return { byName, stepCounts };
-  }
-
   const sheetRows = new Map<string, unknown[][]>();
-  sheetNames.forEach((name, index) => {
-    sheetRows.set(name, valueSets[index] ?? []);
-  });
+
+  await Promise.all(
+    sheetNames.map(async name => {
+      try {
+        const [rows = []] = await readSpreadsheetValues(misReportSpreadsheetId(), `${quoteSheet(name)}!A2:AZ`, 'FORMATTED_VALUE');
+        sheetRows.set(name, rows);
+      } catch (err) {
+        // Tab not present or unparseable in workbook, default to empty
+        sheetRows.set(name, []);
+      }
+    })
+  );
 
   for (let i = 0; i < FMS_STEP_CATALOG.length; i++) {
     const step = FMS_STEP_CATALOG[i];

@@ -1,52 +1,91 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  adminGetOverdueTasks,
+  adminGetAllTasks,
   adminGetTasksDueWithinHours,
   adminUpdateTaskStatus,
 } from '@/lib/firebase/tasks';
+import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminLog } from '@/lib/firebase/scores';
-import { isOneTimeTask } from '@/lib/reminders/oneTime';
-import { sendWhatsApp, msgReminder } from '@/lib/waha';
+import {
+  formatDdMmYyyy,
+  isOpenOneTimeTask,
+  isOneTimeTask,
+  taskEndDateKey,
+} from '@/lib/reminders/oneTime';
+import { indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
+import { sendWhatsApp, msgReminder, msgRecentOverdueTasks } from '@/lib/waha';
 import { formatDate } from '@/lib/utils';
+import type { Task } from '@/types';
 
 /**
  * GET /api/reminders — One Time escalation cron (replaces newdelegation proximity nudges).
- * Marks Overdue + WA for overdue / 48h / 24h / due-soon.
+ * Checks last 2 days' due dates for open/overdue tasks per person and sends grouped alert.
  * Protected by CRON_SECRET.
  */
 export async function GET(req: NextRequest) {
-  const headerSecret = req.headers.get('x-cron-secret');
-  const bearer = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-  if (!process.env.CRON_SECRET || (headerSecret !== process.env.CRON_SECRET && bearer !== process.env.CRON_SECRET)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  let sent = 0;
   const errors: string[] = [];
+  let sent = 0;
 
   try {
-    const overdueTasks = (await adminGetOverdueTasks()).filter(isOneTimeTask);
-    for (const task of overdueTasks) {
-      try {
+    const [tasks, users] = await Promise.all([
+      adminGetAllTasks({ limit: null }),
+      adminGetAllUsers(),
+    ]);
+
+    const todayKey = indiaTodayKey();
+    const usersByUid = new Map(users.map(u => [u.uid, u]));
+    const recentOverdueByUid = new Map<string, Array<{ task: Task; daysOverdue: number; dueDateFormatted: string }>>();
+
+    const openTasks = tasks.filter(isOpenOneTimeTask);
+    for (const task of openTasks) {
+      const endKey = taskEndDateKey(task);
+      if (!endKey) continue;
+      const offset = indiaDayOffset(todayKey, endKey);
+
+      // Check tasks due within the last 2 days (yesterday: -1, day before yesterday: -2)
+      if (offset === -1 || offset === -2) {
         if (task.status !== 'Overdue') {
-          await adminUpdateTaskStatus(task.taskId, 'Overdue');
+          await adminUpdateTaskStatus(task.taskId, 'Overdue').catch(console.error);
         }
+        const list = recentOverdueByUid.get(task.assignedTo) ?? [];
+        list.push({
+          task,
+          daysOverdue: Math.abs(offset),
+          dueDateFormatted: formatDdMmYyyy(task),
+        });
+        recentOverdueByUid.set(task.assignedTo, list);
+      }
+    }
 
+    for (const [uid, items] of Array.from(recentOverdueByUid.entries())) {
+      const user = usersByUid.get(uid);
+      const phone = user?.waNumber || items[0].task.assignedToWa;
+      const name = user?.name || items[0].task.assignedToName || 'there';
+      if (!phone) {
+        errors.push(`${uid}: no WhatsApp number`);
+        continue;
+      }
+      try {
         await sendWhatsApp(
-          task.assignedToWa,
-          msgReminder({
-            taskId: task.taskId,
-            description: task.description,
-            endDate: formatDate(task.endDate?.toDate().toISOString()),
-            urgency: 'overdue',
+          phone,
+          msgRecentOverdueTasks({
+            name,
+            tasks: items.map(item => ({
+              taskId: item.task.taskId,
+              description: item.task.description,
+              dueDate: item.dueDateFormatted,
+              daysOverdue: item.daysOverdue,
+            })),
           }),
-          task.taskId,
+          items.map(item => item.task.taskId).join(', '),
         );
-
-        await adminLog('REMINDER', `Overdue reminder sent for ${task.taskId}`, { taskId: task.taskId });
+        await adminLog('REMINDER', `Recent 2-day overdue reminder sent to ${name} (${items.length} tasks)`, {
+          uid,
+          meta: { taskIds: items.map(item => item.task.taskId) },
+        });
         sent++;
       } catch (err) {
-        errors.push(`${task.taskId}: ${String(err)}`);
+        errors.push(`${name} (${uid}): ${String(err)}`);
       }
     }
 

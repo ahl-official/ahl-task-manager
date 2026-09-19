@@ -1,4 +1,5 @@
 import type { TaskPriority, TaskSerialized } from '@/types';
+import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   High: 300,
@@ -6,20 +7,13 @@ const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   Low: 80,
 };
 
-const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Dead']);
-
-function startOfToday() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
+const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue']);
 
 function daysUntil(value: string | null | undefined) {
   if (!value) return null;
-  const due = new Date(value);
-  if (Number.isNaN(due.getTime())) return null;
-  due.setHours(0, 0, 0, 0);
-  return Math.ceil((due.getTime() - startOfToday().getTime()) / 86_400_000);
+  const dueKey = indiaDateKey(value);
+  if (!dueKey) return null;
+  return indiaDayOffset(indiaTodayKey(), dueKey);
 }
 
 function deadlineWeight(daysLeft: number | null) {
@@ -52,14 +46,20 @@ export interface ScheduledTask {
   conflict: boolean;
 }
 
+function parseTime(value: string | null | undefined): number {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
 export function scheduleTasks(tasks: TaskSerialized[]): ScheduledTask[] {
   const active = tasks.filter(task => ACTIVE_STATUSES.has(task.status));
   const dateLoad = new Map<string, number>();
 
   for (const task of active) {
     if (!task.endDate) continue;
-    const key = task.endDate.slice(0, 10);
-    dateLoad.set(key, (dateLoad.get(key) ?? 0) + 1);
+    const key = indiaDateKey(task.endDate);
+    if (key) dateLoad.set(key, (dateLoad.get(key) ?? 0) + 1);
   }
 
   return active
@@ -78,7 +78,10 @@ export function scheduleTasks(tasks: TaskSerialized[]): ScheduledTask[] {
     })
     .sort((left, right) => {
       if (right.score !== left.score) return right.score - left.score;
-      return new Date(left.task.endDate ?? left.task.createdAt).getTime() - new Date(right.task.endDate ?? right.task.createdAt).getTime();
+      const leftTime = parseTime(left.task.endDate) || parseTime(left.task.createdAt);
+      const rightTime = parseTime(right.task.endDate) || parseTime(right.task.createdAt);
+      if (leftTime !== rightTime) return leftTime - rightTime;
+      return left.task.taskId.localeCompare(right.task.taskId);
     })
     .map((item, index) => ({ ...item, rank: index + 1 }));
 }

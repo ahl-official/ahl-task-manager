@@ -23,10 +23,7 @@ function isAuthorized(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  }
-
+  return NextResponse.json({ success: true, message: 'High priority reminders are disabled', sent: 0 });
   const force = new URL(req.url).searchParams.get('force') === '1';
   const hour = indiaHourNow();
   if (!force && (hour < 11 || hour >= 19)) {

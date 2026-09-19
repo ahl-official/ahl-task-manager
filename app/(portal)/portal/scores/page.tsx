@@ -101,28 +101,48 @@ export default async function PortalScorePage() {
     const { getMisWeekPeriod } = await import('@/lib/mis/week');
 
     const week = getMisWeekPeriod();
-    const [liveRows, stored] = await Promise.all([
-      computeMisScoresForWeek(week.weekStart, week.weekEnd),
-      adminGetMisWeeklySnapshots({ year: week.year, monthName: week.monthName }).catch(() => []),
-    ]);
+    const stored = await adminGetMisWeeklySnapshots({ year: week.year, monthName: week.monthName }).catch(() => []);
 
-    const mine = liveRows.find(row =>
-      row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name),
+    // Check if current week snapshot is already present in DB
+    const currentWeekSnapshot = stored.find(row =>
+      row.weekKey === week.weekKey && (row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name))
     );
-    pdfGapPercent = mine?.gapPercent ?? null;
-    pdfGapLabel = formatGapPercent(pdfGapPercent);
-    if (mine) {
+
+    if (currentWeekSnapshot) {
+      pdfGapPercent = currentWeekSnapshot.gapPercent ?? null;
+      pdfGapLabel = formatGapPercent(pdfGapPercent);
       liveMis = {
-        planned: mine.planned,
-        done: mine.done,
-        onTime: mine.onTime,
-        checklist: mine.checklist,
-        delegation: mine.delegation,
-        fms: mine.fms,
-        weekStart: mine.weekStart,
-        weekEnd: mine.weekEnd,
-        weekKey: mine.weekKey,
+        planned: currentWeekSnapshot.planned,
+        done: currentWeekSnapshot.done,
+        onTime: currentWeekSnapshot.onTime,
+        checklist: currentWeekSnapshot.checklist,
+        delegation: currentWeekSnapshot.delegation,
+        fms: currentWeekSnapshot.fms,
+        weekStart: currentWeekSnapshot.weekStart,
+        weekEnd: currentWeekSnapshot.weekEnd,
+        weekKey: currentWeekSnapshot.weekKey,
       };
+    } else {
+      // Calculate only if not stored in DB
+      const liveRows = await computeMisScoresForWeek(week.weekStart, week.weekEnd);
+      const mine = liveRows.find(row =>
+        row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name),
+      );
+      pdfGapPercent = mine?.gapPercent ?? null;
+      pdfGapLabel = formatGapPercent(pdfGapPercent);
+      if (mine) {
+        liveMis = {
+          planned: mine.planned,
+          done: mine.done,
+          onTime: mine.onTime,
+          checklist: mine.checklist,
+          delegation: mine.delegation,
+          fms: mine.fms,
+          weekStart: mine.weekStart,
+          weekEnd: mine.weekEnd,
+          weekKey: mine.weekKey,
+        };
+      }
     }
 
     weeklyRows = stored

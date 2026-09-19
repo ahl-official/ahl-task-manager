@@ -167,6 +167,15 @@ export async function buildMonthlyMisPdfBuffer(report: MisMonthlyPersonReport): 
   source: 'google-doc-template' | 'fallback';
 }> {
   const filename = monthlyMisPdfFilename(report);
+  const { buildMonthlyMisPdfAsync } = await import('@/lib/mis/pdfReport');
+
+  try {
+    const pdf = await buildMonthlyMisPdfAsync(report);
+    return { pdf, filename, source: 'fallback' };
+  } catch (err) {
+    console.error('buildMonthlyMisPdfAsync failed, checking doc template fallback', err);
+  }
+
   if (hasMisDocTemplateAuth()) {
     try {
       const pdf = await buildMonthlyMisPdfFromTemplate(report);
@@ -179,3 +188,4 @@ export async function buildMonthlyMisPdfBuffer(report: MisMonthlyPersonReport): 
   const { buildMonthlyMisPdf } = await import('@/lib/mis/pdfReport');
   return { pdf: buildMonthlyMisPdf(report), filename, source: 'fallback' };
 }
+

@@ -14,16 +14,24 @@ export function formatDateTime(iso: string | null | undefined): string {
   return formatIndiaDateTime(iso);
 }
 
-export function getDueBadge(endDate: string | null | undefined): {
+export function getDueBadge(endDate: string | null | undefined, status?: string): {
   label: string;
   color: string;
 } {
   if (!endDate) return { label: 'Date pending', color: 'bg-gray-100 text-gray-600' };
+  if (status === 'Completed' || status === 'Verified') {
+    return { label: formatDate(endDate), color: STATUS_COLORS[status] || 'bg-gray-100 text-gray-600' };
+  }
   const dueKey = indiaDateKey(endDate);
   const todayKey = indiaTodayKey();
   if (!dueKey) return { label: 'Date pending', color: 'bg-gray-100 text-gray-600' };
   const days = indiaDayOffset(todayKey, dueKey);
-  if (days < 0) return { label: 'Overdue', color: 'bg-red-100 text-red-700' };
+  if (days < 0) {
+    if (status && status !== 'Pending Accept' && status !== 'In Progress' && status !== 'Delay Requested' && status !== 'Overdue') {
+      return { label: formatDate(endDate), color: STATUS_COLORS[status] || 'bg-gray-100 text-gray-600' };
+    }
+    return { label: 'Overdue', color: 'bg-red-100 text-red-700' };
+  }
   if (days === 0) return { label: 'Due Today', color: 'bg-orange-100 text-orange-700' };
   if (days === 1) return { label: 'Due Tomorrow', color: 'bg-yellow-100 text-yellow-700' };
   if (days <= 3) return { label: `${days}d left`, color: 'bg-yellow-50 text-yellow-600' };

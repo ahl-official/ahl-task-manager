@@ -136,25 +136,26 @@ export async function buildMisMasterReport(input: {
     const { adminGetMisWeeklySnapshots } = await import('@/lib/mis/weeklySnapshot');
     const snapshots = await adminGetMisWeeklySnapshots({ weekKey: week.weekKey });
     const hit = snapshots.find(row => normalizePersonName(row.name) === key) ?? null;
+
     if (hit) {
       person = {
         uid: hit.uid,
         name: hit.name,
         department: hit.department,
         waNumber: hit.waNumber,
-        checklist: hit.checklist,
-        delegation: hit.delegation,
-        fms: hit.fms,
-        parameters: hit.parameters,
+        checklist: hit.checklist || emptyBucket(),
+        delegation: hit.delegation || emptyBucket(),
+        fms: hit.fms || emptyBucket(),
+        parameters: hit.parameters || [],
         planned: hit.planned,
         done: hit.done,
         onTime: hit.onTime,
         gapPercent: hit.gapPercent,
         gapDecimal: hit.gapDecimal,
         onTimeGapPercent: hit.onTimeGapPercent,
-        weekKey: hit.weekKey,
-        weekStart: hit.weekStart,
-        weekEnd: hit.weekEnd,
+        weekKey: hit.weekKey || week.weekKey,
+        weekStart: hit.weekStart || week.weekStart,
+        weekEnd: hit.weekEnd || week.weekEnd,
       };
     }
   }

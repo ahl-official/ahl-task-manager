@@ -90,6 +90,7 @@ export async function generateAndSendMonthlyMisReports(input?: {
   monthIndex0?: number;
   force?: boolean;
   dryRun?: boolean;
+  onlyName?: string;
 }) {
   if (!input?.force && !shouldRunMonthlyReports()) {
     console.warn('[MIS monthly] skipped — not scheduled day (30th, or Feb 28)');
@@ -112,6 +113,10 @@ export async function generateAndSendMonthlyMisReports(input?: {
   const errors: string[] = [];
 
   for (const report of reports) {
+    if (input?.onlyName && !normalizePersonName(report.name).includes(normalizePersonName(input.onlyName))) {
+      continue;
+    }
+
     const phone = report.waNumber || waByName.get(normalizePersonName(report.name)) || '';
     if (!phone) {
       const msg = `${report.name}: no WhatsApp number`;

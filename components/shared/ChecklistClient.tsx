@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertOctagon, CheckCircle2, Circle, MessageSquare, Loader2, RefreshCw, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn, formatDate } from '@/lib/utils';
@@ -49,6 +49,8 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   const [activeRemarkRow, setActiveRemarkRow] = useState<string | null>(null);
   const [remark, setRemark] = useState('');
 
+  const categoryCache = useRef<Record<string, { rows: ChecklistRow[]; elevated: boolean; currentUserName: string }>>({});
+
   const departments = useMemo(() => {
     const seen = new Map<string, string>();
     for (const row of rows) {
@@ -79,24 +81,51 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   }), [rows, department, individual, date, mineOnly, currentUserName]);
   const completedCount = useMemo(() => visibleRows.filter(row => row.completed).length, [visibleRows]);
 
-  async function loadRows(nextCategory = category) {
-    setLoading(true);
+  async function loadRows(nextCategory = category, forceRefresh = false) {
+    const cached = categoryCache.current[nextCategory];
+    if (cached && !forceRefresh) {
+      setRows(cached.rows);
+      setElevated(cached.elevated);
+      setCurrentUserName(cached.currentUserName);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
     try {
       const res = await fetch(`/api/checklist?category=${encodeURIComponent(nextCategory)}`);
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
+      const elevatedVal = Boolean(data.meta?.elevated);
+      const userNameVal = String(data.meta?.currentUserName ?? '');
+      categoryCache.current[nextCategory] = {
+        rows: data.data,
+        elevated: elevatedVal,
+        currentUserName: userNameVal,
+      };
       setRows(data.data);
-      setElevated(Boolean(data.meta?.elevated));
-      setCurrentUserName(String(data.meta?.currentUserName ?? ''));
+      setElevated(elevatedVal);
+      setCurrentUserName(userNameVal);
     } catch (err: any) {
-      toast.error(err.message ?? 'Failed to load checklist');
+      if (!cached) toast.error(err.message ?? 'Failed to load checklist');
     } finally {
       setLoading(false);
     }
   }
 
   async function tick(row: ChecklistRow) {
+    // Optimistic UI update for 0ms instant feedback
+    const prevRows = rows;
+    const updatedRows = (list: ChecklistRow[]) => list.map(item => item.id === row.id
+      ? { ...item, completed: true, completedAt: new Date().toISOString(), status: 'Completed' as const }
+      : item);
+
+    setRows(updatedRows);
+    if (categoryCache.current[row.category]) {
+      categoryCache.current[row.category].rows = updatedRows(categoryCache.current[row.category].rows);
+    }
     setTicking(row.id);
+
     try {
       const res = await fetch('/api/checklist', {
         method: 'POST',
@@ -105,11 +134,19 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
-      setRows(current => current.map(item => item.id === row.id
-        ? { ...item, completed: true, completedAt: data.data.completedAt, status: 'Completed' }
-        : item));
+      const serverUpdated = (list: ChecklistRow[]) => list.map(item => item.id === row.id
+        ? { ...item, completed: true, completedAt: data.data.completedAt, status: 'Completed' as const }
+        : item);
+      setRows(serverUpdated);
+      if (categoryCache.current[row.category]) {
+        categoryCache.current[row.category].rows = serverUpdated(categoryCache.current[row.category].rows);
+      }
       toast.success('Checklist task marked complete');
     } catch (err: any) {
+      setRows(prevRows); // Rollback on failure
+      if (categoryCache.current[row.category]) {
+        categoryCache.current[row.category].rows = prevRows;
+      }
       toast.error(err.message ?? 'Failed to complete checklist task');
     } finally {
       setTicking(null);
@@ -130,14 +167,18 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
-      setRows(current => current.map(item => item.id === row.id ? {
+      const updated = (list: ChecklistRow[]) => list.map(item => item.id === row.id ? {
         ...item,
         dead: data.data.dead,
         deadAt: data.data.deadAt,
         remark: data.data.remark,
         remarkBy: data.data.remarkBy,
-        status: data.data.dead ? 'Dead' : item.completed ? 'Completed' : 'Pending',
-      } : item));
+        status: data.data.dead ? ('Dead' as const) : item.completed ? ('Completed' as const) : ('Pending' as const),
+      } : item);
+      setRows(updated);
+      if (categoryCache.current[row.category]) {
+        categoryCache.current[row.category].rows = updated(categoryCache.current[row.category].rows);
+      }
       setRemark('');
       setActiveRemarkRow(null);
       toast.success(action === 'dead' ? 'Task flagged Dead' : action === 'revive' ? 'Task revived' : 'Remark added');

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cn, STATUS_COLORS } from '@/lib/utils';
 import { addDaysKey, dateKeyInRange, formatWeekLabel, getMisWeekPeriod, getPreviousMisWeekPeriod, listRecentMisWeeks } from '@/lib/mis/week';
-import { formatDmy, indiaDateKey } from '@/lib/utils/indiaDate';
+import { formatDmy, indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import {
   AlertTriangle,
   Building2,
@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import TaskModal from '@/components/shared/TaskModal';
+import { Skeleton, MisReportMasterSkeleton } from '@/components/shared/ScoreSkeleton';
 import type { TaskSerialized } from '@/types';
 
 type TaskFilter = 'all' | 'Pending Accept' | 'In Progress' | 'Completed' | 'Verified' | 'Overdue';
@@ -83,6 +84,12 @@ function initials(value: unknown) {
   return safeName(value).slice(0, 2).toUpperCase();
 }
 
+function formatGapDisplay(gap: number | null | undefined): string {
+  if (gap === null || gap === undefined || !Number.isFinite(gap)) return '—';
+  if (gap > 0) return `+${gap.toFixed(2)}%`;
+  return `${gap.toFixed(2)}%`;
+}
+
 function lookupMis(
   map: Record<string, MisPersonView>,
   uid: string,
@@ -91,81 +98,14 @@ function lookupMis(
   return map[uid] || map[`name:${String(name ?? '').trim().toLowerCase()}`] || null;
 }
 
-function downloadMisPdf(person: MisPersonView, portalMis: number) {
-  const gap = person.gapLabel;
-  const onTimeGap = person.onTimeGapPercent === null || person.onTimeGapPercent === undefined
-    ? '—'
-    : `${person.onTimeGapPercent.toFixed(2)}%`;
-  const bucketRows = [
-    ['Checklist (timely sheets)', person.checklist],
-    ['Delegation (One Time)', person.delegation],
-    ['FMS (sheet workflows)', person.fms],
-  ] as const;
+import { downloadMisWeeklyPdf, downloadMisMasterPdf } from '@/lib/mis/directPdf';
 
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(person.name)} MIS Report</title>
-  <style>
-    body { font-family: Arial, sans-serif; color: #111; padding: 32px; }
-    h1 { font-size: 22px; margin: 0 0 4px; }
-    .sub { color: #666; font-size: 12px; margin-bottom: 24px; }
-    .hero { display: flex; gap: 24px; margin-bottom: 24px; }
-    .box { border: 1px solid #ddd; border-radius: 8px; padding: 16px; min-width: 160px; }
-    .label { font-size: 11px; color: #666; text-transform: uppercase; }
-    .value { font-size: 28px; font-weight: bold; margin-top: 4px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    th, td { border: 1px solid #e5e5e5; padding: 8px 10px; text-align: left; font-size: 13px; }
-    th { background: #f7f7f7; }
-    .foot { margin-top: 28px; font-size: 11px; color: #888; }
-  </style>
-</head>
-<body>
-  <h1>${escapeHtml(person.name)} — MIS Report</h1>
-  <p class="sub">${escapeHtml(person.department || '—')} · Week ${escapeHtml(person.weekStart)} → ${escapeHtml(person.weekEnd)} (${escapeHtml(person.weekKey)})</p>
-  <div class="hero">
-    <div class="box">
-      <div class="label">PDF MIS (gap)</div>
-      <div class="value">${escapeHtml(gap)}</div>
-      <div class="label" style="margin-top:8px">0% = all planned done</div>
-    </div>
-    <div class="box">
-      <div class="label">On-time gap</div>
-      <div class="value">${escapeHtml(onTimeGap)}</div>
-    </div>
-    <div class="box">
-      <div class="label">Portal MIS</div>
-      <div class="value">${portalMis}%</div>
-      <div class="label" style="margin-top:8px">on-time / assigned</div>
-    </div>
-  </div>
-  <table>
-    <thead>
-      <tr><th>Bucket</th><th>Planned</th><th>Done</th><th>On time</th></tr>
-    </thead>
-    <tbody>
-      ${bucketRows.map(([label, b]) =>
-        `<tr><td>${label}</td><td>${b.planned}</td><td>${b.done}</td><td>${b.onTime}</td></tr>`
-      ).join('')}
-      <tr>
-        <td><strong>Total</strong></td>
-        <td><strong>${person.planned}</strong></td>
-        <td><strong>${person.done}</strong></td>
-        <td><strong>${person.onTime}</strong></td>
-      </tr>
-    </tbody>
-  </table>
-  <p class="foot">Formula: ROUND(done / planned × 100 − 100, 2). Generated from AHL Task Manager.</p>
-  <script>window.onload = function () { window.print(); };</script>
-</body>
-</html>`;
-
-  const win = window.open('', '_blank', 'noopener,noreferrer,width=900,height=700');
-  if (!win) return;
-  win.document.open();
-  win.document.write(html);
-  win.document.close();
+async function downloadMisPdf(person: MisPersonView, portalMis: number) {
+  try {
+    await downloadMisWeeklyPdf(person as any, portalMis);
+  } catch (err) {
+    console.error('Failed to generate PDF:', err);
+  }
 }
 
 function escapeHtml(value: string) {
@@ -331,7 +271,9 @@ export default function ScoresClient({
     });
     const lateRows = rows.filter(task => {
       if (task.status === 'Overdue') return true;
-      if (Boolean(task.endDate) && new Date(task.endDate!) < new Date() && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(task.status)) return true;
+      const todayKey = indiaTodayKey();
+      const dueKey = task.endDate ? indiaDateKey(task.endDate) : '';
+      if (dueKey && indiaDayOffset(todayKey, dueKey) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(task.status)) return true;
       if (!task.completedAt) return false;
       const due = task.delayedDate ?? task.endDate;
       return due ? new Date(task.completedAt).getTime() > new Date(due).getTime() : false;
@@ -382,7 +324,10 @@ export default function ScoresClient({
     if (task.status === 'Overdue') return true;
     if (!task.endDate) return false;
     if (task.status !== 'Pending Accept' && task.status !== 'In Progress' && task.status !== 'Delay Requested') return false;
-    return new Date(task.endDate) < new Date();
+    const dueKey = indiaDateKey(task.endDate);
+    const todayKey = indiaTodayKey();
+    if (!dueKey || !todayKey) return false;
+    return indiaDayOffset(todayKey, dueKey) < 0;
   }
 
   function userTasks(uid: string, nextFilter: TaskFilter = filter) {
@@ -443,8 +388,35 @@ export default function ScoresClient({
       ? Math.round(departmentScores.reduce((sum, score) => sum + (score.monthlyScore ?? 0), 0) / departmentScores.length)
       : 0;
 
+    let deptPlanned = 0;
+    let deptDone = 0;
+    let hasMemberMis = false;
+
+    departmentUsers.forEach(user => {
+      const pdf = lookupMis(pdfByKey, user.uid, user.name);
+      if (pdf && pdf.planned > 0) {
+        deptPlanned += pdf.planned;
+        deptDone += pdf.done;
+        hasMemberMis = true;
+      }
+    });
+
+    if (!hasMemberMis && departmentTasks.length > 0) {
+      deptPlanned = departmentTasks.length;
+      deptDone = departmentTasks.filter(task => ['Completed', 'Verified'].includes(task.status)).length;
+    }
+
+    const deptGapPercent = deptPlanned > 0
+      ? Math.round(((deptDone / deptPlanned) * 100 - 100) * 100) / 100
+      : null;
+    const deptGapLabel = formatGapDisplay(deptGapPercent);
+
     return {
       name: department,
+      deptGapPercent,
+      deptGapLabel,
+      deptPlanned,
+      deptDone,
       averageScore,
       users: departmentUsers,
       scores: departmentScores,
@@ -554,6 +526,7 @@ export default function ScoresClient({
     setFilter,
     onOpenTask: setSelectedTask,
     pdfWeekLabel,
+    misLoading,
   };
 
   const dateFilterBar = (
@@ -648,10 +621,6 @@ export default function ScoresClient({
         <span className="hidden whitespace-nowrap text-xs text-gray-500 sm:inline font-medium">
           {selectedWeekMeta.weekKey} · {isCurrentWeek ? 'current' : 'completed'}
         </span>
-
-        {misLoading && (
-          <span className="text-xs text-gray-400 animate-pulse">Loading…</span>
-        )}
       </div>
     </div>
   );
@@ -713,7 +682,7 @@ export default function ScoresClient({
                 </div>
               </div>
               <div className="text-right">
-                <p className={cn('text-2xl font-bold', getScoreColor(block.averageScore))}>{block.averageScore}%</p>
+                <p className={cn('text-2xl font-bold', getGapColor(block.deptGapPercent))}>{block.deptGapLabel}</p>
                 <p className="text-[10px] text-gray-400">Dept MIS</p>
               </div>
             </div>
@@ -753,7 +722,7 @@ export default function ScoresClient({
                   <p className="text-sm text-gray-400">
                     {selectedUser
                       ? 'MIS Report (same gap formula as sheet MIS Report Master)'
-                      : `${selectedBlock.averageScore}% department portal MIS · click a member to open MIS report`}
+                      : `${selectedBlock.deptGapLabel} Dept MIS · click a member to open MIS report`}
                   </p>
                 </div>
               </div>
@@ -799,11 +768,7 @@ export default function ScoresClient({
                     return <p className="text-sm text-gray-400">Member not found.</p>;
                   }
                   if (misLoading && !score.mis) {
-                    return (
-                      <div className="flex min-h-[280px] items-center justify-center rounded-xl border border-gray-100 bg-gray-50 text-sm text-gray-400">
-                        Loading week MIS…
-                      </div>
-                    );
+                    return <MisReportMasterSkeleton />;
                   }
                   return (
                     <MisReportMasterView
@@ -886,6 +851,7 @@ function ScoreList({
   setFilter,
   onOpenTask,
   pdfWeekLabel,
+  misLoading,
 }: {
   scores: any[];
   onSelectUser: (uid: string) => void;
@@ -896,6 +862,7 @@ function ScoreList({
   setFilter: (filter: TaskFilter) => void;
   onOpenTask: (task: TaskSerialized) => void;
   pdfWeekLabel?: string;
+  misLoading?: boolean;
 }) {
   if (scores.length === 0) {
     return <div className="card p-10 text-center text-gray-400">No scores yet</div>;
@@ -1142,88 +1109,13 @@ function MisReportMasterView({
   const misScoreText = report?.gapLabel && report.gapLabel !== '—' ? report.gapLabel : '';
   const parameters = report?.parameters ?? [];
 
-  function downloadMasterPdf() {
-    if (!report || !overall || !onTimeRow) return;
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${escapeHtml(score.name)} MIS Report</title>
-<style>
-body{font-family:Arial,sans-serif;padding:16px;color:#111}
-.mis{color:#dc2626;font-size:22px;font-weight:700;margin:8px 0 16px}
-table{border-collapse:collapse;width:100%;font-size:11px}
-th,td{border:1px solid #ccc;padding:4px 6px;text-align:left}
-th{background:#f5f5f5}
-.score{color:#dc2626;font-weight:700}
-</style></head><body>
-<table>
-<tr>
-  <td colspan="3"><b>MIS Report</b></td>
-  <td>Week Start Date</td><td>Week End Date</td><td>Week No</td>
-  <td colspan="2"><b>MIS Score</b></td>
-</tr>
-<tr>
-  <td colspan="3"></td>
-  <td>${escapeHtml(report.weekStartLabel)}</td>
-  <td>${escapeHtml(report.weekEndLabel)}</td>
-  <td>${report.weekNumber || ''}</td>
-  <td colspan="2" class="score">${escapeHtml(misScoreText)}</td>
-</tr>
-<tr>
-  <th>Person Name</th><th>KRA</th><th>KPI</th>
-  <th>Last Week Planned Percentage</th>
-  <th>Current Week Planned No Of Works</th>
-  <th>Current Week Acutal No of Works</th>
-  <th>Current Week MIS Score</th>
-  <th>Next Week Planned Percentage</th>
-</tr>
-<tr>
-  <td>${escapeHtml(report.name)}</td>
-  <td>${escapeHtml(overall.kra)}</td>
-  <td>${escapeHtml(overall.kpi)}</td>
-  <td>${escapeHtml(report.lastWeekPlannedPercent || '')}</td>
-  <td>${overall.planned}</td>
-  <td>${overall.done}</td>
-  <td class="score">${overall.gapPercent == null ? '' : `${overall.gapPercent.toFixed(2)}%`}</td>
-  <td>${escapeHtml(report.nextWeekPlannedPercent || '')}</td>
-</tr>
-<tr>
-  <td></td>
-  <td>${escapeHtml(onTimeRow.kra)}</td>
-  <td>${escapeHtml(onTimeRow.kpi)}</td>
-  <td></td>
-  <td>${onTimeRow.planned}</td>
-  <td>${onTimeRow.done}</td>
-  <td class="score">${onTimeRow.gapPercent == null ? '' : `${onTimeRow.gapPercent.toFixed(2)}%`}</td>
-  <td></td>
-</tr>
-${sectionRollups.map(row => `<tr>
-  <td>${escapeHtml(row.label)}</td>
-  <td>${escapeHtml(row.kra)}</td>
-  <td>${escapeHtml(row.kpi)}</td>
-  <td></td>
-  <td>${row.planned}</td>
-  <td>${row.done}</td>
-  <td class="score">${row.gapPercent == null ? '' : `${row.gapPercent.toFixed(2)}%`}</td>
-  <td></td>
-</tr>`).join('')}
-</table>
-${parameters.length ? `<h3 style="margin-top:20px">Parameters</h3>
-<table>
-<tr><th>Parameter</th><th>Section</th><th>Planned</th><th>Actual Done</th><th>On-Time</th><th>Gap %</th></tr>
-${parameters.map(p => `<tr>
-  <td>${escapeHtml(p.label)}</td>
-  <td>${escapeHtml(p.section)}</td>
-  <td>${p.planned}</td>
-  <td>${p.done}</td>
-  <td>${p.onTime}</td>
-  <td class="score">${p.gapPercent == null ? '' : `${p.gapPercent.toFixed(2)}%`}</td>
-</tr>`).join('')}
-</table>` : ''}
-<script>window.onload=function(){window.print();}</script>
-</body></html>`;
-    const win = window.open('', '_blank', 'noopener,noreferrer,width=1100,height=800');
-    if (!win) return;
-    win.document.open();
-    win.document.write(html);
-    win.document.close();
+  async function downloadMasterPdf() {
+    if (!report) return;
+    try {
+      await downloadMisMasterPdf(report);
+    } catch (err) {
+      console.error('Failed to generate master PDF:', err);
+    }
   }
 
   return (

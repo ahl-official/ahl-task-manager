@@ -318,3 +318,71 @@ export async function adminGetLatestMisByPerson(): Promise<MisWeeklySnapshot[]> 
   }
   return Array.from(latest.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/**
+ * Generates and sends executive Weekly Performance PDF Reports via WhatsApp.
+ */
+export async function generateAndSendWeeklyMisPdfReports(input?: {
+  weekStart?: string;
+  weekEnd?: string;
+  onlyName?: string;
+  dryRun?: boolean;
+}) {
+  const weekMeta = input?.weekStart
+    ? getMisWeekPeriod(input.weekStart)
+    : getPreviousMisWeekPeriod();
+
+  const weekStart = input?.weekStart ?? weekMeta.weekStart;
+  const weekEnd = input?.weekEnd ?? weekMeta.weekEnd;
+  const scores = await computeMisScoresForWeek(weekStart, weekEnd);
+
+  const { adminGetAllUsers } = await import('@/lib/firebase/users');
+  const { buildWeeklyMisPdfAsync, weeklyMisPdfFilename } = await import('@/lib/mis/pdfReport');
+  const { sendWhatsAppFile } = await import('@/lib/waha');
+
+  const users = await adminGetAllUsers().catch(() => []);
+  const waByName = new Map(users.map(u => [normalizePersonName(u.name), u.waNumber]));
+
+  let sent = 0;
+  const errors: string[] = [];
+
+  for (const score of scores) {
+    if (score.planned <= 0) continue;
+    if (input?.onlyName && !normalizePersonName(score.name).includes(normalizePersonName(input.onlyName))) {
+      continue;
+    }
+
+    const phone = score.waNumber || waByName.get(normalizePersonName(score.name)) || '';
+    if (!phone) {
+      errors.push(`${score.name}: no WhatsApp number`);
+      continue;
+    }
+
+    if (input?.dryRun) continue;
+
+    try {
+      const pdf = await buildWeeklyMisPdfAsync(score, {
+        weekKey: weekMeta.weekKey,
+        weekStart,
+        weekEnd,
+      });
+      const filename = weeklyMisPdfFilename(score.name, weekMeta.weekKey);
+      const caption = `Hello ${score.name}, please find your Weekly Performance Report (Week ${weekMeta.weekKey}) attached.`;
+
+      const result = await sendWhatsAppFile({
+        waNumber: phone,
+        filename,
+        mimetype: 'application/pdf',
+        data: pdf,
+        caption,
+      });
+
+      if (result.ok) sent += 1;
+      else errors.push(`${score.name}: ${result.error || result.body || 'send failed'}`);
+    } catch (err) {
+      errors.push(`${score.name}: ${String(err)}`);
+    }
+  }
+
+  return { sent, errors, total: scores.length };
+}

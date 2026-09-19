@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { ArrowRight, Building2, Clock3, X } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS } from '@/lib/utils';
+import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import TaskModal from '@/components/shared/TaskModal';
 import type { TaskSerialized } from '@/types';
 
@@ -28,7 +29,10 @@ function isOverdue(task: TaskSerialized): boolean {
   if (task.status === 'Overdue') return true;
   if (!task.endDate) return false;
   if (task.status !== 'Pending Accept' && task.status !== 'In Progress' && task.status !== 'Delay Requested') return false;
-  return new Date(task.endDate) < new Date();
+  const dueKey = indiaDateKey(task.endDate);
+  const todayKey = indiaTodayKey();
+  if (!dueKey || !todayKey) return false;
+  return indiaDayOffset(todayKey, dueKey) < 0;
 }
 
 // Add one task to a rollup, keeping every displayed status count consistent.
@@ -163,7 +167,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
   const justAssignedTasks = useMemo(() =>
     taskItems
       .filter(task => ACTIVE_STATUSES.has(task.status))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .sort((a, b) => (new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) || a.taskId.localeCompare(b.taskId))
       .slice(0, 6),
     [taskItems]
   );
@@ -229,7 +233,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
                   <div>
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <span className="font-mono text-xs font-medium text-brand-600">{task.taskId}</span>
-                      <span className={cn('badge text-[10px]', isFresh ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-500')}>
+                      <span suppressHydrationWarning className={cn('badge text-[10px]', isFresh ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-500')}>
                         {isFresh ? 'New' : getTimeAgo(task.createdAt)}
                       </span>
                     </div>
@@ -364,7 +368,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
               {[
                 { label: 'Total', value: selectedDepartmentBlock.counts.total, color: 'text-gray-700' },
                 { label: 'Pending', value: selectedDepartmentBlock.counts.pending, color: 'text-yellow-700' },
-                { label: 'Active', value: selectedDepartmentBlock.counts.inProgress, color: 'text-blue-700' },
+                { label: 'In Progress', value: selectedDepartmentBlock.counts.inProgress, color: 'text-blue-700' },
                 { label: 'Done', value: selectedDepartmentBlock.counts.done, color: 'text-green-700' },
                 { label: 'OD', value: selectedDepartmentBlock.counts.overdue, color: 'text-red-700' },
               ].map(item => (
@@ -409,7 +413,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
                       <div className="grid grid-cols-4 gap-2 lg:w-[360px]">
                         {[
                           { label: 'Total', value: counts.total, color: 'text-gray-700' },
-                          { label: 'Active', value: counts.inProgress, color: 'text-blue-700' },
+                          { label: 'In Progress', value: counts.inProgress, color: 'text-blue-700' },
                           { label: 'Done', value: counts.completed + counts.verified, color: 'text-green-700' },
                           { label: 'OD', value: counts.overdue, color: 'text-red-700' },
                         ].map(item => (

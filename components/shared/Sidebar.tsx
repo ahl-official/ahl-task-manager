@@ -7,7 +7,7 @@ import {
   BarChart2, RefreshCw, PlusCircle, LogOut, Menu, X,
   Building2, ListChecks, HelpCircle,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { auth } from '@/lib/firebase/client';
 import { signOut } from 'firebase/auth';
@@ -16,7 +16,7 @@ import type { SessionUser } from '@/types';
 
 const ADMIN_NAV = [
   { href: '/admin',             icon: LayoutDashboard, label: 'Dashboard' },
-  { href: '/checklist',          icon: ListChecks,      label: 'Checklist'  },
+  { href: '/admin/checklist',   icon: ListChecks,      label: 'Checklist'  },
   { href: '/admin/tasks',       icon: CheckSquare,     label: 'All Tasks'  },
   { href: '/admin/calendar',    icon: Calendar,        label: 'Calendar'   },
   { href: '/admin/create-task', icon: PlusCircle,      label: 'Create Task'},
@@ -27,7 +27,7 @@ const ADMIN_NAV = [
 
 const USER_NAV = [
   { href: '/portal',             icon: LayoutDashboard, label: 'My Tasks'       },
-  { href: '/checklist',           icon: ListChecks,      label: 'Checklist'      },
+  { href: '/portal/checklist',   icon: ListChecks,      label: 'Checklist'      },
   { href: '/portal/department',  icon: Building2,       label: 'Dept Tasks'     },
   { href: '/portal/revisions',   icon: RefreshCw,       label: 'Revisions'      },
   { href: '/portal/create-task', icon: PlusCircle,      label: 'Create Task'    },
@@ -38,13 +38,19 @@ const USER_NAV = [
 export default function Sidebar({
   role,
   session,
-}: {
+  }: {
   role: 'admin' | 'user';
   session: SessionUser;
 }) {
   const pathname = usePathname();
   const router   = useRouter();
   const [open, setOpen] = useState(false);
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPendingHref(null);
+  }, [pathname]);
+
   const nav = role === 'admin'
     ? ADMIN_NAV
     : USER_NAV.filter(item => item.href !== '/portal/department' || session.role === 'leader');
@@ -55,6 +61,8 @@ export default function Sidebar({
     toast.success('Logged out');
     router.push('/login');
   }
+
+  const currentPath = pendingHref || pathname;
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
@@ -75,14 +83,17 @@ export default function Sidebar({
       <nav className="flex-1 px-3 py-4 space-y-0.5">
         {nav.map(({ href, icon: Icon, label }) => {
           const active =
-            pathname === href ||
-            (href === '/checklist' && pathname.endsWith('/checklist')) ||
-            (href !== '/admin' && href !== '/portal' && href !== '/checklist' && pathname.startsWith(href));
+            currentPath === href ||
+            (href !== '/admin' && href !== '/portal' && currentPath.startsWith(href));
           return (
             <Link
               key={href}
               href={href}
-              onClick={() => setOpen(false)}
+              prefetch={true}
+              onClick={() => {
+                setPendingHref(href);
+                setOpen(false);
+              }}
               className={cn(
                 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors',
                 active

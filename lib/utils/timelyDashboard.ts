@@ -53,9 +53,24 @@ export async function getPersonalTimelyTasks(session: SessionUser): Promise<Task
     .map(row => toAppTask(row, session));
 }
 
+export function isOneTimeCategory(category?: string | null): boolean {
+  if (!category) return true;
+  const lower = category.toLowerCase().replace(/[^a-z]/g, '');
+  return lower === 'onetime' || !['daily', 'weekly', 'monthly'].includes(lower);
+}
+
 export function mergePersonalDashboardTasks(databaseTasks: Task[], timelyTasks: Task[]) {
-  const delegated = databaseTasks.filter(task => task.category === 'One Time');
-  return [...timelyTasks, ...delegated].sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis());
+  const delegated = databaseTasks
+    .filter(task => isOneTimeCategory(task.category))
+    .map(task => ({
+      ...task,
+      category: 'One Time' as const,
+    }));
+  return [...timelyTasks, ...delegated].sort((a, b) => {
+    const aTime = typeof (a.createdAt as any)?.toMillis === 'function' ? a.createdAt.toMillis() : new Date(a.createdAt as any).getTime() || 0;
+    const bTime = typeof (b.createdAt as any)?.toMillis === 'function' ? b.createdAt.toMillis() : new Date(b.createdAt as any).getTime() || 0;
+    return bTime - aTime;
+  });
 }
 
 export async function getTimelyTaskForSession(session: SessionUser, taskId: string, force = false) {

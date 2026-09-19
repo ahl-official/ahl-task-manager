@@ -3,8 +3,10 @@ import { getSession } from '@/lib/utils/auth';
 import {
   adminCreateTask,
   adminGetAllTasks,
+  adminGetTaskCounts,
   adminGetTasksByAssignee,
   adminGetTasksByHandoff,
+  adminSearchTasks,
   serializeTask,
 } from '@/lib/firebase/tasks';
 import { adminIncrementScore, adminLog } from '@/lib/firebase/scores';
@@ -20,12 +22,13 @@ import { adminDb } from '@/lib/firebase/admin';
 import { adminGetUserByUid } from '@/lib/firebase/users';
 import { hasCloudflareApi } from '@/lib/cloudflare/api';
 import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils/timelyDashboard';
+import { appendTimelyTaskToSheetInput, ChecklistSheetCategory } from '@/lib/google/sheets';
 
 function normalizeRole(role: string) {
   return role === 'user' ? 'member' : role;
 }
 
-// GET /api/tasks?scope=all|mine|handoff&status=...&department=...
+// GET /api/tasks?scope=all|mine|handoff&status=...&department=...&search=...&counts=true
 export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
@@ -33,7 +36,9 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const scope      = searchParams.get('scope') ?? 'mine';
   const status     = searchParams.get('status') ?? undefined;
-  const department = searchParams.get('department') ?? undefined;
+  const department = searchParams.get('department') ?? (session.role === 'leader' ? session.department : undefined);
+  const searchQuery = searchParams.get('search') ?? searchParams.get('q') ?? undefined;
+  const wantCounts = searchParams.get('counts') === 'true';
   const requestedLimit = searchParams.get('limit');
   const limitParam = requestedLimit ? Number(requestedLimit) : null;
   const maxResults = typeof limitParam === 'number' && Number.isFinite(limitParam)
@@ -41,9 +46,17 @@ export async function GET(req: NextRequest) {
     : null;
 
   try {
+    if (wantCounts) {
+      const counts = await adminGetTaskCounts(department);
+      return NextResponse.json({ success: true, data: counts });
+    }
+
     let tasks;
 
-    if (scope === 'all') {
+    if (searchQuery && searchQuery.trim()) {
+      tasks = await adminSearchTasks(searchQuery, { department, limit: maxResults ?? 100 });
+      tasks = filterTasksForSession(session, tasks);
+    } else if (scope === 'all') {
       tasks = await adminGetAllTasks({ status: status as any, department, limit: maxResults });
       tasks = filterTasksForSession(session, tasks);
     } else if (scope === 'handoff') {
@@ -102,6 +115,43 @@ export async function POST(req: NextRequest) {
         success: false,
         error: 'Due date must be after start date.',
       }, { status: 400 });
+    }
+
+    if (['Daily', 'Weekly', 'Monthly'].includes(body.category)) {
+      const timelyResult = await appendTimelyTaskToSheetInput({
+        category: body.category as ChecklistSheetCategory,
+        description: body.description,
+        assignedToUid: body.assignedTo,
+        assignedToName: assignee.name,
+        assignedToDept: assignee.department,
+        startDate: body.startDate,
+        endDate: body.endDate,
+        session,
+      });
+
+      await adminIncrementScore(assignee.uid, 'tasksAssigned').catch(() => {});
+      await adminLog('TASK_CREATED', `Timely task created in Google Sheets: ${timelyResult.description}`, {
+        taskId: timelyResult.taskId,
+        uid: session.uid,
+      }).catch(() => {});
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          taskId: timelyResult.taskId,
+          description: timelyResult.description,
+          assignedTo: assignee.uid,
+          assignedToName: assignee.name,
+          category: body.category,
+          status: 'In Progress',
+          priority: body.priority || 'Medium',
+          startDate: body.startDate || null,
+          endDate: body.endDate || null,
+          createdAt: new Date().toISOString(),
+          createdBy: session.uid,
+          createdByName: session.name,
+        },
+      }, { status: 201 });
     }
 
     const skipAcceptance = session.role === 'admin';

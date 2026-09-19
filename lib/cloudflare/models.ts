@@ -19,8 +19,13 @@ export function cfUser(row: any): AHLUser | null {
 
 export function cfTask(row: any): Task | null {
   if (!row) return null;
+  let category = row.category;
+  if (!category || category.toLowerCase() === 'one-time' || category.toLowerCase() === 'onetime' || category.toLowerCase() === 'delegation') {
+    category = 'One Time';
+  }
   return {
     ...row,
+    category,
     startDate: timestamp(row.startDate),
     endDate: timestamp(row.endDate),
     delayedDate: timestamp(row.delayedDate),

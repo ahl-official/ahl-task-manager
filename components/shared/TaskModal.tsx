@@ -30,9 +30,11 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const isHandoff  = task.handoffUid === currentUid;
   const isAdmin    = role === 'admin';
   const isTimelySheet = task.createdBy === 'timely-sheet' || /^(office|salon|weekly)-/i.test(task.taskId);
-  const canDelete = isAdmin && !isTimelySheet;
-  const due        = getDueBadge(task.endDate);
-  const needsDates = isAssignee && task.status === 'In Progress' && (!task.startDate || !task.endDate);
+  const isDone = task.status === 'Completed' || task.status === 'Verified';
+  const canDelete  = isAdmin && !isTimelySheet && !isDone;
+  const displayStatus = task.status;
+  const due        = getDueBadge(task.endDate, displayStatus);
+  const needsDates = !isDone && isAssignee && task.status === 'In Progress' && (!task.startDate || !task.endDate);
   const canChangeDead = !isTimelySheet && (isAssignee || isHandoff || isAdmin);
 
   useEffect(() => {
@@ -140,7 +142,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
           <div>
             <div className="flex items-center gap-2 mb-1">
               <span className="text-xs font-mono text-brand-600 bg-brand-50 px-2 py-0.5 rounded-md">{task.taskId}</span>
-              <span className={cn('badge', STATUS_COLORS[task.status])}>{task.status}</span>
+              <span className={cn('badge', STATUS_COLORS[displayStatus])}>{displayStatus}</span>
               <span className={cn('badge', PRIORITY_COLORS[task.priority])}>{task.priority}</span>
             </div>
             <p className="text-base font-semibold text-gray-900 leading-snug">{task.description}</p>
@@ -164,16 +166,13 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
               label="Due Date"
               value={
                 <div className="flex items-center gap-1.5">
-                  <span className="text-sm font-medium text-gray-800">{formatDate(task.endDate)}</span>
-                  {due.label === 'Overdue' && task.status !== 'Completed' && task.status !== 'Verified' && (
+                  <span className="text-sm font-medium text-gray-800">{formatDate(task.delayedDate || task.endDate)}</span>
+                  {!isDone && due.label === 'Overdue' && (
                     <span className="badge bg-red-100 text-red-700">Overdue</span>
                   )}
                 </div>
               }
             />
-            {task.delayedDate && (
-              <Detail icon={Calendar} label="Delayed To" value={formatDate(task.delayedDate)} className="col-span-2" />
-            )}
           </div>
 
           {isTimelySheet && (
@@ -182,7 +181,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             </p>
           )}
 
-          {task.status !== 'Completed' && task.status !== 'Verified' && (isAssignee || isHandoff || isAdmin) && !isTimelySheet && (
+          {!isDone && (isAssignee || isHandoff || isAdmin) && !isTimelySheet && (
             <div className="rounded-md border border-gray-200 bg-white p-3">
               <p className="mb-2 text-xs font-semibold text-gray-700">Dynamic priority</p>
               <div className="flex flex-wrap gap-2">
@@ -254,7 +253,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                   loading={loading === 'remark'}
                   color="blue"
                 />
-                {canChangeDead && task.status !== 'Dead' && task.status !== 'Completed' && task.status !== 'Verified' && (
+                {canChangeDead && task.status !== 'Dead' && !isDone && (
                   <ActionButton
                     label="Flag Dead"
                     onClick={() => {
@@ -286,7 +285,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             {/* Assignee / Admin actions */}
             {(isAssignee || isAdmin) && (
               <div className="flex gap-2 flex-wrap">
-                {task.status === 'Pending Accept' && (
+                {task.status === 'Pending Accept' && !isDone && (
                   <div className="w-full rounded-xl bg-blue-50 p-3">
                     <p className="mb-2 text-xs font-semibold text-blue-800">Accept and set timeline</p>
                     <div className="grid gap-2 sm:grid-cols-2">
@@ -324,7 +323,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                   </div>
                 )}
 
-                {['In Progress', 'Delay Requested'].includes(task.status) && (
+                {['In Progress', 'Delay Requested'].includes(task.status) && !isDone && (
                   <ActionButton label="Mark Complete" onClick={() => doAction('complete')} loading={loading === 'complete'} color="green" />
                 )}
               </div>
@@ -372,7 +371,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             )}
 
             {/* ── Date Management ── */}
-            {!isTimelySheet && isAssignee && task.status === 'In Progress' && task.endDate && (
+            {!isTimelySheet && isAssignee && task.status === 'In Progress' && task.endDate && !isDone && (
               <div className="bg-orange-50 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-xs font-semibold text-orange-800 flex items-center gap-1.5">

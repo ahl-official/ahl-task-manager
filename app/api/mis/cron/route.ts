@@ -6,7 +6,7 @@ import {
   generateAndSendReports,
 } from '@/lib/mis/appsScript';
 import { generateAndSendMonthlyMisReports } from '@/lib/mis/monthlyReport';
-import { archiveMisGaps, saveMisWeeklySnapshots } from '@/lib/mis/weeklySnapshot';
+import { archiveMisGaps, saveMisWeeklySnapshots, generateAndSendWeeklyMisPdfReports } from '@/lib/mis/weeklySnapshot';
 
 function authorized(req: NextRequest) {
   const headerSecret = req.headers.get('x-cron-secret');
@@ -106,6 +106,7 @@ async function runAction(action: string, body: Record<string, unknown> = {}) {
       dryRun: Boolean(body.dryRun),
       year: typeof body.year === 'number' ? body.year : undefined,
       monthIndex0: typeof body.monthIndex0 === 'number' ? body.monthIndex0 : undefined,
+      onlyName: typeof body.onlyName === 'string' ? body.onlyName : undefined,
     });
   }
 
@@ -118,13 +119,22 @@ async function runAction(action: string, body: Record<string, unknown> = {}) {
     });
   }
 
-  // App-computed weekly snapshots → Cloudflare mis_weekly
+  // App-computed weekly snapshots → Cloudflare mis_weekly + Weekly PDF delivery
   // Sources: Checklist Masters + Delegation (Cloudflare One Time) + FMS sheet tabs
   if (action === 'weekly') {
-    return saveMisWeeklySnapshots({
+    const saveSummary = await saveMisWeeklySnapshots({
       weekStart: typeof body.weekStart === 'string' ? body.weekStart : undefined,
       weekEnd: typeof body.weekEnd === 'string' ? body.weekEnd : undefined,
     });
+
+    const sendSummary = await generateAndSendWeeklyMisPdfReports({
+      weekStart: typeof body.weekStart === 'string' ? body.weekStart : undefined,
+      weekEnd: typeof body.weekEnd === 'string' ? body.weekEnd : undefined,
+      onlyName: typeof body.onlyName === 'string' ? body.onlyName : undefined,
+      dryRun: Boolean(body.dryRun),
+    });
+
+    return { ...saveSummary, pdfReports: sendSummary };
   }
 
   throw new Error('Unknown action');
@@ -179,6 +189,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
-  const action = new URL(req.url).searchParams.get('action') || 'weekly';
-  return handleCron('GET', action, { force: false });
+  const url = new URL(req.url);
+  const action = url.searchParams.get('action') || 'weekly';
+  const force = url.searchParams.get('force') === '1' || url.searchParams.get('force') === 'true';
+  const dryRun = url.searchParams.get('dryRun') === '1' || url.searchParams.get('dryRun') === 'true';
+  const onlyName = url.searchParams.get('onlyName') || undefined;
+  return handleCron('GET', action, { force, dryRun, onlyName });
 }

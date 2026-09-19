@@ -441,7 +441,8 @@ export async function adminGetAllTasks(filters?: {
     if (filters?.status) params.set('status', filters.status);
     if (filters?.department) params.set('department', filters.department);
     params.set('limit', filters?.limit === null ? 'all' : String(filters?.limit ?? DEFAULT_TASK_READ_LIMIT));
-    const key = `tasks:all:${filters?.department ?? 'any'}:${filters?.status ?? 'any'}:${filters?.limit ?? DEFAULT_TASK_READ_LIMIT}`;
+    const limitKey = filters?.limit === null ? 'all' : String(filters?.limit ?? DEFAULT_TASK_READ_LIMIT);
+    const key = `tasks:all:${filters?.department ?? 'any'}:${filters?.status ?? 'any'}:${limitKey}`;
     return cachedFirestoreRead(key, 2 * 60 * 1000, async () => {
       const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
       return tasks.map(cfTask).filter(Boolean) as Task[];
@@ -484,6 +485,72 @@ export async function adminGetAllTasks(filters?: {
     handleFirestoreReadError('adminGetAllTasks', err);
     return [];
   }
+}
+
+export interface TaskAggregateCounts {
+  total: number;
+  pending: number;
+  inProgress: number;
+  delayRequested: number;
+  overdue: number;
+  completed: number;
+  verified: number;
+  dead: number;
+}
+
+export async function adminGetTaskCounts(department?: string): Promise<TaskAggregateCounts> {
+  const key = `tasks:counts:${department ?? 'all'}`;
+  return cachedFirestoreRead(key, 60 * 1000, async () => {
+    const all = await adminGetAllTasks({ department, limit: null });
+    let pending = 0;
+    let inProgress = 0;
+    let delayRequested = 0;
+    let overdue = 0;
+    let completed = 0;
+    let verified = 0;
+    let dead = 0;
+
+    for (const t of all) {
+      if (t.status === 'Pending Accept') pending++;
+      else if (t.status === 'In Progress') inProgress++;
+      else if (t.status === 'Delay Requested') delayRequested++;
+      else if (t.status === 'Overdue') overdue++;
+      else if (t.status === 'Completed') completed++;
+      else if (t.status === 'Verified') verified++;
+      else if (t.status === 'Dead') dead++;
+    }
+
+    return {
+      total: all.length,
+      pending,
+      inProgress,
+      delayRequested,
+      overdue,
+      completed,
+      verified,
+      dead,
+    };
+  });
+}
+
+export async function adminSearchTasks(queryText: string, options?: { department?: string; limit?: number }): Promise<Task[]> {
+  const q = (queryText || '').trim().toLowerCase();
+  if (!q) return [];
+  const max = options?.limit ?? 50;
+
+  const all = await adminGetAllTasks({ department: options?.department, limit: null });
+  const matches = all.filter(t => {
+    if ((t.taskId || '').toLowerCase().includes(q)) return true;
+    if ((t.description || '').toLowerCase().includes(q)) return true;
+    if ((t.assignedToName || '').toLowerCase().includes(q)) return true;
+    if ((t.createdByName || '').toLowerCase().includes(q)) return true;
+    if ((t.department || '').toLowerCase().includes(q)) return true;
+    if ((t.category || '').toLowerCase().includes(q)) return true;
+    if ((t.notes || '').toLowerCase().includes(q)) return true;
+    return false;
+  });
+
+  return matches.slice(0, max);
 }
 
 export async function adminGetOverdueTasks(): Promise<Task[]> {

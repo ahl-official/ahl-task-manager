@@ -294,10 +294,10 @@ interface ChecklistSheetData {
 const sheetDataCache = new Map<ChecklistSheetCategory, { expiresAt: number; data: ChecklistSheetData }>();
 let timelyBundleCache: { expiresAt: number; data: ChecklistSheetData } | null = null;
 let timelyAllPeriodsCache: { expiresAt: number; data: ChecklistSheetData } | null = null;
-const SHEET_CACHE_MS = 15_000;
-const MIS_ALL_PERIODS_CACHE_MS = 60_000;
+const SHEET_CACHE_MS = 5 * 60 * 1000; // 5 minutes in-memory cache for timely recurring tasks
+const MIS_ALL_PERIODS_CACHE_MS = 5 * 60 * 1000; // 5 minutes in-memory cache for MIS periods
 
-function clearTimelyCache() {
+export function clearTimelyCache() {
   timelyBundleCache = null;
   timelyAllPeriodsCache = null;
   sheetDataCache.clear();
@@ -737,3 +737,88 @@ export async function updateChecklistSheetTask(input: {
     remarkBy: input.session.name,
   };
 }
+
+export async function appendTimelyTaskToSheetInput(input: {
+  category: ChecklistSheetCategory;
+  description: string;
+  assignedToUid: string;
+  assignedToName?: string;
+  assignedToDept?: string;
+  startDate?: string;
+  endDate?: string;
+  session: SessionUser;
+}) {
+  const timelyData = await getAllTimelyChecklistData(true);
+  const assigneeUser = timelyData.users.find(u => u.portalUserId === input.assignedToUid)
+    || timelyData.users.find(u => namesEqual(u.displayName, input.assignedToName || ''))
+    || timelyData.users.find(u => namesEqual(u.userId, input.assignedToUid));
+
+  let doerName = assigneeUser?.displayName || input.assignedToName || '';
+  let department = assigneeUser?.department || input.assignedToDept || '';
+
+  if (!doerName) {
+    throw new Error(`Assignee details could not be found for UID ${input.assignedToUid}`);
+  }
+
+  let targetSpreadsheetId = process.env.CHECKLIST_WEEKLY_MONTHLY_ID || DEFAULT_WEEKLY_MONTHLY_ID;
+
+  if (input.category === 'Daily') {
+    const officeId = process.env.CHECKLIST_OFFICE_DAILY_ID || DEFAULT_OFFICE_DAILY_ID;
+    const salonId = process.env.CHECKLIST_SALON_DAILY_ID || DEFAULT_SALON_DAILY_ID;
+
+    const [officeDoers, salonDoers] = await Promise.all([
+      readSpreadsheetValues(officeId, `${quoteSheetName('Doer List')}!A2:C`).catch(() => [[]]),
+      readSpreadsheetValues(salonId, `${quoteSheetName('Doer List')}!A2:C`).catch(() => [[]]),
+    ]);
+
+    const officeMatch = (officeDoers[0] || []).find(row => namesEqual(cell(row, 0), doerName));
+    const salonMatch = (salonDoers[0] || []).find(row => namesEqual(cell(row, 0), doerName));
+
+    if (salonMatch && !officeMatch) {
+      targetSpreadsheetId = salonId;
+      department = department || cell(salonMatch, 1);
+    } else if (officeMatch) {
+      targetSpreadsheetId = officeId;
+      department = department || cell(officeMatch, 1);
+    } else {
+      throw new Error(`Assignee "${doerName}" was not found in the Doer List of Office or Salon Daily sheets. Please add them to the Doer List tab in Google Sheets first.`);
+    }
+  } else {
+    // Weekly or Monthly
+    const weeklyDoers = await readSpreadsheetValues(targetSpreadsheetId, `${quoteSheetName('Doer List')}!A2:C`).catch(() => [[]]);
+    const match = (weeklyDoers[0] || []).find(row => namesEqual(cell(row, 0), doerName));
+    if (!match) {
+      throw new Error(`Assignee "${doerName}" was not found in the Doer List of the Weekly/Monthly sheet. Please add them to the Doer List tab in Google Sheets first.`);
+    }
+    department = department || cell(match, 1);
+  }
+
+  const freqMap: Record<string, string> = { Daily: 'D', Weekly: 'W', Monthly: 'M' };
+  const freqCode = freqMap[input.category] || 'D';
+
+  const rawDate = input.startDate || input.endDate || indiaTodayKey();
+  const [yr, mo, dy] = rawDate.split('-');
+  const formattedDate = `${dy.padStart(2, '0')}/${mo.padStart(2, '0')}/${yr}`;
+
+  const range = `${quoteSheetName('Task List')}!A:F`;
+  const values = [[input.description, doerName, department, freqCode, formattedDate, 'Pending']];
+
+  await sheetsFetch(`/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
+    method: 'POST',
+    body: JSON.stringify({ values }),
+  }, targetSpreadsheetId);
+
+  clearTimelyCache();
+
+  return {
+    taskId: `timely-${Date.now()}`,
+    description: input.description,
+    category: input.category,
+    assignedToName: doerName,
+    department,
+    targetSpreadsheetId,
+    startDate: rawDate,
+    endDate: rawDate,
+  };
+}
+
