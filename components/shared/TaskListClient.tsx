@@ -347,33 +347,37 @@ export default function TaskListClient({ tasks, role, currentUid, currentUserNam
         </section>
       )}
 
+      {/* Top right action beside the bell */}
       {role === 'admin' && (
-        <div className="surface-enter mb-4 grid gap-3 md:grid-cols-5 items-stretch">
-          <div className="card border-0 bg-gray-50 p-4 md:col-span-2 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs font-medium text-gray-400">Viewing</p>
-              <p className="mt-0.5 text-lg font-semibold text-gray-900 truncate">{scopeLabel}</p>
-              {selectedUser && <p className="text-xs text-gray-400 truncate">{selectedUser.department || 'No department'}</p>}
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setMineOnly(current => {
-                  const next = !current;
-                  if (next) {
-                    setUserFilter('all');
-                    setDepartment('all');
-                  }
-                  return next;
-                });
-              }}
-              className={cn(
-                'btn-secondary py-2 px-3 text-xs sm:text-sm font-medium whitespace-nowrap shadow-xs shrink-0',
-                mineOnly && 'bg-brand-50 text-brand-700 border-brand-200 ring-1 ring-brand-200'
-              )}
-            >
-              {mineOnly ? 'Showing my tasks' : 'Show my tasks'}
-            </button>
+        <div className="fixed sm:absolute top-3.5 sm:top-5 right-14 sm:right-16 z-30 flex items-center">
+          <button
+            type="button"
+            onClick={() => {
+              setMineOnly(current => {
+                const next = !current;
+                if (next) {
+                  setUserFilter('all');
+                  setDepartment('all');
+                }
+                return next;
+              });
+            }}
+            className={cn(
+              'btn-secondary py-1.5 px-3 text-xs sm:text-sm font-medium whitespace-nowrap shadow-xs bg-white hover:bg-gray-50 border-gray-200',
+              mineOnly && 'bg-brand-50 text-brand-700 border-brand-200 ring-1 ring-brand-200'
+            )}
+          >
+            {mineOnly ? 'Showing my tasks' : 'Show my tasks'}
+          </button>
+        </div>
+      )}
+
+      {role === 'admin' && (
+        <div className="surface-enter mb-4 grid gap-3 md:grid-cols-5">
+          <div className="card border-0 bg-gray-50 p-4 md:col-span-2">
+            <p className="text-xs font-medium text-gray-400">Viewing</p>
+            <p className="mt-1 text-lg font-semibold text-gray-900 truncate">{scopeLabel}</p>
+            {selectedUser && <p className="text-xs text-gray-400 truncate">{selectedUser.department || 'No department'}</p>}
           </div>
           {[
             { label: 'Total', value: stats.total, color: 'text-gray-700' },

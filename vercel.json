@@ -5,6 +5,14 @@
       "schedule": "30 5 * * *"
     },
     {
+      "path": "/api/reminders/daily-pdf",
+      "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/reminders/high-priority",
+      "schedule": "30 5,7,9,11,13 * * *"
+    },
+    {
       "path": "/api/reminders",
       "schedule": "0 6 * * *"
     },

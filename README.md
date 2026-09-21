@@ -169,8 +169,9 @@ Configured in `vercel.json` (requires `CRON_SECRET`):
 | Path | Schedule (UTC) | IST (approx) | Replaces |
 |------|----------------|--------------|----------|
 | `/api/reminders/daily-priority?mode=today` | `30 5 * * *` | ~11:00 | Morning “Today’s Task Reminder” |
+| `/api/reminders/daily-pdf` | `30 5 * * *` | ~11:00 | All Pending Tasks Summary PDF |
+| `/api/reminders/high-priority` | `30 5,7,9,11,13 * * *` | Every 2h (11:00–19:00) | Red Ball 🔴 2-hour high-priority |
 | `/api/reminders` | `0 6 * * *` | ~11:30 | Last 2 days overdue tasks escalation (once daily) |
-| `/api/reminders/high-priority` | `30 8 * * *` | ~14:00 | Red Ball 🔴 high-priority (once daily) |
 
 Data source: **Cloudflare One Time tasks** (not the newdelegation Master sheet).
 
@@ -262,9 +263,9 @@ APIs: `GET /api/mis` (`live` | `master` | `weekly` | `monthly`), `POST /api/mis/
 Production crons (see `vercel.json`):
 - Tue 18:00 UTC — weekly MIS → `mis_weekly`
 - Daily 03:30 UTC — monthly MIS send (runs only on 30th / Feb 28 IST)
-- Daily 05:30 UTC — One Time due-today morning reminder (~11:00 IST)
+- Daily 05:30 UTC — One Time due-today morning reminder & Pending Tasks PDF (~11:00 IST)
+- Daily 05:30, 07:30, 09:30, 11:30, 13:30 UTC — Red Ball 🔴 High-priority reminder every 2 hours (11:00–19:00 IST)
 - Daily 06:00 UTC — One Time overdue / due-soon (~11:30 IST)
-- Daily 08:30 UTC — High-priority (Red Ball) One Time reminder (~14:00 IST)
 
 ---
 
