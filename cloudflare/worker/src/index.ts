@@ -418,7 +418,7 @@ async function nextTaskId(env: Env): Promise<string> {
     if (row?.current_value) {
       return `T-${String(row.current_value).padStart(4, '0')}`;
     }
-  } catch {}
+  } catch { }
 
   const row = await env.DB.prepare(
     "SELECT task_id FROM tasks_current WHERE task_id LIKE 'T-%' ORDER BY CAST(SUBSTR(task_id, 3) AS INTEGER) DESC LIMIT 1"
@@ -582,7 +582,7 @@ async function routeTasks(req: Request, env: Env, url: URL) {
       ]);
       try {
         await log(env, 'TASK_DELETED', `Task ${id} deleted`, { taskId: id });
-      } catch {}
+      } catch { }
       return json({ success: true, data: { taskId: id, deleted: true } });
     } catch (err: any) {
       return json({ success: false, error: err.message || String(err) }, { status: 500 });
@@ -1003,14 +1003,16 @@ async function routeChecklist(req: Request, env: Env, url: URL) {
       binds.push(periodKey);
     }
     const rows = await env.DB.prepare(`SELECT * FROM checklist_completions WHERE ${clauses.join(' AND ')}`).bind(...binds).all<any>();
-    return json({ success: true, data: rows.results.map(row => ({
-      id: row.id,
-      taskId: row.task_id,
-      uid: row.uid,
-      category: row.category,
-      periodKey: row.period_key,
-      completedAt: row.completed_at,
-    })) });
+    return json({
+      success: true, data: rows.results.map(row => ({
+        id: row.id,
+        taskId: row.task_id,
+        uid: row.uid,
+        category: row.category,
+        periodKey: row.period_key,
+        completedAt: row.completed_at,
+      }))
+    });
   }
   if (url.pathname === '/checklist/completions' && req.method === 'POST') {
     const data = await body<any>(req);

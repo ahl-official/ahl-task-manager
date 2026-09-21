@@ -9,10 +9,7 @@ import { normalizePersonName } from '@/lib/utils/names';
 const WEEKLY = 'misWeekly';
 const ARCHIVE = 'misArchive';
 
-/** Alert when MIS write/read falls back from Cloudflare → Firebase. */
-const MIS_FALLBACK_ALERT_WA = (
-  process.env.MIS_FALLBACK_ALERT_WA || '919967716945'
-).replace(/\D/g, '');
+const MIS_FALLBACK_ALERT_WA = (process.env.MIS_FALLBACK_ALERT_WA || '').replace(/\D/g, '');
 
 function serializeSnapshot(data: Record<string, any>): MisWeeklySnapshot {
   return {
@@ -69,6 +66,7 @@ async function notifyMisFirebaseFallback(input: {
     .filter(Boolean)
     .join('\n');
 
+  if (!MIS_FALLBACK_ALERT_WA) return;
   try {
     const { sendWhatsApp } = await import('@/lib/waha');
     const result = await sendWhatsApp(MIS_FALLBACK_ALERT_WA, text);

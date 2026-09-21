@@ -4,7 +4,7 @@ const WAHA_URL     = process.env.WAHA_URL!;
 const WAHA_SESSION = process.env.WAHA_SESSION ?? 'default';
 const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
 const PORTAL_URL   = process.env.NEXT_PUBLIC_APP_URL ?? '';
-export const REDIRECT_WA_NUMBER = process.env.REDIRECT_WA_NUMBER || '919967716945';
+export const REDIRECT_WA_NUMBER = process.env.REDIRECT_WA_NUMBER || '';
 
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
