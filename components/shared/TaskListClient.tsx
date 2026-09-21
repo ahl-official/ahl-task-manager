@@ -348,11 +348,32 @@ export default function TaskListClient({ tasks, role, currentUid, currentUserNam
       )}
 
       {role === 'admin' && (
-        <div className="surface-enter mb-4 grid gap-3 md:grid-cols-5">
-          <div className="card border-0 bg-gray-50 p-4 md:col-span-2">
-            <p className="text-xs font-medium text-gray-400">Viewing</p>
-            <p className="mt-1 text-lg font-semibold text-gray-900">{scopeLabel}</p>
-            {selectedUser && <p className="text-xs text-gray-400">{selectedUser.department || 'No department'}</p>}
+        <div className="surface-enter mb-4 grid gap-3 md:grid-cols-5 items-stretch">
+          <div className="card border-0 bg-gray-50 p-4 md:col-span-2 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-gray-400">Viewing</p>
+              <p className="mt-0.5 text-lg font-semibold text-gray-900 truncate">{scopeLabel}</p>
+              {selectedUser && <p className="text-xs text-gray-400 truncate">{selectedUser.department || 'No department'}</p>}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setMineOnly(current => {
+                  const next = !current;
+                  if (next) {
+                    setUserFilter('all');
+                    setDepartment('all');
+                  }
+                  return next;
+                });
+              }}
+              className={cn(
+                'btn-secondary py-2 px-3 text-xs sm:text-sm font-medium whitespace-nowrap shadow-xs shrink-0',
+                mineOnly && 'bg-brand-50 text-brand-700 border-brand-200 ring-1 ring-brand-200'
+              )}
+            >
+              {mineOnly ? 'Showing my tasks' : 'Show my tasks'}
+            </button>
           </div>
           {[
             { label: 'Total', value: stats.total, color: 'text-gray-700' },
@@ -370,28 +391,6 @@ export default function TaskListClient({ tasks, role, currentUid, currentUserNam
 
       {/* Filters */}
       <div className="surface-enter flex flex-wrap gap-3 mb-4">
-        {role === 'admin' && (
-          <button
-            type="button"
-            onClick={() => {
-              setMineOnly(current => {
-                const next = !current;
-                if (next) {
-                  setUserFilter('all');
-                  setDepartment('all');
-                }
-                return next;
-              });
-            }}
-            className={cn(
-              'btn-secondary py-2 text-sm whitespace-nowrap',
-              mineOnly && 'bg-brand-50 text-brand-700 border-brand-200'
-            )}
-          >
-            {mineOnly ? 'Showing my tasks' : 'Show my tasks'}
-          </button>
-        )}
-
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input

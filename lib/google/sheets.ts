@@ -777,6 +777,7 @@ export async function appendTimelyTaskToSheetInput(input: {
   assignedToUid: string;
   assignedToName?: string;
   assignedToDept?: string;
+  assignedToEmail?: string;
   startDate?: string;
   endDate?: string;
   session: SessionUser;
@@ -788,6 +789,7 @@ export async function appendTimelyTaskToSheetInput(input: {
 
   let doerName = assigneeUser?.displayName || input.assignedToName || '';
   let department = assigneeUser?.department || input.assignedToDept || '';
+  const email = assigneeUser?.email || input.assignedToEmail || '';
 
   if (!doerName) {
     throw new Error(`Assignee details could not be found for UID ${input.assignedToUid}`);
@@ -814,16 +816,24 @@ export async function appendTimelyTaskToSheetInput(input: {
       targetSpreadsheetId = officeId;
       department = department || cell(officeMatch, 1);
     } else {
-      throw new Error(`Assignee "${doerName}" was not found in the Doer List of Office or Salon Daily sheets. Please add them to the Doer List tab in Google Sheets first.`);
+      throw new Error(`User "${doerName}" is not present in sheets. Please add user in Doer List first.`);
     }
   } else {
-    // Weekly or Monthly
+    // Weekly or Monthly: auto-create user in Doer List tab if not present
     const weeklyDoers = await readSpreadsheetValues(targetSpreadsheetId, `${quoteSheetName('Doer List')}!A2:C`).catch(() => [[]]);
     const match = (weeklyDoers[0] || []).find(row => namesEqual(cell(row, 0), doerName));
     if (!match) {
-      throw new Error(`Assignee "${doerName}" was not found in the Doer List of the Weekly/Monthly sheet. Please add them to the Doer List tab in Google Sheets first.`);
+      const doerDept = department || 'General';
+      const doerRange = `${quoteSheetName('Doer List')}!A:C`;
+      const doerValues = [[doerName, doerDept, email]];
+      await sheetsFetch(`/values/${encodeURIComponent(doerRange)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
+        method: 'POST',
+        body: JSON.stringify({ values: doerValues }),
+      }, targetSpreadsheetId);
+      department = doerDept;
+    } else {
+      department = department || cell(match, 1);
     }
-    department = department || cell(match, 1);
   }
 
   const freqMap: Record<string, string> = { Daily: 'D', Weekly: 'W', Monthly: 'M' };
