@@ -474,7 +474,7 @@ export default function TaskListClient({ tasks, role, currentUid, currentUserNam
       {/* Table */}
       <div className="card surface-enter overflow-hidden p-0 border border-gray-200 shadow-sm">
         <div className="overflow-auto max-h-[calc(100vh-240px)] min-h-[400px]">
-          <table className="w-full text-sm border-collapse">
+          <table className="w-full min-w-[700px] text-sm border-collapse">
             <thead className="sticky top-0 z-20 bg-gray-50/95 backdrop-blur-sm shadow-sm">
               <tr className="border-b border-gray-200">
                 {['Task ID', 'Description', 'Assignee', 'Priority', 'Status', 'Schedule', 'Due Date', ''].map(h => (
