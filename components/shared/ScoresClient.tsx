@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { cn, STATUS_COLORS } from '@/lib/utils';
+import { cn, STATUS_COLORS, normalizeBaseStatus } from '@/lib/utils';
 import { addDaysKey, dateKeyInRange, formatWeekLabel, getMisWeekPeriod, getPreviousMisWeekPeriod, listRecentMisWeeks } from '@/lib/mis/week';
 import { formatDmy, indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import {
@@ -339,18 +339,21 @@ export default function ScoresClient({
   function userTasks(uid: string, nextFilter: TaskFilter = filter) {
     const rows = filteredTaskItems.filter(task => task.assignedTo === uid);
     if (nextFilter === 'all') return rows;
-    if (nextFilter === 'Completed') return rows.filter(task => ['Completed', 'Verified'].includes(task.status));
+    if (nextFilter === 'Completed') return rows.filter(task => ['Completed', 'Verified', 'Shifted (Completed)', 'Shifted (Verified)'].includes(task.status));
+    if (nextFilter === 'Verified') return rows.filter(task => ['Verified', 'Shifted (Verified)'].includes(task.status));
+    if (nextFilter === 'In Progress') return rows.filter(task => ['In Progress', 'Shifted (In Progress)'].includes(task.status));
+    if (nextFilter === 'Pending Accept') return rows.filter(task => ['Pending Accept', 'Shifted (Pending Accept)'].includes(task.status));
     if (nextFilter === 'Overdue') return rows.filter(isTaskOverdue);
-    return rows.filter(task => task.status === nextFilter);
+    return rows.filter(task => task.status === nextFilter || normalizeBaseStatus(task.status) === nextFilter);
   }
 
   function countsForUser(uid: string) {
     const rows = filteredTaskItems.filter(task => task.assignedTo === uid);
     return {
       total: rows.length,
-      pending: rows.filter(task => task.status === 'Pending Accept').length,
-      active: rows.filter(task => task.status === 'In Progress').length,
-      completed: rows.filter(task => ['Completed', 'Verified'].includes(task.status)).length,
+      pending: rows.filter(task => ['Pending Accept', 'Shifted (Pending Accept)'].includes(task.status)).length,
+      active: rows.filter(task => ['In Progress', 'Shifted (In Progress)'].includes(task.status)).length,
+      completed: rows.filter(task => ['Completed', 'Verified', 'Shifted (Completed)', 'Shifted (Verified)'].includes(task.status)).length,
       overdue: rows.filter(isTaskOverdue).length,
     };
   }
@@ -794,10 +797,11 @@ export default function ScoresClient({
                     pdfGapLabel: mis?.gapLabel ?? '—',
                   };
                   return (
-                    <MisReportMasterView
+                    <MisDashboard
                       score={score}
                       mis={mis ?? null}
                       weekLabel={pdfWeekLabel}
+                      loading={misLoading}
                       onDownload={() => {
                         if (!mis) return;
                         downloadMisPdf(mis, score.monthlyScore ?? 0);
@@ -956,6 +960,7 @@ function ScoreList({
                   score={score}
                   mis={mis ?? null}
                   weekLabel={pdfWeekLabel}
+                  loading={misLoading}
                   onDownload={() => {
                     if (!mis) return;
                     downloadMisPdf(mis, score.monthlyScore ?? 0);
@@ -1025,17 +1030,21 @@ function ScoreList({
   );
 }
 
-function MisReportMasterView({
-  score,
-  mis,
-  weekLabel,
-  onDownload,
-}: {
+interface MisDashboardProps {
   score: any;
   mis: MisPersonView | null;
   weekLabel?: string;
-  onDownload: () => void;
-}) {
+  loading?: boolean;
+  onDownload?: () => void;
+}
+
+function MisDashboard({
+  score,
+  mis,
+  weekLabel,
+  loading = false,
+  onDownload,
+}: MisDashboardProps) {
   // Build Master layout from already-loaded week MIS (no second fetch → no size flash).
   const report = useMemo(() => {
     if (!mis) return null;
@@ -1132,6 +1141,10 @@ function MisReportMasterView({
       ],
     };
   }, [mis, score?.name, score?.department, weekLabel]);
+
+  if (loading && !report) {
+    return <MisReportMasterSkeleton />;
+  }
 
   const overall = report?.rollups[0];
   const onTimeRow = report?.rollups[1];
@@ -1340,15 +1353,6 @@ function SimplifiedMisBuckets({ score, mis }: { score: any; mis: MisPersonView |
       </table>
     </div>
   );
-}
-
-function MisDashboard(props: {
-  score: any;
-  mis: MisPersonView | null;
-  weekLabel?: string;
-  onDownload: () => void;
-}) {
-  return <MisReportMasterView {...props} />;
 }
 
 function Stat({ icon: Icon, label, value, color }: {

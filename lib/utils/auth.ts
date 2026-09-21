@@ -57,13 +57,17 @@ export async function getSession(): Promise<SessionUser | null> {
 }
 
 export function setSessionCookieHeaders(sessionCookie: string) {
+  const isProd = process.env.NODE_ENV === 'production';
+  const secureFlag = isProd ? '; Secure' : '';
   return {
-    'Set-Cookie': `${SESSION_COOKIE}=${sessionCookie}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_EXPIRY / 1000}`,
+    'Set-Cookie': `${SESSION_COOKIE}=${sessionCookie}; Path=/; HttpOnly${secureFlag}; SameSite=Lax; Max-Age=${SESSION_EXPIRY / 1000}`,
   };
 }
 
 export function clearSessionCookieHeaders() {
+  const isProd = process.env.NODE_ENV === 'production';
+  const secureFlag = isProd ? '; Secure' : '';
   return {
-    'Set-Cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`,
+    'Set-Cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly${secureFlag}; SameSite=Lax; Max-Age=0`,
   };
 }

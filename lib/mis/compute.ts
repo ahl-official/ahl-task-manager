@@ -110,7 +110,7 @@ export async function computeMisScoresForWeek(weekStart?: string, weekEnd?: stri
   }
 
   rows.sort((a, b) => a.name.localeCompare(b.name));
-  misCacheSet(cacheKey, rows, 60_000);
+  misCacheSet(cacheKey, rows, 300_000); // 5 minutes cache
   return rows;
 }
 

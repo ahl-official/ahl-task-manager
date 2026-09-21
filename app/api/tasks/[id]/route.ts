@@ -171,8 +171,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     else if (action === 'verify') {
-      if (task.handoffUid !== session.uid && session.role !== 'admin') {
-        return NextResponse.json({ success: false, error: 'Only handoff can verify' }, { status: 403 });
+      const canVerify = session.role === 'admin' || task.handoffUid === session.uid || task.shiftedByUid === session.uid;
+      if (!canVerify) {
+        return NextResponse.json({ success: false, error: 'Only checker, delegator, or admin can verify' }, { status: 403 });
       }
       updatedTask = await adminUpdateTaskStatus(params.id, 'Verified', { verifiedAt: now });
 
@@ -219,10 +220,6 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (action === 'dead' && (task.status === 'Completed' || task.status === 'Verified')) {
         return NextResponse.json({ success: false, error: 'Completed tasks cannot be flagged Dead' }, { status: 400 });
       }
-      if (action === 'revive' && task.status !== 'Dead') {
-        return NextResponse.json({ success: false, error: 'Only Dead tasks can be revived' }, { status: 400 });
-      }
-
       const timestamp = new Intl.DateTimeFormat('en-IN', {
         dateStyle: 'medium',
         timeStyle: 'short',
@@ -240,6 +237,39 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     else {
       return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });
+    }
+
+    // Synchronize status between Parent and Child tasks
+    if (updatedTask) {
+      if (task.parentTaskId) {
+        // Child task changed -> update parent task
+        const parentTask = await adminGetTask(task.parentTaskId);
+        if (parentTask) {
+          let parentStatus: TaskStatus = 'Shifted';
+          if (updatedTask.status === 'Verified') parentStatus = 'Shifted (Verified)';
+          else if (updatedTask.status === 'Completed') parentStatus = 'Shifted (Completed)';
+          else if (updatedTask.status === 'In Progress') parentStatus = 'Shifted (In Progress)';
+          else if (updatedTask.status === 'Delay Requested') parentStatus = 'Shifted (Delay Requested)';
+          else if (updatedTask.status === 'Overdue') parentStatus = 'Shifted (Overdue)';
+          else if (updatedTask.status === 'Pending Accept') parentStatus = 'Shifted (Pending Accept)';
+
+          await adminUpdateTaskStatus(task.parentTaskId, parentStatus, {
+            completedAt: updatedTask.completedAt ?? parentTask.completedAt,
+            verifiedAt: updatedTask.verifiedAt ?? parentTask.verifiedAt,
+            acceptedAt: updatedTask.acceptedAt ?? parentTask.acceptedAt,
+          }).catch(() => {});
+        }
+      } else if (task.childTaskId) {
+        // Parent task changed -> update child task
+        if (action === 'verify' && updatedTask.status === 'Verified') {
+          await adminUpdateTaskStatus(task.childTaskId, 'Verified', { verifiedAt: now }).catch(() => {});
+        } else if (action === 'complete') {
+          await adminUpdateTaskStatus(task.childTaskId, isAdmin ? 'Verified' : 'Completed', {
+            completedAt: now,
+            verifiedAt: isAdmin ? now : undefined,
+          }).catch(() => {});
+        }
+      }
     }
 
     const updated = updatedTask ?? await adminGetTask(params.id);

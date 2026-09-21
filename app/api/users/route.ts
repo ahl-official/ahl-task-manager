@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
   // Strip sensitive fields for non-admins
   const data = session.role === 'admin'
     ? users
-    : users.map(u => ({ uid: u.uid, name: u.name, department: u.department, role: u.role }));
+    : users.map(u => ({ uid: u.uid, name: u.name, department: u.department, role: u.role, isActive: u.isActive !== false }));
 
   return NextResponse.json({ success: true, data });
 }

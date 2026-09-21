@@ -48,7 +48,16 @@ export async function POST(req: NextRequest) {
       await adminLog('INBOUND_WA', `OTP login verified: ${user.name}`, { uid: user.uid });
     }
 
-    return NextResponse.json({
+    const sessionCookie = await createSessionCookie({
+      uid:        user.uid,
+      name:       user.name,
+      role:       user.role,
+      department: user.department,
+      waNumber:   user.waNumber,
+    });
+    const headers = setSessionCookieHeaders(sessionCookie);
+
+    const res = NextResponse.json({
       success: true,
       data: {
         customToken,
@@ -61,6 +70,8 @@ export async function POST(req: NextRequest) {
         },
       },
     });
+    res.headers.set('Set-Cookie', headers['Set-Cookie']);
+    return res;
   } catch (err: any) {
     console.error('Verify OTP error', err);
     if (isFirestoreQuotaError(err)) {

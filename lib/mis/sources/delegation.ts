@@ -30,21 +30,27 @@ function parseTaskDate(val: unknown): Date | null {
 
 /**
  * Sheet Delegation Scoring uses Final Date (col F).
- * Prefer endDate, then delayedDate, then completed/start/created.
+ * Uses effective due date (delayedDate ?? endDate).
+ * Completed tasks without due date fallback to completedAt.
  */
 function taskDateKey(task: Task) {
-  const end = parseTaskDate(task.endDate);
-  const delayed = parseTaskDate(task.delayedDate);
+  const due = parseTaskDate(task.delayedDate ?? task.endDate);
+  if (due) return indiaDateKey(due);
   const completed = parseTaskDate(task.completedAt);
-  const start = parseTaskDate(task.startDate);
-  const created = parseTaskDate(task.createdAt);
-  const date = end ?? delayed ?? completed ?? start ?? created;
-  return date ? indiaDateKey(date) : '';
+  if (completed) return indiaDateKey(completed);
+  return '';
 }
 
 /** Sheet status: Done | Not On-Time | Pending */
 function sheetDelegationStatus(task: Task): 'Done' | 'Not On-Time' | 'Pending' {
-  if (task.status !== 'Completed' && task.status !== 'Verified') return 'Pending';
+  if (
+    task.status !== 'Completed' &&
+    task.status !== 'Verified' &&
+    task.status !== 'Shifted (Completed)' &&
+    task.status !== 'Shifted (Verified)'
+  ) {
+    return 'Pending';
+  }
   const completed = parseTaskDate(task.completedAt);
   if (!completed) return 'Done';
   const due = parseTaskDate(task.delayedDate ?? task.endDate);

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertOctagon, CheckCircle2, Circle, MessageSquare, Loader2, RefreshCw, RotateCcw } from 'lucide-react';
+import { AlertOctagon, CheckCircle2, Circle, MessageSquare, Loader2, RefreshCw, RotateCcw, Search, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn, formatDate } from '@/lib/utils';
 import { namesEqual, normalizePersonName } from '@/lib/utils/names';
@@ -40,6 +40,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   const [rows, setRows] = useState<ChecklistRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [ticking, setTicking] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
   const [department, setDepartment] = useState('');
   const [individual, setIndividual] = useState('');
   const [mineOnly, setMineOnly] = useState(false);
@@ -70,15 +71,27 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
     }
     return Array.from(seen.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   }, [rows, department]);
-  const visibleRows = useMemo(() => rows.filter(row => {
-    const matchesDate = !date || row.dueDate === date ||
-      (row.periodStart && row.periodEnd && date >= row.periodStart && date <= row.periodEnd);
-    const matchesMine = !mineOnly || Boolean(row.mine) || namesEqual(row.userName, currentUserName);
-    return matchesMine &&
-      (!department || namesEqual(row.department, department)) &&
-      (!individual || namesEqual(row.userName, individual)) &&
-      Boolean(matchesDate);
-  }), [rows, department, individual, date, mineOnly, currentUserName]);
+  const visibleRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return rows.filter(row => {
+      const matchesDate = !date || row.dueDate === date ||
+        (row.periodStart && row.periodEnd && date >= row.periodStart && date <= row.periodEnd);
+      const matchesMine = !mineOnly || Boolean(row.mine) || namesEqual(row.userName, currentUserName);
+      const matchesDept = !department || namesEqual(row.department, department);
+      const matchesIndiv = !individual || namesEqual(row.userName, individual);
+      const matchesSearch = !q ||
+        (row.taskId && row.taskId.toLowerCase().includes(q)) ||
+        (row.description && row.description.toLowerCase().includes(q)) ||
+        (row.userName && row.userName.toLowerCase().includes(q)) ||
+        (row.department && row.department.toLowerCase().includes(q)) ||
+        (row.label && row.label.toLowerCase().includes(q)) ||
+        (row.periodKey && row.periodKey.toLowerCase().includes(q)) ||
+        (row.status && row.status.toLowerCase().includes(q)) ||
+        (row.remark && row.remark.toLowerCase().includes(q));
+
+      return matchesMine && matchesDept && matchesIndiv && Boolean(matchesDate) && matchesSearch;
+    });
+  }, [rows, department, individual, date, mineOnly, currentUserName, search]);
   const completedCount = useMemo(() => visibleRows.filter(row => row.completed).length, [visibleRows]);
 
   async function loadRows(nextCategory = category, forceRefresh = false) {
@@ -226,6 +239,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
               setDepartment('');
               setIndividual('');
               setDate('');
+              setSearch('');
             }}
             className="input w-auto py-2 text-sm"
           >
@@ -245,56 +259,80 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
         </div>
       </div>
 
-      <div className={cn('grid gap-3', elevated ? 'sm:grid-cols-3' : 'sm:grid-cols-1 max-w-xs')}>
-        {elevated && (
-          <label className="space-y-1">
-            <span className="text-xs font-medium text-gray-500">Department</span>
-            <select
-              value={department}
-              onChange={event => {
-                setDepartment(event.target.value);
-                setIndividual('');
-              }}
-              className="input w-full py-2 text-sm"
-              disabled={loading || departments.length === 0}
+      {/* Search & Filter Bar */}
+      <div className="space-y-3">
+        <div className="relative">
+          <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search checklist (task ID, description, name, department, remarks)..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="input w-full py-2 pl-9 pr-9 text-sm"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-gray-400 hover:text-gray-600 focus:outline-none"
+              title="Clear search"
             >
-              <option value="">All departments</option>
-              {departments.map(option => <option key={option} value={option}>{option}</option>)}
-            </select>
-          </label>
-        )}
+              <X size={14} />
+            </button>
+          )}
+        </div>
 
-        <label className="space-y-1">
-          <span className="text-xs font-medium text-gray-500">Date</span>
-          <div className="flex gap-2">
-            <input
-              type="date"
-              value={date}
-              onChange={event => setDate(event.target.value)}
-              className="input min-w-0 flex-1 py-2 text-sm"
-            />
-            {date && (
-              <button type="button" onClick={() => setDate('')} className="btn-secondary px-3" title="Clear date filter">
-                <RotateCcw size={14} />
-              </button>
-            )}
-          </div>
-        </label>
+        <div className={cn('grid gap-3', elevated ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 max-w-xs')}>
+          {elevated && (
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-gray-500">Department</span>
+              <select
+                value={department}
+                onChange={event => {
+                  setDepartment(event.target.value);
+                  setIndividual('');
+                }}
+                className="input w-full py-2 text-sm"
+                disabled={loading || departments.length === 0}
+              >
+                <option value="">All departments</option>
+                {departments.map(option => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+          )}
 
-        {elevated && (
           <label className="space-y-1">
-            <span className="text-xs font-medium text-gray-500">Individual</span>
-            <select
-              value={individual}
-              onChange={event => setIndividual(event.target.value)}
-              className="input w-full py-2 text-sm"
-              disabled={loading || individuals.length === 0}
-            >
-              <option value="">All individuals</option>
-              {individuals.map(option => <option key={option} value={option}>{option}</option>)}
-            </select>
+            <span className="text-xs font-medium text-gray-500">Date</span>
+            <div className="flex gap-2">
+              <input
+                type="date"
+                value={date}
+                onChange={event => setDate(event.target.value)}
+                className="input min-w-0 flex-1 py-2 text-sm"
+              />
+              {date && (
+                <button type="button" onClick={() => setDate('')} className="btn-secondary px-3" title="Clear date filter">
+                  <RotateCcw size={14} />
+                </button>
+              )}
+            </div>
           </label>
-        )}
+
+          {elevated && (
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-gray-500">Individual</span>
+              <select
+                value={individual}
+                onChange={event => setIndividual(event.target.value)}
+                className="input w-full py-2 text-sm"
+                disabled={loading || individuals.length === 0}
+              >
+                <option value="">All individuals</option>
+                {individuals.map(option => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-3 md:grid-cols-3">

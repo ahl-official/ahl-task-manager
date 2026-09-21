@@ -1,4 +1,4 @@
-import { hasGoogleSheetsAuth, readSpreadsheetValues } from '@/lib/google/sheets';
+import { getSpreadsheetSheetTitles, hasGoogleSheetsAuth, readSpreadsheetValues } from '@/lib/google/sheets';
 import { emptyBucket, type MisBucket } from '@/lib/mis/sheetFormula';
 import { FMS_STEP_CATALOG, type FmsStepDef } from '@/lib/mis/sources/fmsCatalog';
 import { dateKeyInRange } from '@/lib/mis/week';
@@ -87,25 +87,45 @@ export async function getFmsDetailedCounts(
     return { byName, stepCounts };
   }
 
-  const sheetNames = Array.from(new Set(FMS_STEP_CATALOG.map(step => step.sheet)));
-  const sheetRows = new Map<string, unknown[][]>();
+  const catalogSheetNames = Array.from(new Set(FMS_STEP_CATALOG.map(step => step.sheet)));
+  const availableSheets = await getSpreadsheetSheetTitles(misReportSpreadsheetId());
 
-  await Promise.all(
-    sheetNames.map(async name => {
-      try {
-        const [rows = []] = await readSpreadsheetValues(misReportSpreadsheetId(), `${quoteSheet(name)}!A2:AZ`, 'FORMATTED_VALUE');
-        sheetRows.set(name, rows);
-      } catch (err) {
-        // Tab not present or unparseable in workbook, default to empty
-        sheetRows.set(name, []);
+  // Map catalog sheet name -> actual matching sheet title in workbook
+  const validSheetMap = new Map<string, string>();
+  for (const name of catalogSheetNames) {
+    if (availableSheets.has(name)) {
+      validSheetMap.set(name, name);
+    } else {
+      const match = Array.from(availableSheets).find(
+        actual => actual.toLowerCase() === name.toLowerCase() ||
+                  actual.replace(/\s+/g, '').toLowerCase() === name.replace(/\s+/g, '').toLowerCase()
+      );
+      if (match) {
+        validSheetMap.set(name, match);
       }
-    })
-  );
+    }
+  }
+
+  const sheetRows = new Map<string, unknown[][]>();
+  const sheetsToQuery = Array.from(new Set(validSheetMap.values()));
+
+  if (sheetsToQuery.length > 0) {
+    try {
+      const ranges = sheetsToQuery.map(name => `${quoteSheet(name)}!A2:AZ`);
+      const allResults = await readSpreadsheetValues(misReportSpreadsheetId(), ranges, 'FORMATTED_VALUE');
+      sheetsToQuery.forEach((name, idx) => {
+        sheetRows.set(name, allResults[idx] || []);
+      });
+    } catch (err) {
+      console.error('Failed to batch read FMS sheets from Google Sheets', err);
+    }
+  }
 
   for (let i = 0; i < FMS_STEP_CATALOG.length; i++) {
     const step = FMS_STEP_CATALOG[i];
+    const actualSheetName = validSheetMap.get(step.sheet) || step.sheet;
     const entry = includeSteps ? stepCounts[i] : null;
-    const rows = sheetRows.get(step.sheet) ?? [];
+    const rows = sheetRows.get(actualSheetName) ?? [];
     const dateCol = step.dateCol;
     const statusCol = dateCol + 2;
     const onTimeCol = dateCol + 4;

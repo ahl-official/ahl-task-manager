@@ -23,9 +23,32 @@ export function cfTask(row: any): Task | null {
   if (!category || category.toLowerCase() === 'one-time' || category.toLowerCase() === 'onetime' || category.toLowerCase() === 'delegation') {
     category = 'One Time';
   }
+  let handoffName = String(row.handoffName || row.handoff_name || '').trim();
+  if (!handoffName || handoffName.toLowerCase().includes('newdelegation') || handoffName.toLowerCase().includes('import') || handoffName.toLowerCase() === 'import-checker') {
+    handoffName = 'Admin';
+  }
+
+  let parentTaskId = row.parentTaskId || row.parent_task_id || undefined;
+  let childTaskId = row.childTaskId || row.child_task_id || undefined;
+  const notesStr = String(row.notes || '');
+
+  if (!parentTaskId) {
+    const parentMatch = notesStr.match(/\[Shifted\s+by\s+.*?\s+from\s+(T-\d+)/i) || notesStr.match(/parentTaskId:\s*(T-\d+)/i);
+    if (parentMatch) parentTaskId = parentMatch[1];
+  }
+  if (!childTaskId) {
+    const childMatch = notesStr.match(/to\s+(T-\d+)\]/i) || notesStr.match(/childTaskId:\s*(T-\d+)/i);
+    if (childMatch) childTaskId = childMatch[1];
+  }
+  const isShifted = Boolean(row.isShifted || row.is_shifted || parentTaskId || childTaskId || String(row.status || '').startsWith('Shifted'));
+
   return {
     ...row,
     category,
+    handoffName,
+    parentTaskId,
+    childTaskId,
+    isShifted,
     startDate: timestamp(row.startDate),
     endDate: timestamp(row.endDate),
     delayedDate: timestamp(row.delayedDate),
@@ -36,6 +59,7 @@ export function cfTask(row: any): Task | null {
     updatedAt: timestamp(row.updatedAt)!,
     weekStart: timestamp(row.weekStart) ?? undefined,
     weekEnd: timestamp(row.weekEnd) ?? undefined,
+    shiftedAt: timestamp(row.shiftedAt) ?? undefined,
   };
 }
 

@@ -51,14 +51,54 @@ export const PRIORITY_DOT: Record<string, string> = {
 };
 
 export const STATUS_COLORS: Record<string, string> = {
-  'Pending Accept': 'bg-gray-100 text-gray-600',
-  'In Progress':    'bg-blue-100 text-blue-700',
-  'Delay Requested':'bg-orange-100 text-orange-700',
-  'Overdue':        'bg-red-100 text-red-700',
-  'Dead':           'bg-red-600 text-white',
-  'Completed':      'bg-green-100 text-green-700',
-  'Verified':       'bg-brand-100 text-brand-700',
+  'Pending Accept':          'bg-gray-100 text-gray-600',
+  'In Progress':             'bg-blue-100 text-blue-700',
+  'Delay Requested':         'bg-orange-100 text-orange-700',
+  'Overdue':                 'bg-red-100 text-red-700',
+  'Dead':                    'bg-red-600 text-white',
+  'Completed':               'bg-green-100 text-green-700',
+  'Verified':                'bg-brand-100 text-brand-700',
+  'Shifted':                 'bg-purple-100 text-purple-700',
+  'Shifted (Pending Accept)': 'bg-purple-100 text-purple-700',
+  'Shifted (In Progress)':   'bg-blue-100 text-blue-700',
+  'Shifted (Delay Requested)':'bg-orange-100 text-orange-700',
+  'Shifted (Overdue)':       'bg-red-100 text-red-700',
+  'Shifted (Completed)':     'bg-green-100 text-green-700',
+  'Shifted (Verified)':      'bg-brand-100 text-brand-700',
 };
+
+export function normalizeBaseStatus(status: string | null | undefined): string {
+  if (!status) return '';
+  if (status.startsWith('Shifted (')) {
+    return status.slice(9, -1);
+  }
+  if (status === 'Shifted') return 'In Progress';
+  return status;
+}
+
+export function isCompletedOrVerified(status: string | null | undefined): boolean {
+  const norm = normalizeBaseStatus(status);
+  return norm === 'Completed' || norm === 'Verified';
+}
+
+export function canUserShiftTask(
+  user: { uid: string; role: string; department?: string } | null | undefined,
+  task: { assignedTo: string; status: string; category?: string; isShifted?: boolean; childTaskId?: string } | null | undefined,
+): boolean {
+  if (!user || !task) return false;
+  if (user.role === 'intern') return false;
+
+  // Shifting only works on One Time tasks (not recurring checklist tasks like Daily, Weekly, Monthly)
+  const category = (task.category || '').toLowerCase();
+  if (category !== 'one time' && category !== 'delegation' && category !== 'one-time') {
+    return false;
+  }
+
+  if (task.isShifted || task.childTaskId || task.status.startsWith('Shifted')) return false;
+  if (task.status === 'Completed' || task.status === 'Verified' || task.status === 'Dead') return false;
+  if (user.role === 'admin') return true;
+  return task.assignedTo === user.uid;
+}
 
 export function normalizeWa(raw: string): string {
   return raw.replace(/\D/g, '');

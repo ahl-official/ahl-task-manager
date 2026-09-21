@@ -124,12 +124,21 @@ function toTimestamp(value: any): AdminTimestamp | null {
 
 function normalizeStatus(value: unknown): TaskStatus {
   const text = String(value ?? '').trim().toLowerCase();
+  if (text.startsWith('shifted')) {
+    if (text.includes('completed')) return 'Shifted (Completed)';
+    if (text.includes('verified')) return 'Shifted (Verified)';
+    if (text.includes('in progress') || text.includes('in-progress')) return 'Shifted (In Progress)';
+    if (text.includes('pending')) return 'Shifted (Pending Accept)';
+    if (text.includes('overdue')) return 'Shifted (Overdue)';
+    if (text.includes('delay')) return 'Shifted (Delay Requested)';
+    return 'Shifted';
+  }
   if (text === 'completed' || text === 'complete' || text === 'done') return 'Completed';
   if (text === 'verified') return 'Verified';
   if (text === 'overdue') return 'Overdue';
   if (text === 'dead') return 'Dead';
   if (text === 'in progress' || text === 'in-progress') return 'In Progress';
-  if (text === 'delay requested' || text === 'shifted') return 'Delay Requested';
+  if (text === 'delay requested') return 'Delay Requested';
   return 'Pending Accept';
 }
 
@@ -183,6 +192,15 @@ function normalizeTaskDoc(id: string, data: Record<string, any>): Task {
     verifiedAt: toTimestamp(data.verifiedAt),
     createdAt,
     updatedAt: toTimestamp(data.updatedAt) ?? createdAt,
+    isShifted: Boolean(data.isShifted),
+    parentTaskId: data.parentTaskId ? String(data.parentTaskId) : undefined,
+    childTaskId: data.childTaskId ? String(data.childTaskId) : undefined,
+    shiftedToUid: data.shiftedToUid ? String(data.shiftedToUid) : undefined,
+    shiftedToName: data.shiftedToName ? String(data.shiftedToName) : undefined,
+    shiftedByUid: data.shiftedByUid ? String(data.shiftedByUid) : undefined,
+    shiftedByName: data.shiftedByName ? String(data.shiftedByName) : undefined,
+    shiftedNote: data.shiftedNote ? String(data.shiftedNote) : undefined,
+    shiftedAt: toTimestamp(data.shiftedAt),
     ...taskPeriodFields(
       endDate,
       toTimestamp(data.completedAt),
@@ -195,6 +213,21 @@ function normalizeTaskDoc(id: string, data: Record<string, any>): Task {
 // ─── ID generation ───────────────────────────────────────────────────────────
 
 export async function generateTaskId(): Promise<string> {
+  if (hasCloudflareApi()) {
+    try {
+      const res = await cfApi<{ taskId: string }>('/tasks/next-id');
+      if (res?.taskId) return res.taskId;
+    } catch {
+      // Fallback: derive from latest task in Cloudflare D1
+      const tasks = await adminGetAllTasks({ limit: 1 });
+      const latestTask = tasks[0];
+      const match = latestTask?.taskId?.match(/^T-(\d+)$/);
+      const currentNum = match ? parseInt(match[1], 10) : 0;
+      const nextNum = (Number.isFinite(currentNum) && currentNum > 0 ? currentNum : 6644) + 1;
+      return `T-${String(nextNum).padStart(4, '0')}`;
+    }
+  }
+
   const counterRef = adminDb.collection(COUNTERS).doc('tasks');
   let newId = 1;
 
@@ -230,6 +263,7 @@ export function serializeTask(task: Task): TaskSerialized {
     updatedAt:   tsToIso(task.updatedAt) ?? new Date().toISOString(),
     weekStart:   tsToIso(task.weekStart ?? null),
     weekEnd:     tsToIso(task.weekEnd ?? null),
+    shiftedAt:   tsToIso(task.shiftedAt ?? null),
   };
 }
 

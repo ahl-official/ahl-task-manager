@@ -1,3 +1,4 @@
+import { getSession } from '@/lib/utils/auth';
 import { adminGetAllTasks, adminGetTaskCounts, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import TaskListClient from '@/components/shared/TaskListClient';
@@ -6,7 +7,8 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export default async function AdminTasksPage() {
-  const [tasks, counts, users] = await Promise.all([
+  const [session, tasks, counts, users] = await Promise.all([
+    getSession(),
     adminGetAllTasks({ limit: 1000 }),
     adminGetTaskCounts(),
     adminGetAllUsers(),
@@ -34,7 +36,8 @@ export default async function AdminTasksPage() {
       <TaskListClient
         tasks={serialized}
         role="admin"
-        currentUid=""
+        currentUid={session?.uid || ''}
+        currentUserName={session?.name || ''}
         users={serializedUsers}
         initialCounts={counts}
         totalCount={counts.total}

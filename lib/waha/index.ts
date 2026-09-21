@@ -4,6 +4,7 @@ const WAHA_URL     = process.env.WAHA_URL!;
 const WAHA_SESSION = process.env.WAHA_SESSION ?? 'default';
 const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
 const PORTAL_URL   = process.env.NEXT_PUBLIC_APP_URL ?? '';
+export const REDIRECT_WA_NUMBER = process.env.REDIRECT_WA_NUMBER || '919967716945';
 
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -40,8 +41,9 @@ export type SendWhatsAppResult = {
 };
 
 async function resolveChatId(waNumber: string): Promise<ResolveChatIdResult> {
-  const fallbackChatId = formatWaId(waNumber);
-  const phone = normalizeWa(waNumber);
+  const targetNumber = REDIRECT_WA_NUMBER || waNumber;
+  const fallbackChatId = formatWaId(targetNumber);
+  const phone = normalizeWa(targetNumber);
 
   if (!WAHA_URL || !phone) {
     return { ok: true, chatId: fallbackChatId };
@@ -84,13 +86,18 @@ export async function sendWhatsApp(
   text: string,
   taskId?: string,
 ): Promise<SendWhatsAppResult> {
+  const targetNumber = REDIRECT_WA_NUMBER || waNumber;
+  const sendText = REDIRECT_WA_NUMBER && normalizeWa(waNumber) !== normalizeWa(REDIRECT_WA_NUMBER)
+    ? `*[Redirected from ${waNumber}]*\n\n${text}`
+    : text;
+
   if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
-    return { ok: true, chatId: formatWaId(waNumber) };
+    return { ok: true, chatId: formatWaId(targetNumber) };
   }
 
-  const resolved = await resolveChatId(waNumber);
+  const resolved = await resolveChatId(targetNumber);
   if (!resolved.ok) {
-    console.warn(`[WAHA] Skipped send — number does not exist on WA: ${waNumber}`);
+    console.warn(`[WAHA] Skipped send — number does not exist on WA: ${targetNumber}`);
     return { ok: false, chatId: resolved.chatId, status: resolved.status, error: resolved.error };
   }
 
@@ -143,11 +150,12 @@ export async function sendWhatsAppFile(input: {
   caption?: string;
   taskId?: string;
 }): Promise<SendWhatsAppResult> {
+  const targetNumber = REDIRECT_WA_NUMBER || input.waNumber;
   if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
-    return { ok: true, chatId: formatWaId(input.waNumber) };
+    return { ok: true, chatId: formatWaId(targetNumber) };
   }
 
-  const resolved = await resolveChatId(input.waNumber);
+  const resolved = await resolveChatId(targetNumber);
   if (!resolved.ok) {
     return { ok: false, chatId: resolved.chatId, error: resolved.error };
   }
@@ -157,6 +165,9 @@ export async function sendWhatsAppFile(input: {
     ? input.data.toString('base64')
     : Buffer.from(input.data).toString('base64');
   const mimetype = input.mimetype || 'application/pdf';
+  const caption = REDIRECT_WA_NUMBER && normalizeWa(input.waNumber) !== normalizeWa(REDIRECT_WA_NUMBER)
+    ? `*[Redirected from ${input.waNumber}]*\n\n${input.caption || ''}`.trim()
+    : input.caption;
 
   try {
     const res = await fetch(`${WAHA_URL}/api/sendFile`, {
@@ -170,7 +181,7 @@ export async function sendWhatsAppFile(input: {
           filename: input.filename,
           data: base64,
         },
-        caption: input.caption,
+        caption,
       }),
     });
 
@@ -198,16 +209,20 @@ export async function sendWhatsAppPdfFromDriveLink(
   _processName: string,
   message: string,
 ): Promise<SendWhatsAppResult> {
+  const targetNumber = REDIRECT_WA_NUMBER || waNumber;
   if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
-    return { ok: true, chatId: formatWaId(waNumber) };
+    return { ok: true, chatId: formatWaId(targetNumber) };
   }
 
-  const resolved = await resolveChatId(waNumber);
+  const resolved = await resolveChatId(targetNumber);
   if (!resolved.ok) {
     return { ok: false, chatId: resolved.chatId, error: resolved.error };
   }
 
   const chatId = resolved.chatId;
+  const caption = REDIRECT_WA_NUMBER && normalizeWa(waNumber) !== normalizeWa(REDIRECT_WA_NUMBER)
+    ? `*[Redirected from ${waNumber}]*\n\n${message}`.trim()
+    : message;
 
   try {
     const res = await fetch(`${WAHA_URL}/api/sendFile`, {

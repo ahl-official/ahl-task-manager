@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2, Trash2 } from 'lucide-react';
-import { cn, formatDate, formatDateTime, STATUS_COLORS, PRIORITY_COLORS, PRIORITY_DOT, getDueBadge } from '@/lib/utils';
+import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2, Trash2, ArrowRightLeft } from 'lucide-react';
+import { cn, formatDate, formatDateTime, STATUS_COLORS, PRIORITY_COLORS, PRIORITY_DOT, getDueBadge, canUserShiftTask } from '@/lib/utils';
 import { toast } from 'sonner';
-import type { TaskSerialized } from '@/types';
+import ShiftTaskModal from '@/components/shared/ShiftTaskModal';
+import type { TaskSerialized, UserRole } from '@/types';
 
 interface Props {
   task: TaskSerialized;
@@ -14,12 +15,15 @@ interface Props {
   currentUid: string;
   onUpdate: (task?: TaskSerialized) => void;
   onDelete?: (taskId: string) => void;
+  users?: { uid: string; name: string; department?: string; role: UserRole; isActive?: boolean }[];
+  currentUser?: { uid: string; name: string; role: UserRole; department?: string };
 }
 
-export default function TaskModal({ task, onClose, role, currentUid, onUpdate, onDelete }: Props) {
+export default function TaskModal({ task, onClose, role, currentUid, onUpdate, onDelete, users, currentUser }: Props) {
   const [mounted, setMounted] = useState(false);
   const [loading, setLoading] = useState<string | null>(null);
   const [showRevision, setShowRevision] = useState(false);
+  const [showShiftModal, setShowShiftModal] = useState(false);
   const [revisionDate, setRevisionDate] = useState('');
   const [revisionReason, setRevisionReason] = useState('');
   const [acceptStartDate, setAcceptStartDate] = useState('');
@@ -32,16 +36,20 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
     setMounted(true);
   }, []);
 
+  const userRole = (currentUser?.role || (role === 'admin' ? 'admin' : 'member')) as UserRole;
   const isAssignee = task.assignedTo === currentUid;
   const isHandoff  = task.handoffUid === currentUid;
-  const isAdmin    = role === 'admin';
+  const isDelegator = task.shiftedByUid === currentUid;
+  const isAdmin    = role === 'admin' || userRole === 'admin';
   const isTimelySheet = task.createdBy === 'timely-sheet' || /^(office|salon|weekly)-/i.test(task.taskId);
-  const isDone = task.status === 'Completed' || task.status === 'Verified';
+  const isDone = task.status === 'Completed' || task.status === 'Verified' || task.status === 'Shifted (Completed)' || task.status === 'Shifted (Verified)';
   const canDelete  = isAdmin && !isTimelySheet && !isDone;
   const displayStatus = task.status;
   const due        = getDueBadge(task.endDate, displayStatus);
-  const needsDates = !isDone && isAssignee && task.status === 'In Progress' && (!task.startDate || !task.endDate);
+  const needsDates = !isDone && isAssignee && (task.status === 'In Progress' || task.status === 'Pending Accept') && (!task.startDate || !task.endDate);
   const canChangeDead = !isTimelySheet && (isAssignee || isHandoff || isAdmin);
+  const canShift = !isTimelySheet && canUserShiftTask(currentUser ?? { uid: currentUid, role: userRole }, task);
+  const canVerify = !isTimelySheet && (isHandoff || isAdmin || isDelegator) && (task.status === 'Completed' || task.status === 'Shifted (Completed)');
 
   useEffect(() => {
     setPriorityValue(task.priority);
@@ -144,18 +152,18 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px] w-screen h-screen">
-      <div className="bg-white rounded-2xl shadow-modal w-full max-w-lg max-h-[90vh] overflow-y-auto scrollbar-thin">
+      <div className="bg-white rounded-2xl shadow-modal w-full max-w-lg max-h-[90vh] overflow-y-auto overflow-x-hidden scrollbar-thin flex flex-col">
         {/* Header */}
-        <div className="flex items-start justify-between p-5 border-b border-gray-100">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-mono text-brand-600 bg-brand-50 px-2 py-0.5 rounded-md">{task.taskId}</span>
+        <div className="flex items-start justify-between p-5 border-b border-gray-100 min-w-0">
+          <div className="min-w-0 flex-1 pr-2">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              <span className="text-xs font-mono text-brand-600 bg-brand-50 px-2 py-0.5 rounded-md shrink-0">{task.taskId}</span>
               <span className={cn('badge', STATUS_COLORS[displayStatus])}>{displayStatus}</span>
               <span className={cn('badge', PRIORITY_COLORS[task.priority])}>{task.priority}</span>
             </div>
-            <p className="text-base font-semibold text-gray-900 leading-snug">{task.description}</p>
+            <p className="text-base font-semibold text-gray-900 leading-snug break-words [overflow-wrap:anywhere]">{task.description}</p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 shrink-0 ml-3">
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 shrink-0 ml-2">
             <X size={18} />
           </button>
         </div>
@@ -165,7 +173,17 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
           {/* Details grid */}
           <div className="grid grid-cols-2 gap-3">
             <Detail icon={User} label="Assigned To" value={task.assignedToName} />
-            <Detail icon={User} label="Checker" value={task.handoffName} />
+            <Detail
+              icon={User}
+              label="Checker"
+              value={
+                !task.handoffName ||
+                task.handoffName.toLowerCase().includes('newdelegation') ||
+                task.handoffName.toLowerCase().includes('import')
+                  ? 'Admin'
+                  : task.handoffName
+              }
+            />
             <Detail icon={Tag} label="Category" value={task.category} />
             <Detail icon={Tag} label="Department" value={task.department} />
             <Detail icon={Calendar} label="Start Date" value={formatDate(task.startDate)} />
@@ -182,12 +200,6 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
               }
             />
           </div>
-
-          {isTimelySheet && (
-            <p className="rounded-xl bg-brand-50 px-3 py-2 text-xs text-brand-800">
-              This timely task comes from the Master sheet. Marking it complete writes Done there and does not change MIS scores or the admin dashboard.
-            </p>
-          )}
 
           {!isDone && (isAssignee || isHandoff || isAdmin) && !isTimelySheet && (
             <div className="rounded-md border border-gray-200 bg-white p-3">
@@ -213,10 +225,37 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             </div>
           )}
 
+          {/* Shifted Metadata Banner */}
+          {task.shiftedToName && (
+            <div className="rounded-xl bg-purple-50/80 p-3.5 border border-purple-100 text-xs text-purple-900 space-y-1">
+              <div className="flex items-center gap-2 font-semibold">
+                <ArrowRightLeft size={14} className="text-purple-600 shrink-0" />
+                <span>Shifted to {task.shiftedToName}</span>
+                {task.childTaskId && <span className="text-[10px] bg-purple-100 px-1.5 py-0.5 rounded text-purple-700 font-mono">({task.childTaskId})</span>}
+              </div>
+              {task.shiftedNote && (
+                <p className="text-purple-700 italic pl-5.5 break-words [overflow-wrap:anywhere]">"{task.shiftedNote}"</p>
+              )}
+            </div>
+          )}
+
+          {task.isShifted && task.shiftedByName && (
+            <div className="rounded-xl bg-purple-50/80 p-3.5 border border-purple-100 text-xs text-purple-900 space-y-1">
+              <div className="flex items-center gap-2 font-semibold">
+                <ArrowRightLeft size={14} className="text-purple-600 shrink-0" />
+                <span>Shifted to you by {task.shiftedByName}</span>
+                {task.parentTaskId && <span className="text-[10px] bg-purple-100 px-1.5 py-0.5 rounded text-purple-700 font-mono">({task.parentTaskId})</span>}
+              </div>
+              {task.shiftedNote && (
+                <p className="text-purple-700 italic pl-5.5 break-words [overflow-wrap:anywhere]">"{task.shiftedNote}"</p>
+              )}
+            </div>
+          )}
+
           {task.notes && (
-            <div className="bg-gray-50 rounded-xl p-3">
+            <div className="bg-gray-50 rounded-xl p-3 min-w-0">
               <p className="text-xs text-gray-500 font-medium mb-1">Notes</p>
-              <p className="whitespace-pre-line text-sm text-gray-700">{task.notes}</p>
+              <p className="whitespace-pre-line text-sm text-gray-700 break-words [overflow-wrap:anywhere]">{task.notes}</p>
             </div>
           )}
 
@@ -290,6 +329,24 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             </div>
             )}
 
+            {/* Shift Task Action */}
+            {canShift && (
+              <div className="flex items-center justify-between rounded-xl bg-purple-50/60 p-3 border border-purple-100">
+                <div className="text-xs text-purple-900">
+                  <p className="font-semibold">Need someone else to handle this?</p>
+                  <p className="text-purple-700 text-[11px]">Shift this task to a team member while retaining tracking.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowShiftModal(true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 text-xs font-semibold shadow-xs transition-colors"
+                >
+                  <ArrowRightLeft size={13} />
+                  Shift Task
+                </button>
+              </div>
+            )}
+
             {/* Assignee / Admin actions */}
             {(isAssignee || isAdmin) && (
               <div className="flex gap-2 flex-wrap">
@@ -331,7 +388,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                   </div>
                 )}
 
-                {['In Progress', 'Delay Requested'].includes(task.status) && !isDone && (
+                {['In Progress', 'Delay Requested', 'Shifted (In Progress)', 'Shifted (Delay Requested)'].includes(task.status) && !isDone && (
                   <ActionButton label="Mark Complete" onClick={() => doAction('complete')} loading={loading === 'complete'} color="green" />
                 )}
               </div>
@@ -373,8 +430,8 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
               </div>
             )}
 
-            {/* Handoff actions */}
-            {!isTimelySheet && (isHandoff || isAdmin) && task.status === 'Completed' && (
+            {/* Verification actions (Checker, Delegator, or Admin) */}
+            {canVerify && (
               <ActionButton label="Verify Task" onClick={() => doAction('verify')} loading={loading === 'verify'} color="brand" />
             )}
 
@@ -459,6 +516,19 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
           </div>
         </div>
       </div>
+
+      {showShiftModal && (
+        <ShiftTaskModal
+          task={task}
+          currentUser={currentUser ?? { uid: currentUid, name: '', role: userRole }}
+          users={users}
+          onClose={() => setShowShiftModal(false)}
+          onShifted={(updatedParent) => {
+            onUpdate(updatedParent);
+            onClose();
+          }}
+        />
+      )}
     </div>,
     document.body,
   );

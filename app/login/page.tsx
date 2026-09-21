@@ -71,7 +71,7 @@ export default function LoginPage() {
         const sessionRes = await fetch('/api/auth/session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ idToken }),
+          body: JSON.stringify({ idToken, user: data.data.user }),
         });
 
         const sessionData = await sessionRes.json();

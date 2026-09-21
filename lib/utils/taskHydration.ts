@@ -16,6 +16,15 @@ function userAliases(name: unknown) {
   return Array.from(new Set([raw, aliasKey(raw), ...parts, ...parts.map(aliasKey)].filter(Boolean)));
 }
 
+function sanitizeName(value: string | undefined | null, fallback = 'Admin'): string {
+  if (!value) return fallback;
+  const lower = value.trim().toLowerCase();
+  if (lower.includes('newdelegation') || lower.includes('import') || lower === 'import-checker') {
+    return fallback;
+  }
+  return value.trim();
+}
+
 export function hydrateTasksWithUsers<T extends Task>(tasks: T[], users: UserLite[]): T[] {
   const usersByUid = new Map(users.map(user => [user.uid, user]));
   const usersByName = new Map<string, UserLite>();
@@ -41,7 +50,7 @@ export function hydrateTasksWithUsers<T extends Task>(tasks: T[], users: UserLit
       ?? usersByName.get(normalizeName(task.handoffName))
       ?? usersByName.get(aliasKey(task.handoffName));
 
-    if (!assignee && !handoff) return task;
+    const finalHandoffName = sanitizeName(handoff?.name ?? task.handoffName);
 
     return {
       ...task,
@@ -50,7 +59,7 @@ export function hydrateTasksWithUsers<T extends Task>(tasks: T[], users: UserLit
       assignedToWa: assignee?.waNumber ?? task.assignedToWa,
       department: assignee?.department ?? task.department,
       handoffUid: handoff?.uid ?? task.handoffUid,
-      handoffName: handoff?.name ?? task.handoffName,
+      handoffName: finalHandoffName,
       handoffWa: handoff?.waNumber ?? task.handoffWa,
     };
   });

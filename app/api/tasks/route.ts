@@ -18,7 +18,6 @@ import {
 import { formatDate } from '@/lib/utils';
 import { canAssignTask } from '@/lib/utils/hierarchy';
 import { filterTasksForSession } from '@/lib/utils/access';
-import { adminDb } from '@/lib/firebase/admin';
 import { adminGetUserByUid } from '@/lib/firebase/users';
 import { hasCloudflareApi } from '@/lib/cloudflare/api';
 import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils/timelyDashboard';
@@ -205,8 +204,7 @@ export async function POST(req: NextRequest) {
     );
 
     // Notify coordinator WA if configured
-    const configSnap = hasCloudflareApi() ? null : await adminDb.collection('config').doc('app').get();
-    const coordinatorWa = process.env.COORDINATOR_WA || (configSnap?.exists ? configSnap.data()!.coordinatorWa : '');
+    const coordinatorWa = process.env.COORDINATOR_WA || '';
     if (coordinatorWa && coordinatorWa !== task.handoffWa) {
       await sendWhatsApp(
         coordinatorWa,

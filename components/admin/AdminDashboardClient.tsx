@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight, Building2, Clock3, X } from 'lucide-react';
-import { cn, formatDate, STATUS_COLORS } from '@/lib/utils';
+import { cn, formatDate, STATUS_COLORS, normalizeBaseStatus } from '@/lib/utils';
 import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import TaskModal from '@/components/shared/TaskModal';
 import type { TaskSerialized } from '@/types';
@@ -29,7 +29,8 @@ function emptyCounts(): TaskCounts {
 function isOverdue(task: TaskSerialized): boolean {
   if (task.status === 'Overdue') return true;
   if (!task.endDate) return false;
-  if (task.status !== 'Pending Accept' && task.status !== 'In Progress' && task.status !== 'Delay Requested') return false;
+  const norm = normalizeBaseStatus(task.status);
+  if (norm !== 'Pending Accept' && norm !== 'In Progress' && norm !== 'Delay Requested') return false;
   const dueKey = indiaDateKey(task.endDate);
   const todayKey = indiaTodayKey();
   if (!dueKey || !todayKey) return false;
@@ -39,10 +40,11 @@ function isOverdue(task: TaskSerialized): boolean {
 // Add one task to a rollup, keeping every displayed status count consistent.
 function addTaskToCounts(counts: TaskCounts, task: TaskSerialized) {
   counts.total += 1;
-  if (task.status === 'Pending Accept') counts.pending += 1;
-  if (task.status === 'In Progress') counts.inProgress += 1;
-  if (task.status === 'Completed') counts.completed += 1;
-  if (task.status === 'Verified') counts.verified += 1;
+  const norm = normalizeBaseStatus(task.status);
+  if (norm === 'Pending Accept') counts.pending += 1;
+  if (norm === 'In Progress') counts.inProgress += 1;
+  if (norm === 'Completed') counts.completed += 1;
+  if (norm === 'Verified') counts.verified += 1;
   if (isOverdue(task)) counts.overdue += 1;
 }
 
@@ -50,7 +52,7 @@ function addTaskToCounts(counts: TaskCounts, task: TaskSerialized) {
 function matchesFilter(task: TaskSerialized, filter: TaskFilter) {
   if (filter === 'all') return true;
   if (filter === 'Overdue') return isOverdue(task);
-  return task.status === filter;
+  return task.status === filter || normalizeBaseStatus(task.status) === filter;
 }
 
 function getTimeAgo(iso: string) {
@@ -486,6 +488,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
           currentUid=""
           onUpdate={updateTask}
           onDelete={removeTask}
+          users={users}
         />
       )}
     </div>

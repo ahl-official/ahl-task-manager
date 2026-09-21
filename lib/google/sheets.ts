@@ -126,6 +126,29 @@ async function sheetsFetch(path: string, init: RequestInit = {}, targetId = spre
   return data;
 }
 
+/** Get all sheet titles in a spreadsheet. Cached for 10 minutes. */
+const spreadsheetTitlesCache = new Map<string, { expiresAt: number; titles: Set<string> }>();
+
+export async function getSpreadsheetSheetTitles(targetId: string): Promise<Set<string>> {
+  if (!hasGoogleSheetsAuth()) throw new Error('Google Sheets is not configured');
+  if (!targetId) throw new Error('Spreadsheet id is missing');
+
+  const cached = spreadsheetTitlesCache.get(targetId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.titles;
+  }
+
+  try {
+    const metadata = await sheetsFetch('?fields=sheets.properties.title', {}, targetId);
+    const titles = new Set<string>((metadata.sheets || []).map((s: any) => String(s.properties?.title || '').trim()));
+    spreadsheetTitlesCache.set(targetId, { expiresAt: Date.now() + 10 * 60 * 1000, titles });
+    return titles;
+  } catch (err) {
+    console.warn(`Failed to fetch sheet titles for ${targetId}`, err);
+    return new Set<string>();
+  }
+}
+
 /** Read one or more A1 ranges from any spreadsheet the service account can access. */
 export async function readSpreadsheetValues(
   targetId: string,
@@ -294,12 +317,15 @@ interface ChecklistSheetData {
 const sheetDataCache = new Map<ChecklistSheetCategory, { expiresAt: number; data: ChecklistSheetData }>();
 let timelyBundleCache: { expiresAt: number; data: ChecklistSheetData } | null = null;
 let timelyAllPeriodsCache: { expiresAt: number; data: ChecklistSheetData } | null = null;
+let directoryUsersCache: { expiresAt: number; users: SheetChecklistUser[] } | null = null;
 const SHEET_CACHE_MS = 5 * 60 * 1000; // 5 minutes in-memory cache for timely recurring tasks
 const MIS_ALL_PERIODS_CACHE_MS = 5 * 60 * 1000; // 5 minutes in-memory cache for MIS periods
+const DIRECTORY_USERS_CACHE_MS = 10 * 60 * 1000; // 10 minutes cache for Users directory
 
 export function clearTimelyCache() {
   timelyBundleCache = null;
   timelyAllPeriodsCache = null;
+  directoryUsersCache = null;
   sheetDataCache.clear();
 }
 
@@ -494,12 +520,19 @@ async function loadAllTimelyTasks(
 async function loadDirectoryUsers(doerLists: Array<{ source: { key: string; id: string }; values: unknown[][] }>) {
   const users: SheetChecklistUser[] = [];
 
-  if (spreadsheetId()) {
+  if (directoryUsersCache && directoryUsersCache.expiresAt > Date.now()) {
+    users.push(...directoryUsersCache.users);
+  } else if (spreadsheetId()) {
     try {
       const response = await sheetsFetch(`/values/${encodeURIComponent(`${quoteSheetName('Users')}!A2:J`)}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`);
-      users.push(...(((response.values ?? []) as unknown[][]).map(rowToSheetUser).filter(Boolean) as SheetChecklistUser[]));
+      const loaded = ((response.values ?? []) as unknown[][]).map(rowToSheetUser).filter(Boolean) as SheetChecklistUser[];
+      users.push(...loaded);
+      directoryUsersCache = { expiresAt: Date.now() + DIRECTORY_USERS_CACHE_MS, users: loaded };
     } catch (err) {
       console.error('Failed to read optional Users directory overlay', err);
+      if (directoryUsersCache?.users) {
+        users.push(...directoryUsersCache.users);
+      }
     }
   }
 

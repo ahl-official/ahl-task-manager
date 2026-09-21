@@ -40,7 +40,13 @@ export default async function DepartmentTasksPage() {
         </h1>
         <p className="mt-0.5 text-sm text-gray-500">{session.department} - {tasks.length} tasks</p>
       </div>
-      <TaskListClient tasks={serialized} role="user" currentUid={session.uid} users={serializedUsers} />
+      <TaskListClient
+        tasks={serialized}
+        role="user"
+        currentUid={session.uid}
+        currentUserName={session.name}
+        users={serializedUsers}
+      />
     </div>
   );
 }

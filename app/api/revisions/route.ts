@@ -67,6 +67,12 @@ export async function POST(req: NextRequest) {
       revisionStatus: 'requested',
     });
 
+    if (task.parentTaskId) {
+      await adminUpdateTaskStatus(task.parentTaskId, 'Shifted (Delay Requested)', {
+        revisionStatus: 'requested',
+      }).catch(() => {});
+    }
+
     // Notify handoff
     await sendWhatsApp(
       task.handoffWa,
@@ -110,13 +116,23 @@ export async function PATCH(req: NextRequest) {
     const revision = await adminDecideRevision(revisionId, decision, session.uid, session.name);
 
     if (decision === 'approved') {
+      const newEndDate = Timestamp.fromDate(new Date(revision.requestedDate.toDate()));
       // Update task with new date
       await adminUpdateTaskStatus(taskId, 'In Progress', {
         revisionStatus: 'accepted',
-        delayedDate:    Timestamp.fromDate(new Date(revision.requestedDate.toDate())),
+        delayedDate:    newEndDate,
         delayReason:    revision.reason,
-        endDate:        Timestamp.fromDate(new Date(revision.requestedDate.toDate())),
+        endDate:        newEndDate,
       });
+
+      if (task.parentTaskId) {
+        await adminUpdateTaskStatus(task.parentTaskId, 'Shifted (In Progress)', {
+          revisionStatus: 'accepted',
+          delayedDate:    newEndDate,
+          delayReason:    revision.reason,
+          endDate:        newEndDate,
+        }).catch(() => {});
+      }
 
       await sendWhatsApp(
         task.assignedToWa,
@@ -130,6 +146,12 @@ export async function PATCH(req: NextRequest) {
       await adminUpdateTaskStatus(taskId, 'In Progress', {
         revisionStatus: 'rejected',
       });
+
+      if (task.parentTaskId) {
+        await adminUpdateTaskStatus(task.parentTaskId, 'Shifted (In Progress)', {
+          revisionStatus: 'rejected',
+        }).catch(() => {});
+      }
 
       await sendWhatsApp(
         task.assignedToWa,

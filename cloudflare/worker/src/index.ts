@@ -29,6 +29,36 @@ function json(data: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), { ...init, headers: { ...JSON_HEADERS, ...(init.headers ?? {}) } });
 }
 
+function safeBinds(values: unknown[]): unknown[] {
+  return values.map(v => (v === undefined ? null : v));
+}
+
+function wrapDb(db: D1Database): D1Database {
+  if (!db || typeof db.prepare !== 'function') return db;
+  return {
+    prepare(query: string) {
+      const stmt = db.prepare(query);
+      return {
+        bind(...values: unknown[]) {
+          return stmt.bind(...safeBinds(values));
+        },
+        first<T = unknown>() {
+          return stmt.first<T>();
+        },
+        all<T = unknown>() {
+          return stmt.all<T>();
+        },
+        run() {
+          return stmt.run();
+        },
+      } as D1PreparedStatement;
+    },
+    batch(statements: D1PreparedStatement[]) {
+      return db.batch(statements);
+    },
+  };
+}
+
 /** Digits only; ensures Indian country code 91 when missing (no double-prefix). */
 function normalizeWa(raw: unknown) {
   const digits = String(raw ?? '').replace(/\D/g, '');
@@ -475,9 +505,9 @@ async function routeTasks(req: Request, env: Env, url: URL) {
   if (url.pathname === '/tasks' && req.method === 'POST') {
     try {
       const data = await body<any>(req);
-      const creator = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.creatorUid).first()) || data.creatorFallback;
-      const assignee = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.assignedTo).first());
-      const handoff = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.handoffUid || data.creatorUid).first()) || creator;
+      const creator = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.creatorUid || '').first()) || data.creatorFallback;
+      const assignee = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.assignedTo || '').first());
+      const handoff = userFromRow(await env.DB.prepare('SELECT * FROM users WHERE uid = ?').bind(data.handoffUid || data.creatorUid || '').first()) || creator;
       if (!assignee) return json({ success: false, error: 'Selected assignee was not found' }, { status: 400 });
       const taskId = await nextTaskId(env);
       const now = nowIso();
@@ -675,7 +705,7 @@ async function routeRevisions(req: Request, env: Env, url: URL) {
     const now = nowIso();
     await env.DB.prepare(
       'INSERT INTO revisions (id, task_id, requested_by, requested_by_name, requested_date, reason, status, decided_by, decided_by_name, decided_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)'
-    ).bind(id, data.taskId, data.requestedBy, data.requestedByName, data.requestedDate, data.reason, 'pending', now).run();
+    ).bind(id, data.taskId || '', data.requestedBy || '', data.requestedByName || '', data.requestedDate || now, data.reason || '', 'pending', now).run();
     return json({ success: true, data: revisionFromRow(await env.DB.prepare('SELECT * FROM revisions WHERE id = ?').bind(id).first()) }, { status: 201 });
   }
 
@@ -683,7 +713,7 @@ async function routeRevisions(req: Request, env: Env, url: URL) {
     const data = await body<any>(req);
     if (!data.revisionId) return json({ success: false, error: 'revisionId is required' }, { status: 400 });
     await env.DB.prepare('UPDATE revisions SET status = ?, decided_by = ?, decided_by_name = ?, decided_at = ? WHERE id = ?')
-      .bind(data.decision, data.decidedBy || null, data.decidedByName || null, nowIso(), data.revisionId)
+      .bind(data.decision || 'approved', data.decidedBy || null, data.decidedByName || null, nowIso(), data.revisionId)
       .run();
     return json({ success: true, data: revisionFromRow(await env.DB.prepare('SELECT * FROM revisions WHERE id = ?').bind(data.revisionId).first()) });
   }
@@ -718,12 +748,12 @@ async function routeAutomations(req: Request, env: Env, url: URL) {
     const id = randomId('auto_');
     const now = nowIso();
     const config = {
-      trigger: data.trigger,
-      action: data.action,
-      target: data.target,
-      messageTemplate: data.messageTemplate,
-      createdBy: data.createdBy,
-      createdByName: data.createdByName,
+      trigger: data.trigger || 'Task Overdue',
+      action: data.action || 'Notify Admin',
+      target: data.target || '',
+      messageTemplate: data.messageTemplate || '',
+      createdBy: data.createdBy || '',
+      createdByName: data.createdByName || '',
     };
     await env.DB.prepare('INSERT INTO automations (id, name, type, is_active, config_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(id, data.name || '', data.trigger || 'Task Overdue', data.isActive === false ? 0 : 1, JSON.stringify(config), now, now)
@@ -985,35 +1015,37 @@ async function routeChecklist(req: Request, env: Env, url: URL) {
   if (url.pathname === '/checklist/completions' && req.method === 'POST') {
     const data = await body<any>(req);
     const now = nowIso();
+    const id = data.id || randomId('chk_');
     await env.DB.prepare('INSERT INTO checklist_completions (id, task_id, uid, category, period_key, completed_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(data.id, data.taskId, data.uid, data.category, data.periodKey, now)
+      .bind(id, data.taskId || '', data.uid || '', data.category || '', data.periodKey || '', now)
       .run();
-    return json({ success: true, data: { ...data, completedAt: now } }, { status: 201 });
+    return json({ success: true, data: { ...data, id, completedAt: now } }, { status: 201 });
   }
   return null;
 }
 
 export default {
   async fetch(req: Request, env: Env) {
+    const wrappedEnv: Env = { ...env, DB: wrapDb(env.DB) };
     const url = new URL(req.url);
-    if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders(env) });
+    if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders(wrappedEnv) });
 
-    const authRoute = await routeAuth(req, env, url.pathname);
-    if (authRoute) return new Response(authRoute.body, { status: authRoute.status, headers: { ...Object.fromEntries(authRoute.headers), ...corsHeaders(env) } });
+    const authRoute = await routeAuth(req, wrappedEnv, url.pathname);
+    if (authRoute) return new Response(authRoute.body, { status: authRoute.status, headers: { ...Object.fromEntries(authRoute.headers), ...corsHeaders(wrappedEnv) } });
 
-    if (!requireSecret(req, env)) return json({ success: false, error: 'Unauthorized' }, { status: 401, headers: corsHeaders(env) });
+    if (!requireSecret(req, wrappedEnv)) return json({ success: false, error: 'Unauthorized' }, { status: 401, headers: corsHeaders(wrappedEnv) });
 
     const response =
-      await routeUsers(req, env, url) ||
-      await routeDepartments(req, env, url) ||
-      await routeTasks(req, env, url) ||
-      await routeScores(req, env, url) ||
-      await routeRevisions(req, env, url) ||
-      await routeCrm(req, env, url) ||
-      await routeAutomations(req, env, url) ||
-      await routeMis(req, env, url) ||
-      await routeChecklist(req, env, url) ||
+      await routeUsers(req, wrappedEnv, url) ||
+      await routeDepartments(req, wrappedEnv, url) ||
+      await routeTasks(req, wrappedEnv, url) ||
+      await routeScores(req, wrappedEnv, url) ||
+      await routeRevisions(req, wrappedEnv, url) ||
+      await routeCrm(req, wrappedEnv, url) ||
+      await routeAutomations(req, wrappedEnv, url) ||
+      await routeMis(req, wrappedEnv, url) ||
+      await routeChecklist(req, wrappedEnv, url) ||
       json({ success: false, error: 'Not found' }, { status: 404 });
-    return new Response(response.body, { status: response.status, headers: { ...Object.fromEntries(response.headers), ...corsHeaders(env) } });
+    return new Response(response.body, { status: response.status, headers: { ...Object.fromEntries(response.headers), ...corsHeaders(wrappedEnv) } });
   },
 };

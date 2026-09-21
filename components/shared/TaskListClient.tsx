@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
-import Link from 'next/link';
 import { AlertTriangle, ArrowRight, Clock3, Loader2, Search } from 'lucide-react';
-import { cn, formatDate, STATUS_COLORS, PRIORITY_DOT, getDueBadge } from '@/lib/utils';
+import { cn, formatDate, STATUS_COLORS, PRIORITY_DOT, getDueBadge, normalizeBaseStatus } from '@/lib/utils';
 import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import { scheduleByTaskId, scheduleTasks } from '@/lib/utils/scheduling';
+import { namesEqual } from '@/lib/utils/names';
 import TaskModal from './TaskModal';
 import type { TaskSerialized } from '@/types';
 
@@ -13,6 +13,7 @@ interface Props {
   tasks: TaskSerialized[];
   role: 'admin' | 'user';
   currentUid: string;
+  currentUserName?: string;
   users?: { uid: string; name: string; department: string; role?: string; isActive?: boolean }[];
   initialCounts?: {
     total: number;
@@ -74,8 +75,9 @@ function getTimeAgo(iso: string) {
   return `${days}d ago`;
 }
 
-export default function TaskListClient({ tasks, role, currentUid, users = [], initialCounts, totalCount }: Props) {
+export default function TaskListClient({ tasks, role, currentUid, currentUserName, users = [], initialCounts, totalCount }: Props) {
   const [taskItems, setTaskItems] = useState(tasks);
+  const [mineOnly, setMineOnly]     = useState(false);
   const [search, setSearch]         = useState('');
   const [statusFilter, setStatus]   = useState('all');
   const [priorityFilter, setPriority] = useState('all');
@@ -172,13 +174,14 @@ export default function TaskListClient({ tasks, role, currentUid, users = [], in
     const today = indiaTodayKey();
     const rows = taskItems.filter(t => {
       const isOverdueTask = t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(today, indiaDateKey(t.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status));
+      const matchMine     = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
       const matchSearch   = !search || t.description.toLowerCase().includes(search.toLowerCase()) || t.taskId.toLowerCase().includes(search.toLowerCase());
-      const matchStatus   = statusFilter === 'all' || (statusFilter === 'Overdue' ? isOverdueTask : t.status === statusFilter);
+      const matchStatus   = statusFilter === 'all' || (statusFilter === 'Overdue' ? isOverdueTask : (t.status === statusFilter || normalizeBaseStatus(t.status) === statusFilter));
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
       const matchDepartment = departmentFilter === 'all' || t.department === departmentFilter;
       const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
       const matchCategory = categoryFilter === 'all' || t.category === categoryFilter;
-      return matchSearch && matchStatus && matchPriority && matchDepartment && matchUser && matchCategory;
+      return matchMine && matchSearch && matchStatus && matchPriority && matchDepartment && matchUser && matchCategory;
     });
 
     if (sortMode === 'recommended') {
@@ -202,7 +205,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [], in
       if (diff !== 0) return diff;
       return left.taskId.localeCompare(right.taskId);
     });
-  }, [taskItems, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter, sortMode, scheduleMap]);
+  }, [taskItems, mineOnly, currentUid, currentUserName, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter, sortMode, scheduleMap]);
 
   const justAssignedTasks = useMemo(() =>
     [...taskItems]
@@ -213,9 +216,11 @@ export default function TaskListClient({ tasks, role, currentUid, users = [], in
   );
 
   const selectedUser = users.find(user => user.uid === userFilter);
-  const scopeLabel = selectedUser?.name ?? (departmentFilter === 'all' ? 'All tasks' : departmentFilter);
+  const scopeLabel = mineOnly
+    ? 'My Tasks'
+    : (selectedUser?.name ?? (departmentFilter === 'all' ? 'All tasks' : departmentFilter));
 
-  const isDefaultView = statusFilter === 'all' && priorityFilter === 'all' && departmentFilter === 'all' && userFilter === 'all' && categoryFilter === 'all' && !search.trim();
+  const isDefaultView = !mineOnly && statusFilter === 'all' && priorityFilter === 'all' && departmentFilter === 'all' && userFilter === 'all' && categoryFilter === 'all' && !search.trim();
 
   const stats = useMemo(() => {
     if (isDefaultView && initialCounts) {
@@ -365,6 +370,28 @@ export default function TaskListClient({ tasks, role, currentUid, users = [], in
 
       {/* Filters */}
       <div className="surface-enter flex flex-wrap gap-3 mb-4">
+        {role === 'admin' && (
+          <button
+            type="button"
+            onClick={() => {
+              setMineOnly(current => {
+                const next = !current;
+                if (next) {
+                  setUserFilter('all');
+                  setDepartment('all');
+                }
+                return next;
+              });
+            }}
+            className={cn(
+              'btn-secondary py-2 text-sm whitespace-nowrap',
+              mineOnly && 'bg-brand-50 text-brand-700 border-brand-200'
+            )}
+          >
+            {mineOnly ? 'Showing my tasks' : 'Show my tasks'}
+          </button>
+        )}
+
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
@@ -381,7 +408,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [], in
 
         <select
           value={departmentFilter}
-          onChange={e => { setDepartment(e.target.value); setUserFilter('all'); }}
+          onChange={e => { setDepartment(e.target.value); setUserFilter('all'); setMineOnly(false); }}
           className="input py-2 text-sm w-auto"
         >
           <option value="all">All Departments</option>
@@ -390,7 +417,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [], in
 
         <select
           value={userFilter}
-          onChange={e => setUserFilter(e.target.value)}
+          onChange={e => { setUserFilter(e.target.value); setMineOnly(false); }}
           className="input py-2 text-sm w-auto"
         >
           <option value="all">All Individuals</option>
@@ -445,13 +472,13 @@ export default function TaskListClient({ tasks, role, currentUid, users = [], in
       </div>
 
       {/* Table */}
-      <div className="card surface-enter overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-100 bg-gray-50/50">
+      <div className="card surface-enter overflow-hidden p-0 border border-gray-200 shadow-sm">
+        <div className="overflow-auto max-h-[calc(100vh-240px)] min-h-[400px]">
+          <table className="w-full text-sm border-collapse">
+            <thead className="sticky top-0 z-20 bg-gray-50/95 backdrop-blur-sm shadow-sm">
+              <tr className="border-b border-gray-200">
                 {['Task ID', 'Description', 'Assignee', 'Priority', 'Status', 'Schedule', 'Due Date', ''].map(h => (
-                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-500">{h}</th>
+                  <th key={h} className="sticky top-0 z-20 bg-gray-50/95 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-600 shadow-[0_1px_0_0_rgba(0,0,0,0.06)]">{h}</th>
                 ))}
               </tr>
             </thead>
@@ -520,15 +547,6 @@ export default function TaskListClient({ tasks, role, currentUid, users = [], in
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        {role === 'user' && RECURRING_CATEGORIES.has(task.category) && (
-                          <Link
-                            href={`/portal/checklist?category=${encodeURIComponent(task.category)}`}
-                            onClick={e => e.stopPropagation()}
-                            className="text-xs font-medium text-green-600 hover:underline"
-                          >
-                            Checklist
-                          </Link>
-                        )}
                         <button
                           onClick={e => { e.stopPropagation(); setSelected(task); }}
                           className="text-xs text-brand-600 hover:underline font-medium"
@@ -553,6 +571,7 @@ export default function TaskListClient({ tasks, role, currentUid, users = [], in
           currentUid={currentUid}
           onUpdate={updateTask}
           onDelete={removeTask}
+          users={users as any}
         />
       )}
     </>

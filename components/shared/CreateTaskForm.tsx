@@ -25,20 +25,36 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
   const audioChunksRef = useRef<Blob[]>([]);
   const assignableUsers = users.filter(user => canAssignTask(currentUser as any, user as any));
   const isIntern = currentUser.role === 'intern';
+  const isMember = currentUser.role === 'member';
   const myDept = (currentUser.department || '').trim().toLowerCase();
-  const checkerUsers = isIntern
-    ? users.filter(user =>
-        user.isActive &&
-        user.uid !== currentUser.uid &&
-        (!myDept || (user.department || '').trim().toLowerCase() === myDept || ['admin', 'leader'].includes(user.role))
-      )
-    : [
-        { ...currentUser, isActive: true },
-        ...users.filter(user => user.isActive && user.uid !== currentUser.uid),
-      ];
 
-  const defaultAssignedTo = isIntern ? currentUser.uid : '';
-  const defaultDepartment = isIntern ? currentUser.department : '';
+  const checkerUsers = users.filter(user => {
+    if (!user.isActive) return false;
+    if (user.role === 'admin') return true;
+
+    if (isIntern) {
+      if (user.uid === currentUser.uid) return false;
+      const sameDept = !myDept || (user.department || '').trim().toLowerCase() === myDept;
+      return sameDept && ['member', 'leader'].includes(user.role);
+    }
+
+    if (isMember) {
+      if (user.uid === currentUser.uid) return true;
+      const sameDept = !myDept || (user.department || '').trim().toLowerCase() === myDept;
+      return sameDept && ['member', 'leader'].includes(user.role);
+    }
+
+    if (currentUser.role === 'leader') {
+      if (user.uid === currentUser.uid) return true;
+      const sameDept = !myDept || (user.department || '').trim().toLowerCase() === myDept;
+      return sameDept || user.role === 'leader';
+    }
+
+    return true;
+  });
+
+  const defaultAssignedTo = isIntern || isMember ? currentUser.uid : '';
+  const defaultDepartment = isIntern || isMember ? currentUser.department : '';
   const defaultHandoffUid = isIntern ? '' : currentUser.uid;
 
   const [form, setForm] = useState({

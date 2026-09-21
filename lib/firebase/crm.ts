@@ -77,6 +77,14 @@ export async function adminGetCrmLeads(): Promise<CrmLead[]> {
 }
 
 export async function adminUpdateCrmLead(id: string, data: Partial<CrmLead>): Promise<void> {
+  if (hasCloudflareApi()) {
+    await cfApi('/crm', {
+      method: 'PATCH',
+      body: JSON.stringify({ id, ...data }),
+    });
+    return;
+  }
+
   await adminDb.collection(COL).doc(id).update({
     ...data,
     updatedAt: Timestamp.now(),

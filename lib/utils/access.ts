@@ -26,7 +26,13 @@ export function filterUsersForSession<T extends Pick<AHLUser, 'uid' | 'departmen
   users: T[],
 ): T[] {
   if (session.role === 'admin') return users;
-  if (session.role === 'leader') return users.filter(user => user.department === session.department);
+  if (session.role === 'leader' || session.role === 'member' || session.role === 'intern') {
+    const myDept = (session.department || '').trim().toLowerCase();
+    return users.filter(user => {
+      const userDept = (user.department || '').trim().toLowerCase();
+      return !myDept || userDept === myDept;
+    });
+  }
   return users.filter(user => user.uid === session.uid);
 }
 

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   adminGetAllTasks,
-  adminGetTasksDueWithinHours,
   adminUpdateTaskStatus,
 } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
@@ -9,16 +8,14 @@ import { adminLog } from '@/lib/firebase/scores';
 import {
   formatDdMmYyyy,
   isOpenOneTimeTask,
-  isOneTimeTask,
   taskEndDateKey,
 } from '@/lib/reminders/oneTime';
 import { indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
-import { sendWhatsApp, msgReminder, msgRecentOverdueTasks } from '@/lib/waha';
-import { formatDate } from '@/lib/utils';
+import { sendWhatsApp, msgRecentOverdueTasks } from '@/lib/waha';
 import type { Task } from '@/types';
 
 /**
- * GET /api/reminders — One Time escalation cron (replaces newdelegation proximity nudges).
+ * GET /api/reminders — One Time escalation cron.
  * Checks last 2 days' due dates for open/overdue tasks per person and sends grouped alert.
  * Protected by CRON_SECRET.
  */
@@ -89,73 +86,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const tasks48h = (await adminGetTasksDueWithinHours(48)).filter(isOneTimeTask);
-    const tasks24h = (await adminGetTasksDueWithinHours(24)).filter(isOneTimeTask);
-    const tasks24hIds = new Set(tasks24h.map(t => t.taskId));
-
-    for (const task of tasks48h) {
-      if (tasks24hIds.has(task.taskId)) continue;
-      try {
-        await sendWhatsApp(
-          task.assignedToWa,
-          msgReminder({
-            taskId: task.taskId,
-            description: task.description,
-            endDate: formatDate(task.endDate?.toDate().toISOString()),
-            urgency: '48h',
-          }),
-          task.taskId,
-        );
-        await adminLog('REMINDER', `48h reminder for ${task.taskId}`, { taskId: task.taskId });
-        sent++;
-      } catch (err) {
-        errors.push(`${task.taskId}: ${String(err)}`);
-      }
-    }
-
-    const tasks1h = (await adminGetTasksDueWithinHours(1)).filter(isOneTimeTask);
-    const tasks1hIds = new Set(tasks1h.map(t => t.taskId));
-
-    for (const task of tasks24h) {
-      if (tasks1hIds.has(task.taskId)) continue;
-      try {
-        await sendWhatsApp(
-          task.assignedToWa,
-          msgReminder({
-            taskId: task.taskId,
-            description: task.description,
-            endDate: formatDate(task.endDate?.toDate().toISOString()),
-            urgency: '24h',
-          }),
-          task.taskId,
-        );
-        await adminLog('REMINDER', `24h reminder for ${task.taskId}`, { taskId: task.taskId });
-        sent++;
-      } catch (err) {
-        errors.push(`${task.taskId}: ${String(err)}`);
-      }
-    }
-
-    for (const task of tasks1h) {
-      try {
-        await sendWhatsApp(
-          task.assignedToWa,
-          msgReminder({
-            taskId: task.taskId,
-            description: task.description,
-            endDate: formatDate(task.endDate?.toDate().toISOString()),
-            urgency: 'today',
-          }),
-          task.taskId,
-        );
-        await adminLog('REMINDER', `Due today reminder for ${task.taskId}`, { taskId: task.taskId });
-        sent++;
-      } catch (err) {
-        errors.push(`${task.taskId}: ${String(err)}`);
-      }
-    }
-
-    return NextResponse.json({ success: true, sent, errors, scope: 'One Time' });
+    return NextResponse.json({ success: true, sent, errors, scope: 'One Time Overdue' });
   } catch (err) {
     console.error('Reminders cron error', err);
     return NextResponse.json({ success: false, error: String(err) }, { status: 500 });

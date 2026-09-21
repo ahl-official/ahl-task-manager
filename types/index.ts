@@ -30,7 +30,14 @@ export type TaskStatus =
   | 'Overdue'
   | 'Dead'
   | 'Completed'
-  | 'Verified';
+  | 'Verified'
+  | 'Shifted'
+  | 'Shifted (Pending Accept)'
+  | 'Shifted (In Progress)'
+  | 'Shifted (Delay Requested)'
+  | 'Shifted (Overdue)'
+  | 'Shifted (Completed)'
+  | 'Shifted (Verified)';
 
 export type RevisionStatus = 'none' | 'requested' | 'accepted' | 'rejected';
 
@@ -65,13 +72,22 @@ export interface Task {
   weekStart?: FirestoreTimestamp;
   weekEnd?: FirestoreTimestamp;
   monthKey?: string;
+  isShifted?: boolean;
+  parentTaskId?: string;
+  childTaskId?: string;
+  shiftedToUid?: string;
+  shiftedToName?: string;
+  shiftedByUid?: string;
+  shiftedByName?: string;
+  shiftedNote?: string;
+  shiftedAt?: FirestoreTimestamp | null;
 }
 
 // Serialized version for client components (Timestamps → ISO strings)
 export interface TaskSerialized extends Omit<Task,
   'startDate' | 'endDate' | 'delayedDate' | 'acceptedAt' |
   'completedAt' | 'verifiedAt' | 'createdAt' | 'updatedAt' |
-  'weekStart' | 'weekEnd'
+  'weekStart' | 'weekEnd' | 'shiftedAt'
 > {
   startDate: string | null;
   endDate: string | null;
@@ -86,6 +102,15 @@ export interface TaskSerialized extends Omit<Task,
   weekStart?: string | null;
   weekEnd?: string | null;
   monthKey?: string;
+  isShifted?: boolean;
+  parentTaskId?: string;
+  childTaskId?: string;
+  shiftedToUid?: string;
+  shiftedToName?: string;
+  shiftedByUid?: string;
+  shiftedByName?: string;
+  shiftedNote?: string;
+  shiftedAt?: string | null;
 }
 
 export interface CreateTaskInput {
@@ -196,6 +221,7 @@ export type LogType =
   | 'TASK_VERIFIED'
   | 'TASK_UPDATED'
   | 'TASK_DELETED'
+  | 'TASK_SHIFTED'
   | 'SEND_WA'
   | 'INBOUND_WA'
   | 'WEBHOOK_RAW'

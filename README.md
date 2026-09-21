@@ -169,7 +169,7 @@ Configured in `vercel.json` (requires `CRON_SECRET`):
 | Path | Schedule (UTC) | IST (approx) | Replaces |
 |------|----------------|--------------|----------|
 | `/api/reminders/daily-priority?mode=today` | `30 5 * * *` | ~11:00 | Morning “Today’s Task Reminder” |
-| `/api/reminders` | `0 6 * * *` | ~11:30 | Overdue / 48h / 24h / due-soon (once daily) |
+| `/api/reminders` | `0 6 * * *` | ~11:30 | Last 2 days overdue tasks escalation (once daily) |
 | `/api/reminders/high-priority` | `30 8 * * *` | ~14:00 | Red Ball 🔴 high-priority (once daily) |
 
 Data source: **Cloudflare One Time tasks** (not the newdelegation Master sheet).
