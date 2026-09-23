@@ -95,12 +95,19 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   try {
     const body = await req.json();
-    body.handoffUid = body.handoffUid || session.uid;
 
     const [creator, allUsers] = await Promise.all([
       adminGetUserByUid(session.uid),
       adminGetAllUsers(),
     ]);
+
+    // ONLY for automated tasks, set default checker to Tejal
+    if (session.uid === 'automation-system') {
+      const tejalUser = allUsers.find((u: AHLUser) => u.name.trim().toLowerCase() === 'tejal' || u.uid === 'user-tejal');
+      body.handoffUid = body.handoffUid || (tejalUser ? tejalUser.uid : session.uid);
+    } else {
+      body.handoffUid = body.handoffUid || session.uid;
+    }
 
     const targetAssignee = String(body.assignedTo || body.assignedToName || '').trim().toLowerCase();
     const assignee = allUsers.find((u: AHLUser) => {
