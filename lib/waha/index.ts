@@ -4,7 +4,6 @@ const WAHA_URL     = process.env.WAHA_URL!;
 const WAHA_SESSION = process.env.WAHA_SESSION ?? 'default';
 const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
 const PORTAL_URL   = process.env.NEXT_PUBLIC_APP_URL ?? '';
-export const REDIRECT_WA_NUMBER = process.env.REDIRECT_WA_NUMBER || '';
 
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -41,9 +40,8 @@ export type SendWhatsAppResult = {
 };
 
 async function resolveChatId(waNumber: string): Promise<ResolveChatIdResult> {
-  const targetNumber = REDIRECT_WA_NUMBER || waNumber;
-  const fallbackChatId = formatWaId(targetNumber);
-  const phone = normalizeWa(targetNumber);
+  const fallbackChatId = formatWaId(waNumber);
+  const phone = normalizeWa(waNumber);
 
   if (!WAHA_URL || !phone) {
     return { ok: true, chatId: fallbackChatId };
@@ -82,64 +80,81 @@ async function resolveChatId(waNumber: string): Promise<ResolveChatIdResult> {
   }
 }
 
+let sendQueue = Promise.resolve();
+
+function enqueueSend<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    sendQueue = sendQueue
+      .then(async () => {
+        try {
+          const res = await fn();
+          await new Promise(r => setTimeout(r, 1500));
+          resolve(res);
+        } catch (err) {
+          reject(err);
+        }
+      })
+      .catch((err) => {
+        reject(err);
+      });
+  });
+}
+
 export async function sendWhatsApp(
   waNumber: string,
   text: string,
   taskId?: string,
 ): Promise<SendWhatsAppResult> {
-  const targetNumber = REDIRECT_WA_NUMBER || waNumber;
-  const sendText = REDIRECT_WA_NUMBER && normalizeWa(waNumber) !== normalizeWa(REDIRECT_WA_NUMBER)
-    ? `*[Redirected from ${waNumber}]*\n\n${text}`
-    : text;
-
-  if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
-    return { ok: true, chatId: formatWaId(targetNumber) };
-  }
-
-  const resolved = await resolveChatId(targetNumber);
-  if (!resolved.ok) {
-    console.warn(`[WAHA] Skipped send — number does not exist on WA: ${targetNumber}`);
-    return { ok: false, chatId: resolved.chatId, status: resolved.status, error: resolved.error };
-  }
-
-  const chatId = resolved.chatId;
-
-  try {
-    const res = await fetch(`${WAHA_URL}/api/sendText`, {
-      method: 'POST',
-      headers: buildHeaders(),
-      body: JSON.stringify({
-        session: WAHA_SESSION,
-        chatId,
-        text,
-      }),
-    });
-
-    const body = await res.text();
-
-    if (!res.ok) {
-      console.error(`WAHA sendText error: ${res.status}`, body);
-      await adminLog('SEND_WA', `FAILED send to ${waNumber}`, {
-        meta: { chatId, error: body, status: res.status },
-        taskId,
-      });
-      return { ok: false, chatId, status: res.status, body, error: body };
+  return enqueueSend(async () => {
+    if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
+      return { ok: true, chatId: formatWaId(waNumber) };
     }
 
-    await adminLog('SEND_WA', `Sent to ${waNumber}: ${text.slice(0, 50)}...`, {
-      meta: { chatId },
-      taskId,
-    });
+    const resolved = await resolveChatId(waNumber);
+    if (!resolved.ok) {
+      console.warn(`[WAHA] Skipped send — number does not exist on WA: ${waNumber}`);
+      return { ok: false, chatId: resolved.chatId, status: resolved.status, error: resolved.error };
+    }
 
-    return { ok: true, chatId, status: res.status, body };
-  } catch (err) {
-    console.error('WAHA sendWhatsApp network error', err);
-    await adminLog('SEND_WA', `FAILED network send to ${waNumber}`, {
-      meta: { chatId, error: String(err) },
-      taskId,
-    });
-    return { ok: false, chatId, error: String(err) };
-  }
+    const chatId = resolved.chatId;
+
+    try {
+      const res = await fetch(`${WAHA_URL}/api/sendText`, {
+        method: 'POST',
+        headers: buildHeaders(),
+        body: JSON.stringify({
+          session: WAHA_SESSION,
+          chatId,
+          text,
+        }),
+      });
+
+      const body = await res.text();
+
+      if (!res.ok) {
+        console.error(`WAHA sendText error: ${res.status}`, body);
+        await adminLog('SEND_WA', `FAILED send to ${waNumber}`, {
+          meta: { chatId, error: body, status: res.status },
+          taskId,
+        });
+        return { ok: false, chatId, status: res.status, body, error: body };
+      }
+
+      await adminLog('SEND_WA', `Sent to ${waNumber}: ${text.slice(0, 50)}...`, {
+        meta: { chatId },
+        taskId,
+      });
+
+      return { ok: true, chatId, status: res.status, body };
+    } catch (err) {
+      console.error('WAHA sendWhatsApp network error', err);
+      await adminLog('SEND_WA', `FAILED network send to ${waNumber}`, {
+        meta: { chatId, error: String(err) },
+        taskId,
+      });
+      return { ok: false, chatId, error: String(err) };
+    }
+  });
 }
 
 /** Send a PDF/document via WAHA POST /api/sendFile (base64 body). */
@@ -151,12 +166,11 @@ export async function sendWhatsAppFile(input: {
   caption?: string;
   taskId?: string;
 }): Promise<SendWhatsAppResult> {
-  const targetNumber = REDIRECT_WA_NUMBER || input.waNumber;
   if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
-    return { ok: true, chatId: formatWaId(targetNumber) };
+    return { ok: true, chatId: formatWaId(input.waNumber) };
   }
 
-  const resolved = await resolveChatId(targetNumber);
+  const resolved = await resolveChatId(input.waNumber);
   if (!resolved.ok) {
     return { ok: false, chatId: resolved.chatId, error: resolved.error };
   }
@@ -166,9 +180,6 @@ export async function sendWhatsAppFile(input: {
     ? input.data.toString('base64')
     : Buffer.from(input.data).toString('base64');
   const mimetype = input.mimetype || 'application/pdf';
-  const caption = REDIRECT_WA_NUMBER && normalizeWa(input.waNumber) !== normalizeWa(REDIRECT_WA_NUMBER)
-    ? `*[Redirected from ${input.waNumber}]*\n\n${input.caption || ''}`.trim()
-    : input.caption;
 
   try {
     const res = await fetch(`${WAHA_URL}/api/sendFile`, {
@@ -182,7 +193,7 @@ export async function sendWhatsAppFile(input: {
           filename: input.filename,
           data: base64,
         },
-        caption,
+        caption: input.caption,
       }),
     });
 
@@ -210,20 +221,16 @@ export async function sendWhatsAppPdfFromDriveLink(
   _processName: string,
   message: string,
 ): Promise<SendWhatsAppResult> {
-  const targetNumber = REDIRECT_WA_NUMBER || waNumber;
   if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
-    return { ok: true, chatId: formatWaId(targetNumber) };
+    return { ok: true, chatId: formatWaId(waNumber) };
   }
 
-  const resolved = await resolveChatId(targetNumber);
+  const resolved = await resolveChatId(waNumber);
   if (!resolved.ok) {
     return { ok: false, chatId: resolved.chatId, error: resolved.error };
   }
 
   const chatId = resolved.chatId;
-  const caption = REDIRECT_WA_NUMBER && normalizeWa(waNumber) !== normalizeWa(REDIRECT_WA_NUMBER)
-    ? `*[Redirected from ${waNumber}]*\n\n${message}`.trim()
-    : message;
 
   try {
     const res = await fetch(`${WAHA_URL}/api/sendFile`, {
