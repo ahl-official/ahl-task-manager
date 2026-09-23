@@ -63,7 +63,7 @@ async function resolveChatId(waNumber: string): Promise<ResolveChatIdResult> {
       return { ok: true, chatId: fallbackChatId };
     }
 
-    const data = JSON.parse(body) as { numberExists?: boolean; chatId?: string };
+    const data = JSON.parse(body) as { numberExists?: boolean; chatId?: string; pn?: string };
     if (data.numberExists === false) {
       return {
         ok: false,
@@ -74,7 +74,8 @@ async function resolveChatId(waNumber: string): Promise<ResolveChatIdResult> {
       };
     }
 
-    return { ok: true, chatId: data.chatId || fallbackChatId };
+    const validChatId = data.pn || (data.chatId && !data.chatId.endsWith('@lid') ? data.chatId : fallbackChatId);
+    return { ok: true, chatId: validChatId };
   } catch (err) {
     console.warn('WAHA contact check error', err);
     return { ok: true, chatId: fallbackChatId };
@@ -287,6 +288,33 @@ export function msgTaskAssigned(task: {
     `*Assigned by:* ${task.createdByName}`,
     ``,
     ...actionLines,
+  ].join('\n');
+}
+
+export function msgRecurringTaskAssigned(task: {
+  taskId: string;
+  category: string;
+  description: string;
+  assignedToName: string;
+  priority?: string;
+  createdByName?: string;
+  startDate?: string;
+  endDate?: string;
+}): string {
+  const categoryLabel = task.category || 'Task';
+  const header = `📌 *New ${categoryLabel} Task Assigned: ${task.taskId}*`;
+  const priorityLine = task.priority ? `\n*Priority:* ${task.priority}` : '';
+  const dateLine = task.endDate ? `\n*Due / Schedule:* ${task.endDate}` : '';
+  const creatorLine = task.createdByName ? `\n*Assigned by:* ${task.createdByName}` : '';
+
+  return [
+    header,
+    ``,
+    `*Task:* ${task.description}`,
+    `*Category:* ${categoryLabel}${priorityLine}${dateLine}${creatorLine}`,
+    ``,
+    `Track and mark it complete on the checklist portal:`,
+    `Checklist: ${PORTAL_URL}/portal/checklist?category=${encodeURIComponent(task.category || 'Daily')}`,
   ].join('\n');
 }
 

@@ -1,0 +1,15 @@
+name = "ahl-task-manager-api"
+main = "worker/src/index.ts"
+compatibility_date = "2026-06-16"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ahl_task_manager"
+database_id = "412c329f-70cb-4224-8e4b-35bdbf155fbc"
+
+[vars]
+APP_ORIGIN = "https://ahl-task-manager.vercel.app"
+WAHA_URL = "https://waha.hairscalptradingco.com"
+WAHA_SESSION = "processC"
+WAHA_API_KEY = "Americanhairline@123"
+API_SHARED_SECRET = "Americanhairline@1234"

@@ -13,6 +13,7 @@ import { adminIncrementScore, adminLog } from '@/lib/firebase/scores';
 import {
   sendWhatsApp,
   msgTaskAssigned,
+  msgRecurringTaskAssigned,
   msgCoordinatorNotification,
 } from '@/lib/waha';
 import { formatDate } from '@/lib/utils';
@@ -133,6 +134,23 @@ export async function POST(req: NextRequest) {
         taskId: timelyResult.taskId,
         uid: session.uid,
       }).catch(() => {});
+
+      if (assignee.waNumber) {
+        await sendWhatsApp(
+          assignee.waNumber,
+          msgRecurringTaskAssigned({
+            taskId: timelyResult.taskId,
+            category: body.category,
+            description: timelyResult.description,
+            assignedToName: assignee.name,
+            priority: body.priority || 'Medium',
+            createdByName: session.name,
+            startDate: body.startDate,
+            endDate: body.endDate,
+          }),
+          timelyResult.taskId,
+        ).catch(err => console.error('[Tasks API] Recurring task WAHA notification failed', err));
+      }
 
       return NextResponse.json({
         success: true,
