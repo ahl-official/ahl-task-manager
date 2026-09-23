@@ -9,8 +9,16 @@
       "schedule": "30 5 * * *"
     },
     {
-      "path": "/api/reminders/high-priority",
-      "schedule": "30 5,7,9,11,13 * * *"
+      "path": "/api/reminders/high-priority?slot=11am",
+      "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/reminders/high-priority?slot=2pm",
+      "schedule": "30 8 * * *"
+    },
+    {
+      "path": "/api/reminders/high-priority?slot=5pm",
+      "schedule": "30 11 * * *"
     },
     {
       "path": "/api/reminders",
