@@ -1,37 +1,4 @@
 {
-  "_disabled_crons": [
-    {
-      "path": "/api/reminders/daily-priority?mode=today",
-      "schedule": "30 5 * * *"
-    },
-    {
-      "path": "/api/reminders/daily-pdf",
-      "schedule": "30 5 * * *"
-    },
-    {
-      "path": "/api/reminders/high-priority?slot=11am",
-      "schedule": "30 5 * * *"
-    },
-    {
-      "path": "/api/reminders/high-priority?slot=2pm",
-      "schedule": "30 8 * * *"
-    },
-    {
-      "path": "/api/reminders/high-priority?slot=5pm",
-      "schedule": "30 11 * * *"
-    },
-    {
-      "path": "/api/reminders",
-      "schedule": "0 6 * * *"
-    },
-    {
-      "path": "/api/mis/cron?action=weekly",
-      "schedule": "0 18 * * 2"
-    },
-    {
-      "path": "/api/mis/cron?action=runMonthlyReports",
-      "schedule": "30 3 * * *"
-    }
-  ]
+  "crons": []
 }
 
