@@ -1,5 +1,5 @@
 {
-  "crons": [
+  "_disabled_crons": [
     {
       "path": "/api/reminders/daily-priority?mode=today",
       "schedule": "30 5 * * *"
@@ -34,3 +34,4 @@
     }
   ]
 }
+

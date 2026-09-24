@@ -795,6 +795,9 @@ export async function appendTimelyTaskToSheetInput(input: {
     throw new Error(`Assignee details could not be found for UID ${input.assignedToUid}`);
   }
 
+  const cleanName = (s: string) => String(s || '').toLowerCase().replace(/\s+/g, '');
+  const targetClean = cleanName(doerName);
+
   let targetSpreadsheetId = process.env.CHECKLIST_WEEKLY_MONTHLY_ID || DEFAULT_WEEKLY_MONTHLY_ID;
 
   if (input.category === 'Daily') {
@@ -806,33 +809,34 @@ export async function appendTimelyTaskToSheetInput(input: {
       readSpreadsheetValues(salonId, `${quoteSheetName('Doer List')}!A2:C`).catch(() => [[]]),
     ]);
 
-    const officeMatch = (officeDoers[0] || []).find(row => namesEqual(cell(row, 0), doerName));
-    const salonMatch = (salonDoers[0] || []).find(row => namesEqual(cell(row, 0), doerName));
+    const officeRows = (officeDoers[0] || []) as unknown[][];
+    const salonRows = (salonDoers[0] || []) as unknown[][];
+
+    const officeMatch = officeRows.find(row => cleanName(cell(row, 0)) === targetClean);
+    const salonMatch = salonRows.find(row => cleanName(cell(row, 0)) === targetClean);
 
     if (salonMatch && !officeMatch) {
       targetSpreadsheetId = salonId;
-      department = department || cell(salonMatch, 1);
+      doerName = cell(salonMatch, 0) || doerName;
+      department = cell(salonMatch, 1) || department;
     } else if (officeMatch) {
       targetSpreadsheetId = officeId;
-      department = department || cell(officeMatch, 1);
+      doerName = cell(officeMatch, 0) || doerName;
+      department = cell(officeMatch, 1) || department;
     } else {
-      throw new Error(`User "${doerName}" is not present in sheets. Please add user in Doer List first.`);
+      throw new Error(`User "${doerName}" is not present in the Doer List of Daily sheets. Please add them to the Doer List tab in Google Sheets first.`);
     }
   } else {
-    // Weekly or Monthly: auto-create user in Doer List tab if not present
+    // Weekly or Monthly: look up user directly in the sheet's Doer List
     const weeklyDoers = await readSpreadsheetValues(targetSpreadsheetId, `${quoteSheetName('Doer List')}!A2:C`).catch(() => [[]]);
-    const match = (weeklyDoers[0] || []).find(row => namesEqual(cell(row, 0), doerName));
-    if (!match) {
-      const doerDept = department || 'General';
-      const doerRange = `${quoteSheetName('Doer List')}!A:C`;
-      const doerValues = [[doerName, doerDept, email]];
-      await sheetsFetch(`/values/${encodeURIComponent(doerRange)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
-        method: 'POST',
-        body: JSON.stringify({ values: doerValues }),
-      }, targetSpreadsheetId);
-      department = doerDept;
+    const weeklyRows = (weeklyDoers[0] || []) as unknown[][];
+    const match = weeklyRows.find(row => cleanName(cell(row, 0)) === targetClean);
+
+    if (match) {
+      doerName = cell(match, 0) || doerName;
+      department = cell(match, 1) || department;
     } else {
-      department = department || cell(match, 1);
+      throw new Error(`User "${doerName}" is not present in the Doer List of the Weekly/Monthly Google Sheet. Please add them to the Doer List tab in Google Sheets first.`);
     }
   }
 
