@@ -635,7 +635,8 @@ export default function FmsClient({ currentUser, role }: FmsClientProps) {
     if (isAdmin) {
       return ALL_FMS_SHEETS_CONFIG;
     }
-    return ALL_FMS_SHEETS_CONFIG.filter(cfg => assignedWorkflows.includes(cfg.id));
+    const assigned = ALL_FMS_SHEETS_CONFIG.filter(cfg => assignedWorkflows.includes(cfg.id));
+    return assigned.length > 0 ? assigned : ALL_FMS_SHEETS_CONFIG;
   }, [isAdmin, assignedWorkflows]);
 
   // Filtered & Sorted Tasks (all stages retained, strict user matching for non-admins)
@@ -1259,20 +1260,6 @@ export default function FmsClient({ currentUser, role }: FmsClientProps) {
 
   const workflowTitle = currentSheetConfig.title;
 
-  // Non-admin with no sheets assigned
-  if (!isAdmin && !checkingAssigned && visibleSheets.length === 0) {
-    return (
-      <div className="p-6 max-w-4xl mx-auto text-center py-24">
-        <div className="w-16 h-16 rounded-3xl bg-gray-100 flex items-center justify-center text-gray-400 mx-auto mb-4 border border-gray-200 shadow-xs">
-          <Inbox size={32} />
-        </div>
-        <h2 className="text-xl font-bold text-gray-900">No FMS Assigned</h2>
-        <p className="text-sm text-gray-500 mt-1 max-w-md mx-auto">
-          You currently have no FMS tasks or stages assigned to you across any Google Sheets.
-        </p>
-      </div>
-    );
-  }
 
   return (
     <div className="px-3 py-4 sm:p-6 space-y-4 sm:space-y-6 max-w-7xl mx-auto">
