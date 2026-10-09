@@ -20,6 +20,22 @@ interface Props {
 }
 
 export default function TaskModal({ task, onClose, role, currentUid, onUpdate, onDelete, users, currentUser }: Props) {
+  const userRole = (currentUser?.role || (role === 'admin' ? 'admin' : 'member')) as UserRole;
+  const isAssignee = task.assignedTo === currentUid;
+  const isHandoff  = task.handoffUid === currentUid;
+  const isDelegator = task.shiftedByUid === currentUid;
+  const isAdmin    = role === 'admin' || userRole === 'admin';
+  const isTimelySheet = task.createdBy === 'timely-sheet' || /^(office|salon|weekly)-/i.test(task.taskId);
+  const isDone = task.status === 'Completed' || task.status === 'Verified' || task.status === 'Shifted (Completed)' || task.status === 'Shifted (Verified)';
+  const canDelete  = isAdmin && !isTimelySheet && !isDone;
+  const displayStatus = task.status;
+  const due        = getDueBadge(task.endDate, displayStatus);
+  const needsDates = !isDone && isAssignee && (task.status === 'In Progress' || task.status === 'Pending Accept') && (!task.startDate || !task.endDate);
+  const canChangeDead = !isTimelySheet && (isAssignee || isHandoff || isAdmin);
+  const canShift = !isTimelySheet && canUserShiftTask(currentUser ?? { uid: currentUid, role: userRole }, task);
+  const canVerify = !isTimelySheet && (isHandoff || isAdmin || isDelegator) && (task.status === 'Completed' || task.status === 'Shifted (Completed)');
+  const canEditChecker = isAdmin && !isTimelySheet && !isDone && (task.status === 'Pending Accept' || task.status === 'In Progress' || task.status === 'Shifted (Pending Accept)' || task.status === 'Shifted (In Progress)' || task.status === 'Delay Requested' || task.status === 'Overdue');
+
   const [mounted, setMounted] = useState(false);
   const [loading, setLoading] = useState<string | null>(null);
   const [showRevision, setShowRevision] = useState(false);
@@ -33,11 +49,24 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isEditingChecker, setIsEditingChecker] = useState(false);
   const [selectedCheckerUid, setSelectedCheckerUid] = useState(task.handoffUid || '');
+  const [isEditingDates, setIsEditingDates] = useState(!task.endDate && !isDone && (isAssignee || isAdmin));
   const [userList, setUserList] = useState(users || []);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    const s = task.startDate ? (typeof task.startDate === 'string' ? task.startDate.split('T')[0] : '') : '';
+    const e = task.endDate ? (typeof task.endDate === 'string' ? task.endDate.split('T')[0] : '') : '';
+    setAcceptStartDate(s);
+    setAcceptEndDate(e);
+    if (!task.endDate && !isDone && (isAssignee || isAdmin)) {
+      setIsEditingDates(true);
+    } else {
+      setIsEditingDates(false);
+    }
+  }, [task.startDate, task.endDate, task.taskId, isDone, isAssignee, isAdmin]);
 
   useEffect(() => {
     if (users && users.length > 0) {
@@ -58,22 +87,6 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
     setSelectedCheckerUid(task.handoffUid || '');
     setIsEditingChecker(false);
   }, [task.handoffUid]);
-
-  const userRole = (currentUser?.role || (role === 'admin' ? 'admin' : 'member')) as UserRole;
-  const isAssignee = task.assignedTo === currentUid;
-  const isHandoff  = task.handoffUid === currentUid;
-  const isDelegator = task.shiftedByUid === currentUid;
-  const isAdmin    = role === 'admin' || userRole === 'admin';
-  const isTimelySheet = task.createdBy === 'timely-sheet' || /^(office|salon|weekly)-/i.test(task.taskId);
-  const isDone = task.status === 'Completed' || task.status === 'Verified' || task.status === 'Shifted (Completed)' || task.status === 'Shifted (Verified)';
-  const canDelete  = isAdmin && !isTimelySheet && !isDone;
-  const displayStatus = task.status;
-  const due        = getDueBadge(task.endDate, displayStatus);
-  const needsDates = !isDone && isAssignee && (task.status === 'In Progress' || task.status === 'Pending Accept') && (!task.startDate || !task.endDate);
-  const canChangeDead = !isTimelySheet && (isAssignee || isHandoff || isAdmin);
-  const canShift = !isTimelySheet && canUserShiftTask(currentUser ?? { uid: currentUid, role: userRole }, task);
-  const canVerify = !isTimelySheet && (isHandoff || isAdmin || isDelegator) && (task.status === 'Completed' || task.status === 'Shifted (Completed)');
-  const canEditChecker = isAdmin && !isTimelySheet && !isDone && (task.status === 'Pending Accept' || task.status === 'In Progress' || task.status === 'Shifted (Pending Accept)' || task.status === 'Shifted (In Progress)' || task.status === 'Delay Requested' || task.status === 'Overdue');
 
   useEffect(() => {
     setPriorityValue(task.priority);
@@ -200,24 +213,33 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px] w-screen h-screen">
-      <div className="bg-white rounded-2xl shadow-modal w-full max-w-lg max-h-[90vh] overflow-y-auto overflow-x-hidden scrollbar-thin flex flex-col">
-        {/* Header */}
-        <div className="flex items-start justify-between p-5 border-b border-gray-100 min-w-0">
-          <div className="min-w-0 flex-1 pr-2">
-            <div className="flex items-center gap-2 mb-1 flex-wrap">
-              <span className="text-xs font-mono text-brand-600 bg-brand-50 px-2 py-0.5 rounded-md shrink-0">{task.taskId}</span>
-              <span className={cn('badge', STATUS_COLORS[displayStatus])}>{displayStatus}</span>
-              <span className={cn('badge', PRIORITY_COLORS[task.priority])}>{task.priority}</span>
-            </div>
-            <p className="text-base font-semibold text-gray-900 leading-snug break-words [overflow-wrap:anywhere]">{task.description}</p>
+      <div className="bg-white rounded-2xl shadow-modal w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
+        {/* Compact Fixed Top Bar */}
+        <div className="sticky top-0 z-20 flex items-center justify-between px-4 sm:px-5 py-3 border-b border-gray-100 bg-white min-w-0 shrink-0">
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+            <span className="text-xs font-mono font-medium text-brand-600 bg-brand-50 px-2 py-0.5 rounded-md shrink-0">{task.taskId}</span>
+            <span className={cn('badge text-[11px]', STATUS_COLORS[displayStatus])}>{displayStatus}</span>
+            <span className={cn('badge text-[11px]', PRIORITY_COLORS[task.priority])}>{task.priority}</span>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 shrink-0 ml-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition shrink-0 ml-2 focus:outline-none focus:ring-2 focus:ring-brand-500"
+            title="Close modal"
+          >
             <X size={18} />
           </button>
         </div>
 
-        {/* Body */}
-        <div className="p-4 sm:p-5 space-y-4">
+        {/* Scrollable Body */}
+        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto overflow-x-hidden scrollbar-thin flex-1">
+          {/* Task Description (scrolls with content) */}
+          <div>
+            <h2 className="text-base font-semibold text-gray-900 leading-snug break-words [overflow-wrap:anywhere]">
+              {task.description}
+            </h2>
+          </div>
+
           {/* Details grid */}
           <div className="grid grid-cols-2 gap-2 sm:gap-3">
             <Detail icon={User} label="Assigned To" value={task.assignedToName} />
@@ -291,17 +313,78 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             />
             <Detail icon={Tag} label="Category" value={task.category} />
             <Detail icon={Tag} label="Department" value={task.department} />
-            <Detail icon={Calendar} label="Start Date" value={formatDate(task.startDate)} />
+            <Detail
+              icon={Calendar}
+              label="Start Date"
+              value={
+                isEditingDates ? (
+                  <input
+                    type="date"
+                    value={acceptStartDate}
+                    onChange={e => setAcceptStartDate(e.target.value)}
+                    className="w-full text-xs rounded-lg border border-brand-300 bg-white px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                    disabled={loading === 'set-dates'}
+                  />
+                ) : (
+                  formatDate(task.startDate) || '—'
+                )
+              }
+            />
             <Detail
               icon={Calendar}
               label="Due Date"
               value={
-                <div className="flex items-center gap-1.5">
-                  <span className="text-sm font-medium text-gray-800">{formatDate(task.delayedDate || task.endDate)}</span>
-                  {!isDone && due.label === 'Overdue' && (
-                    <span className="badge bg-red-100 text-red-700">Overdue</span>
-                  )}
-                </div>
+                isEditingDates ? (
+                  <div className="space-y-1.5" onClick={e => e.stopPropagation()}>
+                    <input
+                      type="date"
+                      value={acceptEndDate}
+                      onChange={e => setAcceptEndDate(e.target.value)}
+                      min={acceptStartDate || undefined}
+                      className="w-full text-xs rounded-lg border border-brand-300 bg-white px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                      disabled={loading === 'set-dates'}
+                      required
+                    />
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!acceptEndDate) {
+                            toast.error('Please select a due date');
+                            return;
+                          }
+                          await doAction('set-dates', { startDate: acceptStartDate, endDate: acceptEndDate });
+                          setIsEditingDates(false);
+                        }}
+                        disabled={loading === 'set-dates' || !acceptEndDate}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 transition shadow-xs"
+                      >
+                        {loading === 'set-dates' ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+                        Save Date
+                      </button>
+                      {task.endDate && (
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingDates(false)}
+                          disabled={loading === 'set-dates'}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-gray-600 hover:bg-gray-200 transition"
+                        >
+                          <X size={10} />
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <span className={cn('text-sm font-medium', !task.endDate ? 'text-amber-600 font-semibold' : 'text-gray-800')}>
+                      {formatDate(task.delayedDate || task.endDate) || 'Date pending'}
+                    </span>
+                    {!isDone && due.label === 'Overdue' && (
+                      <span className="badge bg-red-100 text-red-700">Overdue</span>
+                    )}
+                  </div>
+                )
               }
             />
           </div>
@@ -454,10 +537,10 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
 
             {/* Assignee / Admin actions */}
             {(isAssignee || isAdmin) && (
-              <div className="flex gap-2 flex-wrap">
+              <div className="flex gap-2 flex-wrap w-full">
                 {task.status === 'Pending Accept' && !isDone && (
-                  <div className="w-full rounded-xl bg-blue-50 p-3">
-                    <p className="mb-2 text-xs font-semibold text-blue-800">Accept and set timeline</p>
+                  <div className="w-full rounded-xl bg-blue-50 p-3.5 space-y-2.5">
+                    <p className="text-xs font-semibold text-blue-800">Accept and set timeline</p>
                     <div className="grid gap-2 sm:grid-cols-2">
                       <div>
                         <label className="label text-blue-700">Start Date</label>
@@ -480,7 +563,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                         />
                       </div>
                     </div>
-                    <div className="mt-3">
+                    <div className="pt-1">
                       <ActionButton
                         label="Accept Task"
                         onClick={() => {
@@ -493,8 +576,21 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                   </div>
                 )}
 
+
+
                 {['In Progress', 'Delay Requested', 'Shifted (In Progress)', 'Shifted (Delay Requested)'].includes(task.status) && !isDone && (
-                  <ActionButton label="Mark Complete" onClick={() => doAction('complete')} loading={loading === 'complete'} color="green" />
+                  <ActionButton
+                    label="Mark Complete"
+                    onClick={() => {
+                      if (!isAdmin && (!task.startDate || !task.endDate) && !acceptEndDate) {
+                        toast.error('Please set a due date before completing');
+                        return;
+                      }
+                      doAction('complete');
+                    }}
+                    loading={loading === 'complete'}
+                    color="green"
+                  />
                 )}
               </div>
             )}

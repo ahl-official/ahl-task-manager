@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
-import { AlertTriangle, ArrowRight, Check, Clock3, Loader2, RotateCw, Search } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Calendar, Check, Clock3, Loader2, RotateCw, Search } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS, PRIORITY_DOT, getDueBadge, normalizeBaseStatus } from '@/lib/utils';
 import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import { scheduleByTaskId, scheduleTasks } from '@/lib/utils/scheduling';
@@ -471,7 +471,7 @@ export default function TaskListClient({
       )}
 
       {/* 4 Interactive Stat Filter Cards */}
-      <div className="surface-enter mb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="surface-enter mb-3.5 grid grid-cols-2 md:grid-cols-4 gap-2.5 sm:gap-3">
         {[
           {
             id: 'Pending Accept',
@@ -519,20 +519,20 @@ export default function TaskListClient({
                 setStatus(current => (current === item.id ? 'all' : item.id));
               }}
               className={cn(
-                'card p-4 border text-left cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md shadow-xs focus:outline-none',
+                'card p-3 sm:p-3.5 border text-left cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md shadow-xs focus:outline-none',
                 isSelected ? item.activeBg : item.defaultBg
               )}
               title={`Filter tasks by ${item.label}`}
             >
-              <p className={cn('text-2xl font-bold tracking-tight', item.textVal)}>{item.value}</p>
-              <p className={cn('text-xs font-semibold mt-1', item.textLabel)}>{item.label}</p>
+              <p className={cn('text-xl sm:text-2xl font-bold tracking-tight', item.textVal)}>{item.value}</p>
+              <p className={cn('text-xs font-semibold mt-0.5', item.textLabel)}>{item.label}</p>
             </button>
           );
         })}
       </div>
 
       {/* Filters Bar */}
-      <div className="surface-enter mb-4 flex flex-wrap items-center gap-3">
+      <div className="surface-enter mb-3.5 flex flex-wrap items-center gap-2.5">
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
@@ -540,7 +540,7 @@ export default function TaskListClient({
             placeholder="Search tasks (ID, name, description)…"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="input pl-8 pr-8 py-2 text-sm"
+            className="input pl-8 pr-8 py-1.5 sm:py-2 text-xs sm:text-sm h-9 sm:h-10"
           />
           {isSearchingServer && (
             <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-brand-600" />
@@ -550,7 +550,7 @@ export default function TaskListClient({
         <select
           value={departmentFilter}
           onChange={e => { setDepartment(e.target.value); setUserFilter('all'); setMineOnly(false); }}
-          className="input py-2 text-sm w-auto"
+          className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
           <option value="all">All Departments</option>
           {departments.map(department => <option key={department} value={department}>{department}</option>)}
@@ -559,7 +559,7 @@ export default function TaskListClient({
         <select
           value={userFilter}
           onChange={e => { setUserFilter(e.target.value); setMineOnly(false); }}
-          className="input py-2 text-sm w-auto"
+          className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
           <option value="all">All Individuals</option>
           {visibleUsers.map(user => <option key={user.uid} value={user.uid}>{user.name}</option>)}
@@ -568,7 +568,7 @@ export default function TaskListClient({
         <select
           value={statusFilter}
           onChange={e => setStatus(e.target.value)}
-          className="input py-2 text-sm w-auto"
+          className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
           {STATUS_OPTIONS.map(s => (
             <option key={s} value={s}>{s === 'all' ? 'All Statuses' : s}</option>
@@ -578,7 +578,7 @@ export default function TaskListClient({
         <select
           value={categoryFilter}
           onChange={e => setCategory(e.target.value)}
-          className="input py-2 text-sm w-auto"
+          className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
           {CATEGORY_OPTIONS.map(c => (
             <option key={c} value={c}>
@@ -590,7 +590,7 @@ export default function TaskListClient({
         <select
           value={priorityFilter}
           onChange={e => setPriority(e.target.value)}
-          className="input py-2 text-sm w-auto"
+          className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
           <option value="all">All Priorities</option>
           <option value="High">High</option>
@@ -601,7 +601,7 @@ export default function TaskListClient({
         <select
           value={sortMode}
           onChange={e => setSortMode(e.target.value as typeof sortMode)}
-          className="input py-2 text-sm w-auto"
+          className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
           <option value="recommended">Recommended Order</option>
           <option value="newest">Newest First</option>
@@ -613,8 +613,8 @@ export default function TaskListClient({
       </div>
 
       {/* Table */}
-      <div className="card surface-enter overflow-hidden p-0 border border-gray-200 shadow-sm">
-        <div className="overflow-auto max-h-[calc(100vh-240px)] min-h-[400px]">
+      <div className="card surface-enter overflow-hidden p-0 border border-gray-200 shadow-sm mb-8">
+        <div className="overflow-auto max-h-[calc(100vh-220px)] min-h-[360px]">
           <table className="w-full min-w-[700px] text-sm border-collapse">
             <thead className="sticky top-0 z-20 bg-gray-50/95 backdrop-blur-sm shadow-sm">
               <tr className="border-b border-gray-200">
@@ -684,7 +684,13 @@ export default function TaskListClient({
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <span className={cn('badge', due.color)}>{due.label}</span>
+                      {!task.endDate && ['Pending Accept', 'In Progress', 'Shifted (Pending Accept)', 'Shifted (In Progress)'].includes(task.status) ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200/80">
+                          <Calendar size={11} className="text-amber-500 shrink-0" /> Set Date
+                        </span>
+                      ) : (
+                        <span className={cn('badge', due.color)}>{due.label}</span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
