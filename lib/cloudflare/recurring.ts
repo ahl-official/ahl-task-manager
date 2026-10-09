@@ -241,40 +241,54 @@ export async function getRecurringChecklist(params: {
         console.warn('Cloudflare getRecurringChecklist error, using tasks fallback', err.message);
       }
       try {
-        const tasksRes = await cfApi<Task[]>('/tasks?limit=1000');
+        const tasksRes = await cfApi<Task[]>('/tasks?limit=all');
         const tasksList = Array.isArray(tasksRes) ? tasksRes : (tasksRes as any)?.data || (tasksRes as any)?.tasks || [];
         const targetDate = params.date || indiaTodayKey();
-        const recTasks = tasksList.filter((t: any) => {
-          const cat = (t.category || '').toLowerCase();
-          if (!['daily', 'weekly', 'monthly'].includes(cat)) return false;
-          if (params.category && params.category.toLowerCase() !== 'all' && cat !== params.category.toLowerCase()) return false;
-          if (params.userName && (t.assignedToName || '').toLowerCase() !== params.userName.toLowerCase()) return false;
-          if (params.uid && t.assignedTo !== params.uid) return false;
 
-          // Do not show task on dates before it was created!
-          const createdDateStr = (t.createdAt ? String(t.createdAt) : t.startDate ? String(t.startDate) : '').slice(0, 10);
-          if (createdDateStr) {
-            if (cat === 'monthly') {
-              if (createdDateStr.slice(0, 7) > targetDate.slice(0, 7)) return false;
-            } else {
-              if (createdDateStr > targetDate) return false;
+        // 1. Group tasks by recurring definition key: description + assignee + category
+        const normalizeKey = (t: any) =>
+          `${(t.description || '').trim().toLowerCase()}::${(t.assignedToName || t.assignedTo || '').trim().toLowerCase()}::${(t.category || '').trim().toLowerCase()}`;
+
+        const distinctMap = new Map<string, { definition: any; history: any[] }>();
+
+        for (const t of tasksList) {
+          const cat = (t.category || '').toLowerCase();
+          if (!['daily', 'weekly', 'monthly'].includes(cat)) continue;
+          if (params.category && params.category.toLowerCase() !== 'all' && cat !== params.category.toLowerCase()) continue;
+          if (params.userName && (t.assignedToName || '').toLowerCase() !== params.userName.toLowerCase()) continue;
+          if (params.uid && t.assignedTo !== params.uid) continue;
+
+          const key = normalizeKey(t);
+          if (!distinctMap.has(key)) {
+            distinctMap.set(key, { definition: t, history: [t] });
+          } else {
+            const entry = distinctMap.get(key)!;
+            entry.history.push(t);
+            // Keep the one with latest ID or richest metadata as the definition
+            if (t.taskId > entry.definition.taskId) {
+              entry.definition = t;
             }
           }
-          return true;
-        });
+        }
 
-        if (recTasks.length > 0) {
+        const distinctEntries = Array.from(distinctMap.values());
+
+        if (distinctEntries.length > 0) {
           const [y, m, d] = targetDate.split('-').map(Number);
           const dt = new Date(Date.UTC(y, m - 1, d, 6, 0, 0));
           const dow = dt.getUTCDay();
           const dowIso = dow === 0 ? 7 : dow; // 1 = Mon .. 7 = Sun
           const mondayDate = new Date(Date.UTC(y, m - 1, d - (dowIso - 1), 6, 0, 0));
+          const sundayDate = new Date(Date.UTC(y, m - 1, d + (7 - dowIso), 6, 0, 0));
+
+          const weekStartStr = mondayDate.toISOString().slice(0, 10);
+          const weekEndStr = sundayDate.toISOString().slice(0, 10);
 
           const monthKey = `${y}-${String(m).padStart(2, '0')}`;
           const lastDayOfMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
           const endOfMonthDate = `${y}-${String(m).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
 
-          return recTasks.map((t: any) => {
+          return distinctEntries.map(({ definition: t, history }) => {
             const cat = (t.category || 'Daily').toLowerCase();
             const isMonthly = cat === 'monthly';
             const isWeekly = cat === 'weekly';
@@ -300,7 +314,7 @@ export async function getRecurringChecklist(params: {
                   taskDow = tdow === 0 ? 7 : tdow;
                 }
               }
-              taskDow = taskDow || 3; // default Wed if none
+              taskDow = taskDow || 5; // default Friday
 
               // Calculate date for this week's occurrence
               const weekOccurDate = new Date(mondayDate.getTime() + (taskDow - 1) * 86400000);
@@ -310,9 +324,9 @@ export async function getRecurringChecklist(params: {
               const calculatedWeekDate = `${wy}-${wm}-${wd}`;
 
               dueDate = calculatedWeekDate;
-              periodStart = calculatedWeekDate;
-              periodEnd = calculatedWeekDate;
-              periodKey = calculatedWeekDate;
+              periodStart = weekStartStr;
+              periodEnd = weekEndStr;
+              periodKey = weekStartStr;
             }
 
             const comp = localCompletions.get(`${t.taskId}:${periodKey}`);
@@ -320,18 +334,27 @@ export async function getRecurringChecklist(params: {
             let completedAt = comp?.completedAt || null;
             let itemStatus: 'Completed' | 'Verified' | 'Pending' | 'Dead' = comp ? (comp.status as any) : 'Pending';
 
-            if (!isCompleted && (t.status === 'Completed' || t.status === 'Verified') && t.completedAt) {
-              const compDate = String(t.completedAt).slice(0, 10);
-              if (isMonthly) {
-                isCompleted = compDate.startsWith(monthKey);
-              } else if (isWeekly) {
-                isCompleted = Boolean(periodStart && periodEnd && compDate >= periodStart && compDate <= periodEnd);
-              } else {
-                isCompleted = compDate === targetDate;
-              }
-              if (isCompleted) {
-                completedAt = String(t.completedAt);
-                itemStatus = t.status === 'Verified' ? 'Verified' : 'Completed';
+            // Check if any task in history was completed/verified for this period
+            if (!isCompleted) {
+              for (const hist of history) {
+                if ((hist.status === 'Completed' || hist.status === 'Verified') && hist.completedAt) {
+                  const compDate = String(hist.completedAt).slice(0, 10);
+                  let matched = false;
+                  if (isMonthly) {
+                    matched = compDate.startsWith(monthKey);
+                  } else if (isWeekly) {
+                    matched = Boolean(periodStart && periodEnd && compDate >= periodStart && compDate <= periodEnd);
+                  } else {
+                    matched = compDate === targetDate;
+                  }
+
+                  if (matched) {
+                    isCompleted = true;
+                    completedAt = String(hist.completedAt);
+                    itemStatus = hist.status === 'Verified' ? 'Verified' : 'Completed';
+                    break;
+                  }
+                }
               }
             }
 
@@ -343,7 +366,7 @@ export async function getRecurringChecklist(params: {
               userName: t.assignedToName,
               department: t.department || '',
               description: t.description,
-              title: t.description,
+              title: t.description.split('\n')[0].slice(0, 100),
               notes: t.notes || '',
               category: (t.category ? t.category.charAt(0).toUpperCase() + t.category.slice(1).toLowerCase() : 'Daily') as any,
               frequency: t.category || 'Daily',
