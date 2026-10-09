@@ -635,8 +635,7 @@ export default function FmsClient({ currentUser, role }: FmsClientProps) {
     if (isAdmin) {
       return ALL_FMS_SHEETS_CONFIG;
     }
-    const assigned = ALL_FMS_SHEETS_CONFIG.filter(cfg => assignedWorkflows.includes(cfg.id));
-    return assigned.length > 0 ? assigned : ALL_FMS_SHEETS_CONFIG;
+    return ALL_FMS_SHEETS_CONFIG.filter(cfg => assignedWorkflows.includes(cfg.id));
   }, [isAdmin, assignedWorkflows]);
 
   // Filtered & Sorted Tasks (all stages retained, strict user matching for non-admins)
@@ -1255,11 +1254,13 @@ export default function FmsClient({ currentUser, role }: FmsClientProps) {
   ]);
 
   const currentSheetConfig = useMemo(() => {
-    return ALL_FMS_SHEETS_CONFIG.find(s => s.id === activeWorkflow) || ALL_FMS_SHEETS_CONFIG[0];
-  }, [activeWorkflow]);
+    if (!isAdmin && visibleSheets.length === 0) {
+      return { id: activeWorkflow, title: 'FMS Workflows', exactSheetName: 'No sheets assigned' };
+    }
+    return ALL_FMS_SHEETS_CONFIG.find(s => s.id === activeWorkflow) || visibleSheets[0] || ALL_FMS_SHEETS_CONFIG[0];
+  }, [isAdmin, visibleSheets, activeWorkflow]);
 
   const workflowTitle = currentSheetConfig.title;
-
 
   return (
     <div className="px-3 py-4 sm:p-6 space-y-4 sm:space-y-6 max-w-7xl mx-auto">
@@ -1278,18 +1279,20 @@ export default function FmsClient({ currentUser, role }: FmsClientProps) {
           <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
             {isAdmin
               ? 'All pending FMS stages across all worksheets.'
-              : 'Your scheduled FMS stages. All pending stages are listed below.'}
+              : visibleSheets.length > 0
+                ? 'Your scheduled FMS stages. All pending stages are listed below.'
+                : 'No FMS tasks currently assigned to you.'}
           </p>
         </div>
 
         {/* Sheet Dropdown & Sync */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-          {visibleSheets.length > 0 && (
-            <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl sm:rounded-2xl p-1.5 shadow-xs w-full sm:w-auto">
-              <div className="flex items-center gap-1.5 pl-2 text-xs font-semibold text-gray-600 shrink-0">
-                <FileSpreadsheet size={15} className="text-brand-600" />
-                <span className="hidden sm:inline">Sheet:</span>
-              </div>
+          <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl sm:rounded-2xl p-1.5 shadow-xs w-full sm:w-auto">
+            <div className="flex items-center gap-1.5 pl-2 text-xs font-semibold text-gray-600 shrink-0">
+              <FileSpreadsheet size={15} className="text-brand-600" />
+              <span className="hidden sm:inline">Sheet:</span>
+            </div>
+            {visibleSheets.length > 0 ? (
               <select
                 value={activeWorkflow}
                 onChange={e => {
@@ -1304,8 +1307,15 @@ export default function FmsClient({ currentUser, role }: FmsClientProps) {
                   </option>
                 ))}
               </select>
-            </div>
-          )}
+            ) : (
+              <select
+                disabled
+                className="text-xs font-medium text-gray-400 bg-gray-50 border border-gray-200 rounded-lg sm:rounded-xl px-2.5 py-1.5 sm:py-2 cursor-not-allowed w-full sm:max-w-xs truncate"
+              >
+                <option value="">No sheets assigned</option>
+              </select>
+            )}
+          </div>
 
           <button
             onClick={() => fetchTasks(activeWorkflow, false)}

@@ -111,22 +111,7 @@ export default async function PortalPage() {
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {[
-          { label: 'Pending',     value: pending,    color: 'text-yellow-600', bg: 'bg-yellow-50' },
-          { label: 'In Progress', value: inProgress, color: 'text-blue-600',   bg: 'bg-blue-50'   },
-          { label: 'Overdue',     value: overdue,    color: 'text-red-600',    bg: 'bg-red-50'    },
-          { label: 'Completed',   value: completed,  color: 'text-green-600',  bg: 'bg-green-50'  },
-        ].map(stat => (
-          <div key={stat.label} className={cn('card p-4 border-0', stat.bg)}>
-            <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
-            <p className={cn('text-xs font-medium mt-0.5', stat.color)}>{stat.label}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Task list */}
+      {/* Task list with interactive filter cards */}
       <TaskListClient tasks={serialized} role="user" currentUid={session.uid} currentUserName={session.name} />
     </div>
   );

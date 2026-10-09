@@ -215,7 +215,12 @@ export default function TaskListClient({
       const isOverdueTask = t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(today, indiaDateKey(t.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status));
       const matchMine     = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
       const matchSearch   = !search || t.description.toLowerCase().includes(search.toLowerCase()) || t.taskId.toLowerCase().includes(search.toLowerCase());
-      const matchStatus   = statusFilter === 'all' || (statusFilter === 'Overdue' ? isOverdueTask : (t.status === statusFilter || normalizeBaseStatus(t.status) === statusFilter));
+      const matchStatus = statusFilter === 'all'
+        || (statusFilter === 'Overdue'
+          ? isOverdueTask
+          : statusFilter === 'Completed'
+            ? ['Completed', 'Verified'].includes(t.status)
+            : (t.status === statusFilter || normalizeBaseStatus(t.status) === statusFilter));
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
       const matchDepartment = departmentFilter === 'all' || t.department === departmentFilter;
       const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
@@ -245,6 +250,26 @@ export default function TaskListClient({
       return left.taskId.localeCompare(right.taskId);
     });
   }, [taskItems, mineOnly, currentUid, currentUserName, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter, sortMode, scheduleMap]);
+
+  const cardCounts = useMemo(() => {
+    const today = indiaTodayKey();
+    const rows = taskItems.filter(t => {
+      const matchMine = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
+      const matchDepartment = departmentFilter === 'all' || t.department === departmentFilter;
+      const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
+      const matchCategory = categoryFilter === 'all' || t.category === categoryFilter;
+      const matchSearch = !search || t.description.toLowerCase().includes(search.toLowerCase()) || t.taskId.toLowerCase().includes(search.toLowerCase());
+      const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
+      return matchMine && matchDepartment && matchUser && matchCategory && matchSearch && matchPriority;
+    });
+
+    const pending = rows.filter(t => t.status === 'Pending Accept').length;
+    const inProgress = rows.filter(t => t.status === 'In Progress' || t.status === 'Delay Requested').length;
+    const overdue = rows.filter(t => t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(today, indiaDateKey(t.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status))).length;
+    const completed = rows.filter(t => ['Completed', 'Verified'].includes(t.status)).length;
+
+    return { pending, inProgress, overdue, completed, total: rows.length };
+  }, [taskItems, mineOnly, currentUid, currentUserName, departmentFilter, userFilter, categoryFilter, search, priorityFilter]);
 
   const justAssignedTasks = useMemo(() =>
     [...taskItems]
@@ -445,26 +470,66 @@ export default function TaskListClient({
         </section>
       )}
 
-      {role === 'admin' && (
-        <div className="surface-enter mb-4 grid gap-3 md:grid-cols-5">
-          <div className="card border-0 bg-gray-50 p-4 md:col-span-2">
-            <p className="text-xs font-medium text-gray-400">Viewing</p>
-            <p className="mt-1 text-lg font-semibold text-gray-900 truncate">{scopeLabel}</p>
-            {selectedUser && <p className="text-xs text-gray-400 truncate">{selectedUser.department || 'No department'}</p>}
-          </div>
-          {[
-            { label: 'Total', value: stats.total, color: 'text-gray-700' },
-            { label: 'Pending', value: stats.pending, color: 'text-yellow-700' },
-            { label: 'In Progress', value: stats.active, color: 'text-blue-700' },
-            { label: 'Done', value: stats.done, color: 'text-green-700' },
-          ].map(item => (
-            <div key={item.label} className="card border-0 bg-white p-4">
-              <p className={cn('text-xl font-bold', item.color)}>{item.value}</p>
-              <p className="text-xs font-medium text-gray-400">{item.label}</p>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* 4 Interactive Stat Filter Cards */}
+      <div className="surface-enter mb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          {
+            id: 'Pending Accept',
+            label: 'Pending',
+            value: cardCounts.pending,
+            activeBg: 'bg-yellow-100/90 border-yellow-400 ring-2 ring-yellow-400/40 shadow-xs',
+            defaultBg: 'bg-yellow-50/80 border-yellow-200/80 hover:bg-yellow-100/50',
+            textVal: 'text-yellow-950',
+            textLabel: 'text-yellow-700',
+          },
+          {
+            id: 'In Progress',
+            label: 'In Progress',
+            value: cardCounts.inProgress,
+            activeBg: 'bg-blue-100/90 border-blue-400 ring-2 ring-blue-400/40 shadow-xs',
+            defaultBg: 'bg-blue-50/80 border-blue-200/80 hover:bg-blue-100/50',
+            textVal: 'text-blue-950',
+            textLabel: 'text-blue-700',
+          },
+          {
+            id: 'Overdue',
+            label: 'Overdue',
+            value: cardCounts.overdue,
+            activeBg: 'bg-red-100/90 border-red-400 ring-2 ring-red-400/40 shadow-xs',
+            defaultBg: 'bg-red-50/80 border-red-200/80 hover:bg-red-100/50',
+            textVal: 'text-red-950',
+            textLabel: 'text-red-700',
+          },
+          {
+            id: 'Completed',
+            label: 'Completed',
+            value: cardCounts.completed,
+            activeBg: 'bg-green-100/90 border-green-400 ring-2 ring-green-400/40 shadow-xs',
+            defaultBg: 'bg-green-50/80 border-green-200/80 hover:bg-green-100/50',
+            textVal: 'text-green-950',
+            textLabel: 'text-green-700',
+          },
+        ].map(item => {
+          const isSelected = statusFilter === item.id;
+          return (
+            <button
+              key={item.label}
+              type="button"
+              onClick={() => {
+                setStatus(current => (current === item.id ? 'all' : item.id));
+              }}
+              className={cn(
+                'card p-4 border text-left cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md shadow-xs focus:outline-none',
+                isSelected ? item.activeBg : item.defaultBg
+              )}
+              title={`Filter tasks by ${item.label}`}
+            >
+              <p className={cn('text-2xl font-bold tracking-tight', item.textVal)}>{item.value}</p>
+              <p className={cn('text-xs font-semibold mt-1', item.textLabel)}>{item.label}</p>
+            </button>
+          );
+        })}
+      </div>
 
       {/* Filters Bar */}
       <div className="surface-enter mb-4 flex flex-wrap items-center gap-3">
