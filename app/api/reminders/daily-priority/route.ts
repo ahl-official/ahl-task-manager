@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
               tasks: topTasks.map(task => ({
                 taskId: task.taskId,
                 description: task.description,
-                endDate: task.endDate ? formatDate(task.endDate.toDate().toISOString()) : 'Not set yet',
+                endDate: formatDdMmYyyy(task),
                 status: task.status,
               })),
             }),

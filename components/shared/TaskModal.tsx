@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2, Trash2, ArrowRightLeft } from 'lucide-react';
+import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2, Trash2, ArrowRightLeft, Pencil, Check } from 'lucide-react';
 import { cn, formatDate, formatDateTime, STATUS_COLORS, PRIORITY_COLORS, PRIORITY_DOT, getDueBadge, canUserShiftTask } from '@/lib/utils';
 import { toast } from 'sonner';
 import ShiftTaskModal from '@/components/shared/ShiftTaskModal';
@@ -31,10 +31,33 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const [remark, setRemark] = useState('');
   const [priorityValue, setPriorityValue] = useState(task.priority);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isEditingChecker, setIsEditingChecker] = useState(false);
+  const [selectedCheckerUid, setSelectedCheckerUid] = useState(task.handoffUid || '');
+  const [userList, setUserList] = useState(users || []);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (users && users.length > 0) {
+      setUserList(users);
+    } else {
+      fetch('/api/users')
+        .then(r => r.json())
+        .then(d => {
+          if (d.success && Array.isArray(d.data)) {
+            setUserList(d.data);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [users]);
+
+  useEffect(() => {
+    setSelectedCheckerUid(task.handoffUid || '');
+    setIsEditingChecker(false);
+  }, [task.handoffUid]);
 
   const userRole = (currentUser?.role || (role === 'admin' ? 'admin' : 'member')) as UserRole;
   const isAssignee = task.assignedTo === currentUid;
@@ -50,10 +73,35 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const canChangeDead = !isTimelySheet && (isAssignee || isHandoff || isAdmin);
   const canShift = !isTimelySheet && canUserShiftTask(currentUser ?? { uid: currentUid, role: userRole }, task);
   const canVerify = !isTimelySheet && (isHandoff || isAdmin || isDelegator) && (task.status === 'Completed' || task.status === 'Shifted (Completed)');
+  const canEditChecker = isAdmin && !isTimelySheet && !isDone && (task.status === 'Pending Accept' || task.status === 'In Progress' || task.status === 'Shifted (Pending Accept)' || task.status === 'Shifted (In Progress)' || task.status === 'Delay Requested' || task.status === 'Overdue');
 
   useEffect(() => {
     setPriorityValue(task.priority);
   }, [task.priority]);
+
+  async function saveChecker() {
+    if (!selectedCheckerUid) {
+      toast.error('Please select a checker');
+      return;
+    }
+    setLoading('update-checker');
+    try {
+      const res = await fetch(`/api/tasks/${task.taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update-checker', handoffUid: selectedCheckerUid }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      toast.success('Checker updated successfully');
+      setIsEditingChecker(false);
+      onUpdate(data.data);
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to update checker');
+    } finally {
+      setLoading(null);
+    }
+  }
 
   async function doAction(action: string, extra: Record<string, string> = {}) {
     setLoading(action);
@@ -175,13 +223,70 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             <Detail icon={User} label="Assigned To" value={task.assignedToName} />
             <Detail
               icon={User}
-              label="Checker"
+              label="Checker (Handoff)"
               value={
-                !task.handoffName ||
-                task.handoffName.toLowerCase().includes('newdelegation') ||
-                task.handoffName.toLowerCase().includes('import')
-                  ? 'Admin'
-                  : task.handoffName
+                isEditingChecker ? (
+                  <div className="mt-1 space-y-1.5" onClick={e => e.stopPropagation()}>
+                    <select
+                      value={selectedCheckerUid}
+                      onChange={e => setSelectedCheckerUid(e.target.value)}
+                      className="w-full text-xs rounded-lg border border-brand-300 bg-white px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                      disabled={loading === 'update-checker'}
+                    >
+                      <option value="">Select Checker...</option>
+                      {userList
+                        .filter(u => u.isActive !== false)
+                        .map(u => (
+                          <option key={u.uid} value={u.uid}>
+                            {u.name} {u.department ? `(${u.department})` : ''}
+                          </option>
+                        ))}
+                    </select>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={saveChecker}
+                        disabled={loading === 'update-checker' || !selectedCheckerUid}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 transition shadow-xs"
+                      >
+                        {loading === 'update-checker' ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingChecker(false)}
+                        disabled={loading === 'update-checker'}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium text-gray-600 hover:bg-gray-200 transition"
+                      >
+                        <X size={10} />
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="truncate">
+                      {!task.handoffName ||
+                      task.handoffName.toLowerCase().includes('newdelegation') ||
+                      task.handoffName.toLowerCase().includes('import')
+                        ? 'Admin'
+                        : task.handoffName}
+                    </span>
+                    {canEditChecker && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCheckerUid(task.handoffUid || '');
+                          setIsEditingChecker(true);
+                        }}
+                        className="p-1 rounded text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition shrink-0"
+                        title="Edit Checker"
+                      >
+                        <Pencil size={12} />
+                      </button>
+                    )}
+                  </div>
+                )
               }
             />
             <Detail icon={Tag} label="Category" value={task.category} />
@@ -535,13 +640,13 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
 }
 
 function Detail({ icon: Icon, label, value, className }: {
-  icon: any; label: string; value: React.ReactNode; className?: string;
+  icon: any; label: React.ReactNode; value: React.ReactNode; className?: string;
 }) {
   return (
     <div className={cn('bg-gray-50 rounded-xl p-3', className)}>
       <div className="flex items-center gap-1.5 mb-0.5">
-        <Icon size={12} className="text-gray-400" />
-        <p className="text-[11px] text-gray-400 font-medium">{label}</p>
+        <Icon size={12} className="text-gray-400 shrink-0" />
+        <div className="text-[11px] text-gray-400 font-medium flex-1 min-w-0">{label}</div>
       </div>
       <div className="text-sm font-medium text-gray-700">{value}</div>
     </div>

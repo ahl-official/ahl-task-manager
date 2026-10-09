@@ -63,33 +63,66 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── Command routing ──────────────────────────────────────────────────
+    const extractTaskId = async (inputStr: string): Promise<string | null> => {
+      // Direct T-XXXX or TXXXX match
+      const directMatch = inputStr.match(/\bT-?(\d{4,6})\b/i);
+      if (directMatch) {
+        return `T-${directMatch[1].padStart(4, '0')}`;
+      }
+      // Check positional number e.g. "DONE 1", "1 DONE", "TASK 2 DONE"
+      const numMatch = inputStr.replace(/T-?\d+/gi, '').match(/\b(?:TASK\s*)?(\d{1,2})\b/i);
+      if (numMatch) {
+        const idx = parseInt(numMatch[1], 10);
+        if (idx >= 1 && idx <= 50) {
+          const { adminGetTasksByAssignee } = await import('@/lib/firebase/tasks');
+          const userTasks = await adminGetTasksByAssignee(user.uid);
+          const open = userTasks.filter(t => !['Completed', 'Verified', 'Dead', 'Cancelled'].includes(t.status));
+          if (open[idx - 1]) {
+            return open[idx - 1].taskId;
+          }
+        }
+      }
+      return null;
+    };
 
-    // ACCEPT T-0001
-    if (text.startsWith('ACCEPT ')) {
-      const taskId = text.split(' ')[1]?.trim();
-      await handleAccept(from, user.uid, user.name, taskId);
+    // DONE / COMPLETE
+    if (text.includes('DONE') || text.includes('COMPLETE')) {
+      const taskId = await extractTaskId(text);
+      if (taskId) {
+        await handleDone(from, user.uid, user.name, taskId);
+      } else {
+        await sendWhatsApp(from, '❌ Please specify a task ID to mark done. Example: *DONE T-6792*');
+      }
     }
 
-    // DONE T-0001
-    else if (text.startsWith('DONE ')) {
-      const taskId = text.split(' ')[1]?.trim();
-      await handleDone(from, user.uid, user.name, taskId);
+    // ACCEPT
+    else if (text.includes('ACCEPT')) {
+      const taskId = await extractTaskId(text);
+      if (taskId) {
+        await handleAccept(from, user.uid, user.name, taskId);
+      } else {
+        await sendWhatsApp(from, '❌ Please specify a task ID to accept. Example: *ACCEPT T-6792*');
+      }
     }
 
-    // VERIFY T-0001
-    else if (text.startsWith('VERIFY ')) {
-      const taskId = text.split(' ')[1]?.trim();
-      await handleVerify(from, user.uid, user.name, taskId);
+    // VERIFY
+    else if (text.includes('VERIFY')) {
+      const taskId = await extractTaskId(text);
+      if (taskId) {
+        await handleVerify(from, user.uid, user.name, taskId);
+      } else {
+        await sendWhatsApp(from, '❌ Please specify a task ID to verify. Example: *VERIFY T-6792*');
+      }
     }
 
-    // STATUS
-    else if (text === 'STATUS') {
+    // STATUS / TASKS
+    else if (text === 'STATUS' || text === 'TASKS' || text === 'MY TASKS') {
       await handleStatus(from, user.uid);
     }
 
-    // REVISE T-0001 — redirect to portal
-    else if (text.startsWith('REVISE ')) {
-      const taskId = text.split(' ')[1]?.trim();
+    // REVISE — redirect to portal
+    else if (text.includes('REVISE')) {
+      const taskId = await extractTaskId(text);
       await sendWhatsApp(from, msgReviseRedirect(taskId ?? ''));
     }
 
@@ -98,12 +131,12 @@ export async function POST(req: NextRequest) {
       await sendWhatsApp(from, [
         `👋 Hi ${user.name}! Commands available:`,
         ``,
-        `• *ACCEPT T-0001* — Accept a task`,
-        `• *DONE T-0001* — Mark complete`,
-        `• *VERIFY T-0001* — Verify completion`,
+        `• *DONE T-6792* — Mark task complete`,
+        `• *ACCEPT T-6792* — Accept a delegated task`,
+        `• *VERIFY T-6792* — Verify completed task`,
         `• *STATUS* — View your open tasks`,
         ``,
-        `For revised dates, use the portal: ${process.env.NEXT_PUBLIC_APP_URL}`,
+        `Portal: ${process.env.NEXT_PUBLIC_APP_URL || 'https://ahl-task-manager.vercel.app'}`,
       ].join('\n'));
     }
 
@@ -137,18 +170,13 @@ async function handleAccept(from: string, uid: string, name: string, taskId: str
 }
 
 async function handleDone(from: string, uid: string, name: string, taskId: string) {
-  if (!taskId) { await sendWhatsApp(from, '❌ Please specify a task ID. Example: DONE T-0001'); return; }
+  if (!taskId) { await sendWhatsApp(from, '❌ Please specify a task ID. Example: *DONE T-6792*'); return; }
 
   const task = await adminGetTask(taskId);
   if (!task) { await sendWhatsApp(from, `❌ Task ${taskId} not found.`); return; }
   if (task.assignedTo !== uid) { await sendWhatsApp(from, `❌ Task ${taskId} is not assigned to you.`); return; }
-  if (!['In Progress', 'Delay Requested'].includes(task.status)) {
-    await sendWhatsApp(from, `ℹ️ Task ${taskId} cannot be completed from status: ${task.status}.`); return;
-  }
-
-  if (!task.startDate || !task.endDate) {
-    await sendWhatsApp(from, `Please set the start date and due date for *${taskId}* in the portal before marking it complete.`);
-    return;
+  if (['Completed', 'Verified', 'Dead', 'Cancelled'].includes(task.status)) {
+    await sendWhatsApp(from, `ℹ️ Task ${taskId} is already ${task.status}.`); return;
   }
 
   const now = Timestamp.now();
@@ -161,10 +189,12 @@ async function handleDone(from: string, uid: string, name: string, taskId: strin
   } else if (endDate) {
     scoreFields.push('lateCount');
   }
-  await adminIncrementScores(uid, scoreFields);
+  await adminIncrementScores(uid, scoreFields).catch(console.error);
 
-  await sendWhatsApp(from, `✅ *${taskId}* marked as complete. Your checker has been notified.`);
-  await sendWhatsApp(task.handoffWa, msgTaskCompleted({ taskId, description: task.description, assignedToName: name }), taskId);
+  await sendWhatsApp(from, `✅ *${taskId}* marked as complete. Great work!`);
+  if (task.handoffWa) {
+    await sendWhatsApp(task.handoffWa, msgTaskCompleted({ taskId, description: task.description, assignedToName: name }), taskId).catch(console.error);
+  }
   await adminLog('TASK_DONE', `${taskId} done via WA by ${name}`, { taskId, uid });
 }
 
@@ -194,9 +224,15 @@ async function handleStatus(from: string, uid: string) {
     return;
   }
 
-  const lines = open.map(t =>
-    `• *${t.taskId}* — ${t.description.slice(0, 50)} [${t.status}] Due: ${formatDate(t.endDate?.toDate().toISOString())}`
-  );
+  const lines = open.map(t => {
+    const endIso = !t.endDate
+      ? null
+      : typeof (t.endDate as any).toDate === 'function'
+        ? (t.endDate as any).toDate().toISOString()
+        : String(t.endDate);
+    const dueStr = endIso ? formatDate(endIso) : 'Not set';
+    return `• *${t.taskId}* — ${t.description.slice(0, 50)} [${t.status}] Due: ${dueStr}`;
+  });
 
   await sendWhatsApp(from, [`📋 *Your Open Tasks (${open.length}):*`, '', ...lines].join('\n'));
 }

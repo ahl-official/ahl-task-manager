@@ -14,7 +14,7 @@ import { cfTask, cfTimestampFields } from '@/lib/cloudflare/models';
 
 const COL      = 'tasks';
 const COUNTERS = 'counters';
-const DEFAULT_TASK_READ_LIMIT = 500;
+const DEFAULT_TASK_READ_LIMIT = 1000;
 const MAX_TASK_READ_LIMIT = 1000;
 const REMINDER_TASK_READ_LIMIT = 500;
 const ACTIVE_TASK_STATUSES: TaskStatus[] = ['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue'];
@@ -276,7 +276,7 @@ export async function adminCreateTask(
   options?: { skipAcceptance?: boolean },
 ): Promise<Task> {
   if (hasCloudflareApi()) {
-    return cfTask(await cfApi('/tasks', {
+    const created = cfTask(await cfApi('/tasks', {
       method: 'POST',
       body: JSON.stringify({
         ...input,
@@ -285,6 +285,9 @@ export async function adminCreateTask(
         skipAcceptance: options?.skipAcceptance ?? false,
       }),
     }))!;
+    clearFirestoreReadCache('tasks:');
+    clearFirestoreReadCache('scores:');
+    return created;
   }
 
   const [taskId, creator, assignee, handoff] = await Promise.all([
@@ -359,10 +362,13 @@ export async function adminUpdateTaskStatus(
   extra?: Partial<Task>,
 ): Promise<Task | null> {
   if (hasCloudflareApi()) {
-    return cfTask(await cfApi(`/tasks/${encodeURIComponent(taskId)}`, {
+    const updated = cfTask(await cfApi(`/tasks/${encodeURIComponent(taskId)}`, {
       method: 'PATCH',
       body: JSON.stringify(cfTimestampFields({ status, ...(extra ?? {}) })),
     }));
+    clearFirestoreReadCache('tasks:');
+    clearFirestoreReadCache('scores:');
+    return updated;
   }
 
   await adminDb.collection(COL).doc(taskId).update({
@@ -378,6 +384,9 @@ export async function adminUpdateTaskStatus(
 export async function adminDeleteTask(taskId: string): Promise<boolean> {
   if (hasCloudflareApi()) {
     await cfApi(`/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+    clearFirestoreReadCache('tasks:');
+    clearFirestoreReadCache('revisions:');
+    clearFirestoreReadCache('scores:');
     return true;
   }
 
@@ -407,12 +416,15 @@ export async function adminGetTask(taskId: string): Promise<Task | null> {
 
 export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
   if (hasCloudflareApi()) {
-    const tasks = await cfApi<any[]>(`/tasks?scope=mine&uid=${encodeURIComponent(uid)}&limit=${MAX_TASK_READ_LIMIT}`);
-    return tasks.map(cfTask).filter(Boolean) as Task[];
+    const key = `tasks:assignee:${uid}`;
+    return cachedFirestoreRead(key, 5 * 60 * 1000, async () => {
+      const tasks = await cfApi<any[]>(`/tasks?scope=mine&uid=${encodeURIComponent(uid)}&limit=${MAX_TASK_READ_LIMIT}`);
+      return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
+    });
   }
 
   try {
-    return await cachedFirestoreRead(`tasks:assignee:${uid}`, 2 * 60 * 1000, async () => {
+    return await cachedFirestoreRead(`tasks:assignee:${uid}`, 5 * 60 * 1000, async () => {
       const user = await adminGetUserByUid(uid);
       const queries: Query[] = [
         adminDb.collection(COL).where('assignedTo', '==', uid).orderBy('createdAt', 'desc').limit(MAX_TASK_READ_LIMIT),
@@ -448,13 +460,16 @@ export async function adminGetTasksByHandoff(uid: string, status?: TaskStatus): 
     const params = new URLSearchParams({ scope: 'handoff', uid });
     if (status) params.set('status', status);
     params.set('limit', String(MAX_TASK_READ_LIMIT));
-    const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
-    return tasks.map(cfTask).filter(Boolean) as Task[];
+    const key = `tasks:handoff:${uid}:${status ?? 'any'}`;
+    return cachedFirestoreRead(key, 5 * 60 * 1000, async () => {
+      const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
+      return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
+    });
   }
 
   try {
     const key = `tasks:handoff:${uid}:${status ?? 'any'}`;
-    return await cachedFirestoreRead(key, 2 * 60 * 1000, async () => {
+    return await cachedFirestoreRead(key, 5 * 60 * 1000, async () => {
       let ref: Query = adminDb
         .collection(COL)
         .where('handoffUid', '==', uid);
@@ -475,7 +490,13 @@ export async function adminGetAllTasks(filters?: {
   status?: TaskStatus;
   department?: string;
   limit?: number | null;
+  fresh?: boolean;
 }): Promise<Task[]> {
+  if (filters?.fresh) {
+    clearFirestoreReadCache('tasks:');
+    clearFirestoreReadCache('scores:');
+  }
+
   if (hasCloudflareApi()) {
     const params = new URLSearchParams({ scope: 'all' });
     if (filters?.status) params.set('status', filters.status);
@@ -483,9 +504,9 @@ export async function adminGetAllTasks(filters?: {
     params.set('limit', filters?.limit === null ? 'all' : String(filters?.limit ?? DEFAULT_TASK_READ_LIMIT));
     const limitKey = filters?.limit === null ? 'all' : String(filters?.limit ?? DEFAULT_TASK_READ_LIMIT);
     const key = `tasks:all:${filters?.department ?? 'any'}:${filters?.status ?? 'any'}:${limitKey}`;
-    return cachedFirestoreRead(key, 2 * 60 * 1000, async () => {
+    return cachedFirestoreRead(key, 5 * 60 * 1000, async () => {
       const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
-      return tasks.map(cfTask).filter(Boolean) as Task[];
+      return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
     });
   }
 

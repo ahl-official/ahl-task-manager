@@ -154,3 +154,48 @@ CREATE TABLE IF NOT EXISTS mis_archive (
 
 CREATE INDEX IF NOT EXISTS idx_mis_archive_week ON mis_archive (week_key);
 CREATE INDEX IF NOT EXISTS idx_mis_archive_name ON mis_archive (name, timestamp DESC);
+
+-- Recurring Task Templates & Completions
+CREATE TABLE IF NOT EXISTS recurring_templates (
+  id TEXT PRIMARY KEY,
+  category TEXT NOT NULL, -- 'Daily', 'Weekly', 'Monthly'
+  title TEXT NOT NULL,
+  description TEXT,
+  assigned_to TEXT, -- employee uid or identifier
+  assigned_to_name TEXT NOT NULL,
+  department TEXT,
+  frequency TEXT NOT NULL, -- 'Daily', 'Weekly', 'Monthly'
+  day_of_week INTEGER, -- 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday, 7=Sunday
+  day_of_month INTEGER, -- 1-31 (or 30/last day)
+  time_of_day TEXT DEFAULT '10:00',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  metadata_json TEXT DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_recurring_templates_active ON recurring_templates (is_active, category);
+CREATE INDEX IF NOT EXISTS idx_recurring_templates_assigned ON recurring_templates (assigned_to_name, is_active);
+
+CREATE TABLE IF NOT EXISTS recurring_completions (
+  id TEXT PRIMARY KEY,
+  template_id TEXT NOT NULL,
+  title TEXT,
+  description TEXT,
+  department TEXT,
+  uid TEXT NOT NULL,
+  user_name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  period_key TEXT NOT NULL, -- 'YYYY-MM-DD' for daily & weekly, 'YYYY-MM' for monthly (IST)
+  completed_at TEXT NOT NULL,
+  is_on_time INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'Completed', -- 'Completed', 'Verified', 'Dead'
+  remark TEXT,
+  remark_by TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_recurring_completions_template ON recurring_completions (template_id, period_key);
+CREATE INDEX IF NOT EXISTS idx_recurring_completions_user ON recurring_completions (user_name, period_key);
+CREATE INDEX IF NOT EXISTS idx_recurring_completions_category ON recurring_completions (category, period_key);
+

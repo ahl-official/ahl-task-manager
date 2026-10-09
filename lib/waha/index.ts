@@ -3,7 +3,7 @@ import { adminLog } from '@/lib/firebase/scores';
 const WAHA_URL     = process.env.WAHA_URL!;
 const WAHA_SESSION = process.env.WAHA_SESSION ?? 'default';
 const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
-const PORTAL_URL   = process.env.NEXT_PUBLIC_APP_URL ?? '';
+const PORTAL_URL   = process.env.NEXT_PUBLIC_APP_URL || 'https://ahl-task-manager.vercel.app';
 
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -100,13 +100,38 @@ function enqueueSend<T>(fn: () => Promise<T>): Promise<T> {
   });
 }
 
+function isEssentialMessage(text: string, options?: { bypassDisable?: boolean }): boolean {
+  if (options?.bypassDisable === true) return true;
+  if (!text) return false;
+  // OTP messages (Critical for Login)
+  if (text.includes('Login OTP') || text.includes('verification code is:')) return true;
+  // Task Creation / Assignment notifications
+  if (
+    text.includes('New Task Assigned') ||
+    text.includes('Task Assigned') ||
+    text.includes('Task Created:') ||
+    text.includes('Task Delegated')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export async function sendWhatsApp(
   waNumber: string,
   text: string,
   taskId?: string,
+  options?: { bypassDisable?: boolean },
 ): Promise<SendWhatsAppResult> {
   return enqueueSend(async () => {
-    if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
+    if (!process.env.WAHA_URL) {
+      return { ok: true, chatId: formatWaId(waNumber) };
+    }
+
+    // DISABLE_WHATSAPP=true only suppresses background triggers/reminders/crons.
+    // OTP sending and Task Creation notifications always send.
+    const isEssential = isEssentialMessage(text, options);
+    if (process.env.DISABLE_WHATSAPP === 'true' && !isEssential) {
       return { ok: true, chatId: formatWaId(waNumber) };
     }
 
@@ -320,8 +345,7 @@ export function msgRecurringTaskAssigned(task: {
     `*Task:* ${task.description}`,
     `*Category:* ${categoryLabel}${priorityLine}${dateLine}${creatorLine}`,
     ``,
-    `Track and mark it complete on the checklist portal:`,
-    `Checklist: ${PORTAL_URL}/portal/checklist?category=${encodeURIComponent(task.category || 'Daily')}`,
+    `To mark complete, reply: *DONE ${task.taskId}* or open: ${PORTAL_URL}`,
   ].join('\n');
 }
 
@@ -511,14 +535,19 @@ export function msgDailyTasksDueToday(input: {
   ].join('\n');
 }
 
-/** Matches newdelegation 2hourRedBallReminder message. */
+/** Matches high priority (Red Ball 🔴) reminder message. */
 export function msgHighPriorityRedBall(input: {
   name: string;
-  tasks: { description: string; deadline: string }[];
+  tasks: { taskId?: string; description: string; deadline: string }[];
 }): string {
   const list = input.tasks
-    .map((task, index) => `${index + 1}. ${task.description}\nDeadline: ${task.deadline}`)
+    .map((task, index) => {
+      const idPrefix = task.taskId ? `*${task.taskId}* — ` : '';
+      return `${index + 1}. ${idPrefix}${task.description}\nDeadline: ${task.deadline}`;
+    })
     .join('\n\n');
+
+  const firstTaskId = input.tasks.find(t => t.taskId)?.taskId || 'T-XXXX';
 
   return [
     `Hello ${input.name},`,
@@ -527,9 +556,7 @@ export function msgHighPriorityRedBall(input: {
     ``,
     list,
     ``,
-    `If Already Done then Please Let me know by typing the Task No and Done in the Chat.`,
-    ``,
-    `Or mark done in the portal: ${PORTAL_URL}`,
+    `To mark complete, reply: *DONE ${firstTaskId}* or open: ${PORTAL_URL}`,
   ].join('\n');
 }
 
@@ -598,3 +625,43 @@ export function msgCoordinatorNotification(task: {
     `*Priority:* ${task.priority}`,
   ].join('\n');
 }
+
+export function msgUnifiedRecurringReminder(input: {
+  name: string;
+  dateLabel: string;
+  tasks: {
+    category: 'Daily' | 'Weekly' | 'Monthly' | string;
+    description: string;
+  }[];
+}): string {
+  if (input.tasks.length === 0) {
+    return [
+      `☀️ *Good Morning ${input.name}*,`,
+      ``,
+      `📅 *Date: ${input.dateLabel}*`,
+      ``,
+      `You have no pending recurring tasks scheduled for today.`,
+      ``,
+      `Portal: ${PORTAL_URL}/portal/checklist`,
+    ].join('\n');
+  }
+
+  const sections = input.tasks.map((t, idx) => {
+    return `${idx + 1}. *[${t.category} Task]*\n${t.description.trim()}`;
+  }).join('\n\n---\n\n');
+
+  return [
+    `☀️ *Good Morning ${input.name}*,`,
+    ``,
+    `📅 *Checklist for Today (${input.dateLabel})*`,
+    ``,
+    `Here is your checklist assigned for today:`,
+    ``,
+    sections,
+    ``,
+    `Please complete and mark done in the portal:`,
+    `${PORTAL_URL}/portal/checklist`,
+  ].join('\n');
+}
+
+

@@ -454,7 +454,7 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     const limitParam = url.searchParams.get('limit');
     const limit = limitParam === 'all'
       ? null
-      : Math.min(Math.max(Number(limitParam || 500), 1), 1000);
+      : Math.min(Math.max(Number(limitParam || 1000), 1), 1000);
     const clauses: string[] = [];
     const binds: unknown[] = [];
     if (scope === 'mine' && uid) { clauses.push('assigned_to = ?'); binds.push(uid); }
@@ -467,8 +467,8 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const limitClause = limit ? 'LIMIT ?' : '';
     const orderClause = status === 'Completed'
-      ? 'ORDER BY COALESCE(completed_at, updated_at, created_at) DESC, task_id DESC'
-      : 'ORDER BY COALESCE(start_date, end_date, created_at) DESC, task_id DESC';
+      ? 'ORDER BY COALESCE(completed_at, updated_at, created_at) DESC, created_at DESC, task_id DESC'
+      : 'ORDER BY created_at DESC, task_id DESC';
     const rows = await env.DB.prepare(`SELECT * FROM tasks_current ${where} ${orderClause} ${limitClause}`)
       .bind(...binds, ...(limit ? [limit] : []))
       .all();
@@ -476,9 +476,9 @@ async function routeTasks(req: Request, env: Env, url: URL) {
   }
 
   if (url.pathname === '/tasks/active' && req.method === 'GET') {
-    const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 500), 1), 1000);
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 1000), 1), 1000);
     const placeholders = ACTIVE_STATUSES.map(() => '?').join(',');
-    const rows = await env.DB.prepare(`SELECT * FROM tasks_current WHERE status IN (${placeholders}) ORDER BY COALESCE(start_date, end_date, created_at) DESC, task_id DESC LIMIT ?`).bind(...ACTIVE_STATUSES, limit).all();
+    const rows = await env.DB.prepare(`SELECT * FROM tasks_current WHERE status IN (${placeholders}) ORDER BY created_at DESC, task_id DESC LIMIT ?`).bind(...ACTIVE_STATUSES, limit).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
 
@@ -513,7 +513,7 @@ async function routeTasks(req: Request, env: Env, url: URL) {
       const now = nowIso();
       const startDateVal = data.startDate && String(data.startDate).trim() ? data.startDate : null;
       const endDateVal = data.endDate && String(data.endDate).trim() ? data.endDate : null;
-      const createdAt = data.createdAt || startDateVal || endDateVal || now;
+      const createdAt = data.createdAt || now;
       const pf = periodFields(endDateVal || startDateVal || now);
       const status = data.skipAcceptance ? 'In Progress' : (data.status || 'Pending Accept');
       await env.DB.prepare(
@@ -1026,6 +1026,576 @@ async function routeChecklist(req: Request, env: Env, url: URL) {
   return null;
 }
 
+function recurringTemplateFromRow(row: any) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    category: row.category,
+    title: row.title,
+    description: row.description || '',
+    assignedTo: row.assigned_to || '',
+    assignedToName: row.assigned_to_name || '',
+    department: row.department || '',
+    frequency: row.frequency || row.category,
+    dayOfWeek: row.day_of_week != null ? Number(row.day_of_week) : null,
+    dayOfMonth: row.day_of_month != null ? Number(row.day_of_month) : null,
+    timeOfDay: row.time_of_day || '10:00',
+    isActive: row.is_active !== 0,
+    metadata: JSON.parse(row.metadata_json || '{}'),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function getIstDateParts(date = new Date()) {
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const istDate = new Date(date.getTime() + istOffsetMs);
+  const year = istDate.getUTCFullYear();
+  const monthNum = istDate.getUTCMonth() + 1;
+  const month = String(monthNum).padStart(2, '0');
+  const day = String(istDate.getUTCDate()).padStart(2, '0');
+  const dayOfWeek = istDate.getUTCDay(); // 0=Sun, 1=Mon, ..., 5=Fri, 6=Sat
+  const dayOfWeekIso = dayOfWeek === 0 ? 7 : dayOfWeek; // 1=Mon...7=Sun
+  const dateStr = `${year}-${month}-${day}`;
+  const monthStr = `${year}-${month}`;
+  return { year, monthNum, month, day, dayOfWeek, dayOfWeekIso, dateStr, monthStr };
+}
+
+function getIstPartsForDateStr(dateStr: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return getIstDateParts();
+  }
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, 6, 0, 0));
+  const dayOfWeek = dt.getUTCDay();
+  const dayOfWeekIso = dayOfWeek === 0 ? 7 : dayOfWeek;
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const endOfMonthStr = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  return {
+    year: y,
+    monthNum: m,
+    month: String(m).padStart(2, '0'),
+    day: String(d).padStart(2, '0'),
+    dayOfWeek,
+    dayOfWeekIso,
+    dateStr,
+    monthStr: `${y}-${String(m).padStart(2, '0')}`,
+    endOfMonthStr,
+  };
+}
+
+async function routeRecurring(req: Request, env: Env, url: URL) {
+  const path = url.pathname;
+
+  // 1. GET /recurring/templates
+  if (path === '/recurring/templates' && req.method === 'GET') {
+    const category = url.searchParams.get('category');
+    const assignedToName = url.searchParams.get('assignedToName');
+    const isActive = url.searchParams.get('isActive');
+
+    const clauses: string[] = [];
+    const binds: unknown[] = [];
+
+    if (category) {
+      clauses.push('LOWER(category) = LOWER(?)');
+      binds.push(category);
+    }
+    if (assignedToName) {
+      clauses.push('LOWER(assigned_to_name) = LOWER(?)');
+      binds.push(assignedToName);
+    }
+    if (isActive != null && isActive !== 'all') {
+      clauses.push('is_active = ?');
+      binds.push(isActive === 'true' || isActive === '1' ? 1 : 0);
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const sql = `SELECT * FROM recurring_templates ${where} ORDER BY category ASC, assigned_to_name ASC, created_at DESC`;
+    const rows = await env.DB.prepare(sql).bind(...binds).all<any>();
+
+    return json({
+      success: true,
+      data: rows.results.map(recurringTemplateFromRow),
+    });
+  }
+
+  // 2. POST /recurring/templates
+  if (path === '/recurring/templates' && req.method === 'POST') {
+    const data = await body<any>(req);
+    if (!data.title || !data.assignedToName) {
+      return json({ success: false, error: 'title and assignedToName are required' }, { status: 400 });
+    }
+
+    const now = nowIso();
+    const id = String(data.id || randomId('rec_'));
+    const category = String(data.category || data.frequency || 'Daily');
+    const title = String(data.title).trim();
+    const description = String(data.description || '').trim();
+    const assignedTo = String(data.assignedTo || '');
+    const assignedToName = String(data.assignedToName).trim();
+    const department = String(data.department || '').trim();
+    const frequency = String(data.frequency || category);
+    const dayOfWeek = data.dayOfWeek != null ? Number(data.dayOfWeek) : null;
+    const dayOfMonth = data.dayOfMonth != null ? Number(data.dayOfMonth) : null;
+    const timeOfDay = String(data.timeOfDay || '10:00');
+    const isActive = data.isActive === false || data.isActive === 0 ? 0 : 1;
+    const metadataJson = JSON.stringify(data.metadata || {});
+
+    await env.DB.prepare(
+      `INSERT INTO recurring_templates (
+        id, category, title, description, assigned_to, assigned_to_name,
+        department, frequency, day_of_week, day_of_month, time_of_day,
+        is_active, metadata_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      id, category, title, description, assignedTo, assignedToName,
+      department, frequency, dayOfWeek, dayOfMonth, timeOfDay,
+      isActive, metadataJson, now, now
+    ).run();
+
+    const created = await env.DB.prepare('SELECT * FROM recurring_templates WHERE id = ?').bind(id).first<any>();
+    return json({ success: true, data: recurringTemplateFromRow(created) }, { status: 201 });
+  }
+
+  // 3. PATCH /recurring/templates/:id
+  const templateMatch = path.match(/^\/recurring\/templates\/([^/]+)$/);
+  if (templateMatch && req.method === 'PATCH') {
+    const id = templateMatch[1];
+    const data = await body<any>(req);
+    const now = nowIso();
+
+    const updates: string[] = ['updated_at = ?'];
+    const binds: unknown[] = [now];
+
+    if (data.title !== undefined) { updates.push('title = ?'); binds.push(String(data.title).trim()); }
+    if (data.description !== undefined) { updates.push('description = ?'); binds.push(String(data.description || '').trim()); }
+    if (data.category !== undefined) { updates.push('category = ?'); binds.push(String(data.category)); }
+    if (data.frequency !== undefined) { updates.push('frequency = ?'); binds.push(String(data.frequency)); }
+    if (data.assignedTo !== undefined) { updates.push('assigned_to = ?'); binds.push(String(data.assignedTo || '')); }
+    if (data.assignedToName !== undefined) { updates.push('assigned_to_name = ?'); binds.push(String(data.assignedToName).trim()); }
+    if (data.department !== undefined) { updates.push('department = ?'); binds.push(String(data.department || '').trim()); }
+    if (data.dayOfWeek !== undefined) { updates.push('day_of_week = ?'); binds.push(data.dayOfWeek != null ? Number(data.dayOfWeek) : null); }
+    if (data.dayOfMonth !== undefined) { updates.push('day_of_month = ?'); binds.push(data.dayOfMonth != null ? Number(data.dayOfMonth) : null); }
+    if (data.timeOfDay !== undefined) { updates.push('time_of_day = ?'); binds.push(String(data.timeOfDay || '10:00')); }
+    if (data.isActive !== undefined) { updates.push('is_active = ?'); binds.push(data.isActive ? 1 : 0); }
+    if (data.metadata !== undefined) { updates.push('metadata_json = ?'); binds.push(JSON.stringify(data.metadata)); }
+
+    binds.push(id);
+    await env.DB.prepare(`UPDATE recurring_templates SET ${updates.join(', ')} WHERE id = ?`).bind(...binds).run();
+
+    const updated = await env.DB.prepare('SELECT * FROM recurring_templates WHERE id = ?').bind(id).first<any>();
+    return json({ success: true, data: recurringTemplateFromRow(updated) });
+  }
+
+  // 4. DELETE /recurring/templates/:id -> HARD PERMANENT DELETE
+  if (templateMatch && req.method === 'DELETE') {
+    const id = templateMatch[1];
+    await env.DB.prepare('DELETE FROM recurring_templates WHERE id = ?').bind(id).run();
+    return json({ success: true, data: { deletedId: id, permanent: true } });
+  }
+
+  // 5. GET /recurring/checklist -> Daily / Weekly / Monthly checklist view
+  if (path === '/recurring/checklist' && req.method === 'GET') {
+    const categoryParam = url.searchParams.get('category') || 'Daily';
+    const dateParam = url.searchParams.get('date');
+    const todayIst = getIstDateParts();
+    if (dateParam && dateParam > todayIst.dateStr) {
+      return json({ success: true, data: [], meta: { istDate: todayIst.dateStr } });
+    }
+    const ist = dateParam ? getIstPartsForDateStr(dateParam) : todayIst;
+    const userName = url.searchParams.get('userName');
+
+    // Fetch active templates
+    let query = 'SELECT * FROM recurring_templates WHERE is_active = 1';
+    const binds: unknown[] = [];
+
+    if (categoryParam && categoryParam.toLowerCase() !== 'all') {
+      query += ' AND LOWER(category) = LOWER(?)';
+      binds.push(categoryParam);
+    }
+    if (userName) {
+      query += ' AND LOWER(assigned_to_name) = LOWER(?)';
+      binds.push(userName);
+    }
+
+    const templatesRes = await env.DB.prepare(query).bind(...binds).all<any>();
+    const templates = templatesRes.results
+      .map(recurringTemplateFromRow)
+      .filter((t): t is NonNullable<ReturnType<typeof recurringTemplateFromRow>> => t !== null);
+
+    // Filter templates due for the target date/period
+    const dueTemplates = templates.filter(t => {
+      // Do not show on dates prior to creation
+      const createdDateStr = (t.createdAt || '').slice(0, 10);
+      if (createdDateStr) {
+        if (categoryParam.toLowerCase() === 'monthly') {
+          if (createdDateStr.slice(0, 7) > ist.monthStr) return false;
+        } else {
+          if (createdDateStr > ist.dateStr) return false;
+        }
+      }
+
+      const cat = (t.category || '').toLowerCase();
+      if (cat === 'daily') return true;
+      if (cat === 'weekly') {
+        // If specific date given or checking daily view, match day of week (1=Mon..7=Sun)
+        if (categoryParam.toLowerCase() === 'weekly') return true;
+        return t.dayOfWeek == null || t.dayOfWeek === ist.dayOfWeekIso;
+      }
+      if (cat === 'monthly') {
+        if (categoryParam.toLowerCase() === 'monthly') return true;
+        return true;
+      }
+      return true;
+    });
+
+    if (dueTemplates.length === 0) {
+      return json({ success: true, data: [], meta: { istDate: ist.dateStr } });
+    }
+
+    // Determine period keys to fetch completions
+    const dailyKey = ist.dateStr;
+    const weeklyKey = ist.dateStr;
+    const monthlyKey = ist.monthStr;
+    const periodKeys = Array.from(new Set([dailyKey, weeklyKey, monthlyKey]));
+
+    const compSql = `SELECT * FROM recurring_completions WHERE period_key IN (${periodKeys.map(() => '?').join(',')})`;
+    const compRes = await env.DB.prepare(compSql).bind(...periodKeys).all<any>();
+    const completionMap = new Map<string, any>();
+    for (const c of compRes.results) {
+      completionMap.set(`${c.template_id}:${c.period_key}`, c);
+    }
+
+    const items = dueTemplates.map(t => {
+      const cat = (t.category || '').toLowerCase();
+      let periodKey = dailyKey;
+      let dueDate = ist.dateStr;
+      let periodStart: string | null = ist.dateStr;
+      let periodEnd: string | null = ist.dateStr;
+
+      if (cat === 'weekly') {
+        periodKey = weeklyKey;
+        dueDate = ist.dateStr;
+      } else if (cat === 'monthly') {
+        periodKey = monthlyKey;
+        dueDate = (ist as any).endOfMonthStr || `${ist.year}-${ist.month}-30`;
+        periodStart = `${ist.year}-${ist.month}-01`;
+        periodEnd = dueDate;
+      }
+
+      const comp = completionMap.get(`${t.id}:${periodKey}`);
+      const completed = Boolean(comp && (comp.status === 'Completed' || comp.status === 'Verified'));
+      const isDead = Boolean(comp && comp.status === 'Dead');
+      const itemStatus = comp ? comp.status : 'Pending';
+
+      return {
+        id: `${t.id}:${periodKey}`,
+        taskId: t.id,
+        templateId: t.id,
+        userId: t.assignedTo,
+        userName: t.assignedToName,
+        department: t.department,
+        description: t.title + (t.description ? ` - ${t.description}` : ''),
+        title: t.title,
+        notes: t.description,
+        category: t.category.charAt(0).toUpperCase() + t.category.slice(1),
+        frequency: t.frequency,
+        dayOfWeek: t.dayOfWeek,
+        dayOfMonth: t.dayOfMonth,
+        timeOfDay: t.timeOfDay,
+        periodKey,
+        periodStart,
+        periodEnd,
+        dueDate,
+        completed,
+        completedAt: comp?.completed_at || null,
+        isOnTime: comp ? Boolean(comp.is_on_time) : true,
+        status: completed ? itemStatus : isDead ? 'Dead' : 'Pending',
+        dead: isDead,
+        deadAt: isDead ? comp?.completed_at : null,
+        remark: comp?.remark || '',
+        remarkBy: comp?.remark_by || '',
+        label: `${t.category} Task`,
+        canComplete: true,
+        canManage: true,
+      };
+    });
+
+    // Also include completed tasks whose template was deleted so past date filters still show them
+    const existingIds = new Set(items.map(it => it.taskId));
+    for (const c of compRes.results) {
+      if (!existingIds.has(c.template_id)) {
+        if (categoryParam && categoryParam.toLowerCase() !== 'all' && c.category?.toLowerCase() !== categoryParam.toLowerCase()) continue;
+        if (userName && c.user_name?.toLowerCase() !== userName.toLowerCase()) continue;
+
+        items.push({
+          id: `${c.template_id}:${c.period_key}`,
+          taskId: c.template_id,
+          templateId: c.template_id,
+          userId: c.uid || '',
+          userName: c.user_name || 'Unassigned',
+          department: c.department || '',
+          description: c.description || c.title || 'Recurring Task (Completed)',
+          title: c.title || 'Recurring Task',
+          notes: c.description || '',
+          category: (c.category ? c.category.charAt(0).toUpperCase() + c.category.slice(1) : 'Daily') as any,
+          frequency: c.category || 'Daily',
+          dayOfWeek: null,
+          dayOfMonth: null,
+          timeOfDay: '10:00',
+          periodKey: c.period_key,
+          periodStart: c.period_key,
+          periodEnd: c.period_key,
+          dueDate: c.period_key,
+          completed: c.status === 'Completed' || c.status === 'Verified',
+          completedAt: c.completed_at,
+          isOnTime: Boolean(c.is_on_time),
+          status: c.status || 'Completed',
+          dead: c.status === 'Dead',
+          deadAt: c.status === 'Dead' ? c.completed_at : null,
+          remark: c.remark || '',
+          remarkBy: c.remark_by || '',
+          label: `${c.category || 'Recurring'} Task`,
+          canComplete: false,
+          canManage: true,
+        });
+      }
+    }
+
+    return json({
+      success: true,
+      data: items,
+      meta: {
+        istDate: ist.dateStr,
+        count: items.length,
+      },
+    });
+  }
+
+  // 6. POST /recurring/completions -> Mark completed, uncomplete, or mark dead/remark
+  if (path === '/recurring/completions' && req.method === 'POST') {
+    const data = await body<any>(req);
+    const templateId = String(data.templateId || data.taskId || '');
+    const periodKey = String(data.periodKey || '');
+    const action = String(data.action || 'complete');
+
+    if (!templateId || !periodKey) {
+      return json({ success: false, error: 'templateId and periodKey are required' }, { status: 400 });
+    }
+
+    if (action === 'uncomplete') {
+      await env.DB.prepare('DELETE FROM recurring_completions WHERE template_id = ? AND period_key = ?')
+        .bind(templateId, periodKey)
+        .run();
+      return json({ success: true, data: { uncompleted: true, templateId, periodKey } });
+    }
+
+    const template = await env.DB.prepare('SELECT * FROM recurring_templates WHERE id = ?').bind(templateId).first<any>();
+    const taskRecord = !template && templateId.startsWith('T-')
+      ? await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id = ?').bind(templateId).first<any>()
+      : null;
+
+    const now = nowIso();
+    const id = data.id || randomId('comp_');
+    const title = String(data.title || template?.title || taskRecord?.description?.split('\n')[0] || 'Recurring Task');
+    const description = String(data.description || template?.description || taskRecord?.description || title);
+    const department = String(data.department || template?.department || taskRecord?.department || '');
+    const uid = String(data.uid || template?.assigned_to || taskRecord?.assigned_to || '');
+    const userName = String(data.userName || template?.assigned_to_name || taskRecord?.assigned_to_name || '');
+    const category = String(data.category || template?.category || taskRecord?.category || 'Daily');
+    const isVerify = Boolean(data.isAdmin || data.action === 'verify' || data.status === 'Verified');
+    const status = action === 'dead' ? 'Dead' : isVerify ? 'Verified' : 'Completed';
+    const remark = data.remark ? String(data.remark).trim() : null;
+    const remarkBy = data.remarkBy ? String(data.remarkBy).trim() : null;
+
+    // Check if on time (IST comparison)
+    const ist = getIstDateParts();
+    let completedAtDate = now;
+    if (periodKey.match(/^\d{4}-\d{2}-\d{2}$/) && periodKey < ist.dateStr) {
+      completedAtDate = `${periodKey}T18:00:00+05:30`;
+    }
+
+    let isOnTime = 1;
+    if (category.toLowerCase() === 'daily' || category.toLowerCase() === 'weekly') {
+      if (periodKey < ist.dateStr) isOnTime = 1; // Admin marking past completion is credited for that date
+    } else if (category.toLowerCase() === 'monthly') {
+      if (periodKey < ist.monthStr) isOnTime = 1;
+    }
+
+    // Delete existing completion for this template + periodKey if any
+    await env.DB.prepare('DELETE FROM recurring_completions WHERE template_id = ? AND period_key = ?')
+      .bind(templateId, periodKey)
+      .run();
+
+    await env.DB.prepare(
+      `INSERT INTO recurring_completions (
+        id, template_id, title, description, department, uid, user_name, category, period_key,
+        completed_at, is_on_time, status, remark, remark_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      id, templateId, title, description, department, uid, userName, category, periodKey,
+      completedAtDate, isOnTime, status, remark, remarkBy, now
+    ).run();
+
+    return json({
+      success: true,
+      data: {
+        id,
+        templateId,
+        uid,
+        userName,
+        category,
+        periodKey,
+        completedAt: now,
+        isOnTime: Boolean(isOnTime),
+        status,
+        remark,
+        remarkBy,
+      },
+    }, { status: 201 });
+  }
+
+  // 7. GET /recurring/mis-counts -> Aggregates planned, done, onTime counts for MIS
+  if (path === '/recurring/mis-counts' && req.method === 'GET') {
+    const weekStart = url.searchParams.get('weekStart');
+    const weekEnd = url.searchParams.get('weekEnd');
+
+    if (!weekStart || !weekEnd) {
+      return json({ success: false, error: 'weekStart and weekEnd are required' }, { status: 400 });
+    }
+
+    // Generate list of dates in the week
+    const dates: string[] = [];
+    let cur = new Date(`${weekStart}T12:00:00Z`);
+    const end = new Date(`${weekEnd}T12:00:00Z`);
+    while (cur <= end) {
+      dates.push(cur.toISOString().slice(0, 10));
+      cur = new Date(cur.getTime() + 86_400_000);
+    }
+
+    // Fetch all active templates
+    const templatesRes = await env.DB.prepare('SELECT * FROM recurring_templates WHERE is_active = 1').all<any>();
+    const templates = templatesRes.results
+      .map(recurringTemplateFromRow)
+      .filter((t): t is NonNullable<ReturnType<typeof recurringTemplateFromRow>> => t !== null);
+
+    // Fetch completions in this week
+    const allPeriodKeys = [...dates, weekStart.slice(0, 7)];
+    const compSql = `SELECT * FROM recurring_completions WHERE period_key IN (${allPeriodKeys.map(() => '?').join(',')})`;
+    const compRes = await env.DB.prepare(compSql).bind(...allPeriodKeys).all<any>();
+    const completions = compRes.results;
+
+    // Map: userName -> { planned, done, onTime, department, byCategory: { office: {}, salon: {}, weekly: {} } }
+    const byName: Record<string, {
+      name: string;
+      department: string;
+      planned: number;
+      done: number;
+      onTime: number;
+      byCategory: Record<string, { planned: number; done: number; onTime: number }>;
+    }> = {};
+
+    const ensureUser = (name: string, dept = '') => {
+      const k = name.trim().toLowerCase();
+      if (!byName[k]) {
+        byName[k] = {
+          name,
+          department: dept,
+          planned: 0,
+          done: 0,
+          onTime: 0,
+          byCategory: {
+            office: { planned: 0, done: 0, onTime: 0 },
+            salon: { planned: 0, done: 0, onTime: 0 },
+            weekly: { planned: 0, done: 0, onTime: 0 },
+          },
+        };
+      }
+      if (!byName[k].department && dept) byName[k].department = dept;
+      return byName[k];
+    };
+
+
+    // 1. Calculate planned instances across each day of the week
+    for (const dStr of dates) {
+      const ist = getIstPartsForDateStr(dStr);
+      for (const t of templates) {
+        if (!t || !t.assignedToName) continue;
+        // Do not plan instances before the template was created
+        const createdDateStr = (t.createdAt || '').slice(0, 10);
+        if (createdDateStr && createdDateStr > dStr) continue;
+
+        const cat = (t.category || '').toLowerCase();
+        let catKey = 'office';
+        if (t.department && t.department.toLowerCase().includes('salon')) catKey = 'salon';
+        if (cat === 'weekly' || cat === 'monthly') catKey = 'weekly';
+
+        let isDueToday = false;
+        if (cat === 'daily') {
+          isDueToday = true;
+        } else if (cat === 'weekly') {
+          isDueToday = t.dayOfWeek == null || t.dayOfWeek === ist.dayOfWeekIso;
+        }
+
+        if (isDueToday) {
+          const userRec = ensureUser(t.assignedToName, t.department);
+          userRec.planned += 1;
+          userRec.byCategory[catKey].planned += 1;
+        }
+      }
+    }
+
+    // Monthly tasks planned once per month if month start falls in week
+    const monthKey = weekStart.slice(0, 7);
+    for (const t of templates) {
+      if (!t || !t.assignedToName) continue;
+      const createdDateStr = (t.createdAt || '').slice(0, 10);
+      if (createdDateStr && createdDateStr.slice(0, 7) > monthKey) continue;
+
+      const cat = (t.category || '').toLowerCase();
+      if (cat === 'monthly') {
+        const userRec = ensureUser(t.assignedToName, t.department);
+        userRec.planned += 1;
+        userRec.byCategory.weekly.planned += 1;
+      }
+    }
+
+    // 2. Count completions
+    for (const c of completions) {
+      if (c.status !== 'Completed' && c.status !== 'Verified') continue;
+      const userRec = ensureUser(c.user_name, c.department || '');
+      userRec.done += 1;
+      if (c.is_on_time) userRec.onTime += 1;
+
+      let catKey = 'office';
+      const cat = (c.category || '').toLowerCase();
+      if (c.department && c.department.toLowerCase().includes('salon')) catKey = 'salon';
+      if (cat === 'weekly' || cat === 'monthly') catKey = 'weekly';
+      userRec.byCategory[catKey].done += 1;
+      if (c.is_on_time) userRec.byCategory[catKey].onTime += 1;
+    }
+
+    // Ensure planned >= done for each user/category even if a template was deleted mid-week
+    for (const userRec of Object.values(byName)) {
+      if (userRec.planned < userRec.done) userRec.planned = userRec.done;
+      for (const catObj of Object.values(userRec.byCategory)) {
+        if (catObj.planned < catObj.done) catObj.planned = catObj.done;
+      }
+    }
+
+    return json({
+      success: true,
+      data: {
+        weekStart,
+        weekEnd,
+        byName,
+      },
+    });
+  }
+
+  return null;
+}
+
 export default {
   async fetch(req: Request, env: Env) {
     const wrappedEnv: Env = { ...env, DB: wrapDb(env.DB) };
@@ -1046,6 +1616,7 @@ export default {
       await routeCrm(req, wrappedEnv, url) ||
       await routeAutomations(req, wrappedEnv, url) ||
       await routeMis(req, wrappedEnv, url) ||
+      await routeRecurring(req, wrappedEnv, url) ||
       await routeChecklist(req, wrappedEnv, url) ||
       json({ success: false, error: 'Not found' }, { status: 404 });
     return new Response(response.body, { status: response.status, headers: { ...Object.fromEntries(response.headers), ...corsHeaders(wrappedEnv) } });

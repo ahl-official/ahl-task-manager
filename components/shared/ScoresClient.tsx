@@ -143,7 +143,7 @@ export default function ScoresClient({
   }, []);
 
   const weekOptions = useMemo(() => listRecentMisWeeks(16), []);
-  const defaultWeek = useMemo(() => getMisWeekPeriod(), []);
+  const defaultWeek = useMemo(() => getPreviousMisWeekPeriod(), []);
   const [weekStart, setWeekStart] = useState(() => defaultWeek.weekStart);
   const [calendarDate, setCalendarDate] = useState(() => defaultWeek.weekEnd);
   const nameBoxRef = useRef<HTMLDivElement>(null);

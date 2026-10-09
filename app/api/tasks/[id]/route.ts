@@ -1,22 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/utils/auth';
 import { adminGetTask, adminUpdateTaskStatus, adminDeleteTask, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetUserByUid } from '@/lib/firebase/users';
 import { adminIncrementScores, adminLog } from '@/lib/firebase/scores';
 import { sendWhatsApp, msgTaskAccepted, msgTaskCompleted, msgTaskVerified } from '@/lib/waha';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { TaskPriority, TaskStatus } from '@/types';
 import { canViewTask } from '@/lib/utils/access';
-import { completeTimelySheetTaskById, isTimelySheetTaskId } from '@/lib/google/sheets';
-import { getTimelyTaskForSession } from '@/lib/utils/timelyDashboard';
 
 // GET /api/tasks/[id]
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const task = isTimelySheetTaskId(params.id)
-    ? await getTimelyTaskForSession(session, params.id)
-    : await adminGetTask(params.id);
+  const task = await adminGetTask(params.id);
   if (!task) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
 
   if (!canViewTask(session, task)) {
@@ -32,41 +29,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  if (isTimelySheetTaskId(params.id)) {
-    const timelyTask = await getTimelyTaskForSession(session, params.id);
-    if (!timelyTask) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
-    if (!canViewTask(session, timelyTask)) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
-    }
-
-    const { action } = await req.json();
-    if (action !== 'complete') {
-      return NextResponse.json({
-        success: false,
-        error: 'Timely sheet tasks can only be marked complete. They are not stored in the database.',
-      }, { status: 400 });
-    }
-    if (timelyTask.assignedTo !== session.uid && session.role !== 'admin') {
-      return NextResponse.json({ success: false, error: 'Only assignee can complete' }, { status: 403 });
-    }
-
-    try {
-      await completeTimelySheetTaskById(params.id);
-      const updated = await getTimelyTaskForSession(session, params.id, true);
-      return NextResponse.json({ success: true, data: serializeTask(updated ?? timelyTask) });
-    } catch (err: any) {
-      console.error(`PATCH /api/tasks/${params.id} timely error`, err);
-      return NextResponse.json({ success: false, error: err.message }, { status: 500 });
-    }
-  }
-
   const task = await adminGetTask(params.id);
   if (!task) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
   if (!canViewTask(session, task)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
   }
 
-  const { action, startDate, endDate, priority, remark = '' } = await req.json();
+  const { action, startDate, endDate, priority, remark = '', handoffUid } = await req.json();
   const now = Timestamp.now();
   const isAdmin = session.role === 'admin';
   const actorIsAssignee = task.assignedTo === session.uid;
@@ -152,13 +121,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
           msgTaskVerified({ taskId: task.taskId, handoffName: session.name }),
           task.taskId,
         );
-      } else {
+      } else if (task.handoffWa && task.handoffWa !== task.assignedToWa) {
         // Notify handoff to verify
         await sendWhatsApp(
           task.handoffWa,
           msgTaskCompleted({
-            taskId:         task.taskId,
-            description:    task.description,
+            taskId: task.taskId,
+            description: task.description,
             assignedToName: task.assignedToName,
           }),
           task.taskId,
@@ -235,6 +204,34 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       });
     }
 
+    else if (action === 'update-checker') {
+      if (!isAdmin) {
+        return NextResponse.json({ success: false, error: 'Only admin can change checker' }, { status: 403 });
+      }
+      if (task.status === 'Completed' || task.status === 'Verified') {
+        return NextResponse.json({ success: false, error: 'Completed tasks cannot change checker' }, { status: 400 });
+      }
+      const newHandoffUid = String(handoffUid || '').trim();
+      if (!newHandoffUid) {
+        return NextResponse.json({ success: false, error: 'Please select a valid checker' }, { status: 400 });
+      }
+
+      const newChecker = await adminGetUserByUid(newHandoffUid);
+      if (!newChecker) {
+        return NextResponse.json({ success: false, error: 'Selected checker not found' }, { status: 404 });
+      }
+
+      updatedTask = await adminUpdateTaskStatus(params.id, task.status, {
+        handoffUid: newChecker.uid,
+        handoffName: newChecker.name,
+        handoffWa: newChecker.waNumber || '',
+      });
+
+      await adminLog('TASK_UPDATED', `${params.id} checker changed to ${newChecker.name} by ${session.name}`, {
+        taskId: params.id, uid: session.uid, meta: { handoffUid: newChecker.uid, handoffName: newChecker.name },
+      });
+    }
+
     else {
       return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });
     }
@@ -257,17 +254,17 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
             completedAt: updatedTask.completedAt ?? parentTask.completedAt,
             verifiedAt: updatedTask.verifiedAt ?? parentTask.verifiedAt,
             acceptedAt: updatedTask.acceptedAt ?? parentTask.acceptedAt,
-          }).catch(() => {});
+          }).catch(() => { });
         }
       } else if (task.childTaskId) {
         // Parent task changed -> update child task
         if (action === 'verify' && updatedTask.status === 'Verified') {
-          await adminUpdateTaskStatus(task.childTaskId, 'Verified', { verifiedAt: now }).catch(() => {});
+          await adminUpdateTaskStatus(task.childTaskId, 'Verified', { verifiedAt: now }).catch(() => { });
         } else if (action === 'complete') {
           await adminUpdateTaskStatus(task.childTaskId, isAdmin ? 'Verified' : 'Completed', {
             completedAt: now,
             verifiedAt: isAdmin ? now : undefined,
-          }).catch(() => {});
+          }).catch(() => { });
         }
       }
     }
@@ -286,12 +283,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   if (session.role !== 'admin') {
     return NextResponse.json({ success: false, error: 'Only admin can delete tasks' }, { status: 403 });
-  }
-  if (isTimelySheetTaskId(params.id)) {
-    return NextResponse.json({
-      success: false,
-      error: 'Timely sheet tasks cannot be deleted here. Update the Master sheet instead.',
-    }, { status: 400 });
   }
 
   try {

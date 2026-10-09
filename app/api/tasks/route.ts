@@ -10,6 +10,7 @@ import {
   serializeTask,
 } from '@/lib/firebase/tasks';
 import { adminIncrementScore, adminLog } from '@/lib/firebase/scores';
+import { clearFirestoreReadCache } from '@/lib/firebase/readCache';
 import {
   sendWhatsApp,
   msgTaskAssigned,
@@ -22,33 +23,62 @@ import { filterTasksForSession } from '@/lib/utils/access';
 import { adminGetUserByUid, adminGetAllUsers } from '@/lib/firebase/users';
 import type { AHLUser } from '@/types';
 import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils/timelyDashboard';
-import { appendTimelyTaskToSheetInput, ChecklistSheetCategory } from '@/lib/google/sheets';
+import { hasCloudflareApi } from '@/lib/cloudflare/api';
+import { createRecurringTemplate } from '@/lib/cloudflare/recurring';
+import { indiaTodayKey } from '@/lib/utils/indiaDate';
+
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 function normalizeRole(role: string) {
   return role === 'user' ? 'member' : role;
 }
 
-// GET /api/tasks?scope=all|mine|handoff&status=...&department=...&search=...&counts=true
+const NO_CACHE_HEADERS = {
+  'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+  Pragma: 'no-cache',
+  Expires: '0',
+};
+
+// GET /api/tasks?scope=all|mine|handoff&status=...&department=...&search=...&counts=true&fresh=true
 export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
   const { searchParams } = new URL(req.url);
-  const scope      = searchParams.get('scope') ?? 'mine';
+  const isAdmin = session.role === 'admin';
+  const isLeader = session.role === 'leader';
+  
+  // Non-admins can only see their own tasks or their department (if leader)
+  const defaultScope = isAdmin ? 'all' : 'mine';
+  const requestedScope = searchParams.get('scope') ?? defaultScope;
+  const scope = (!isAdmin && !isLeader) ? (requestedScope === 'handoff' ? 'handoff' : 'mine') : requestedScope;
+  
   const status     = searchParams.get('status') ?? undefined;
-  const department = searchParams.get('department') ?? (session.role === 'leader' ? session.department : undefined);
+  const department = isLeader ? session.department : (isAdmin ? (searchParams.get('department') ?? undefined) : undefined);
   const searchQuery = searchParams.get('search') ?? searchParams.get('q') ?? undefined;
   const wantCounts = searchParams.get('counts') === 'true';
+  const isFresh    = searchParams.get('fresh') === 'true' || searchParams.get('sync') === 'true';
   const requestedLimit = searchParams.get('limit');
-  const limitParam = requestedLimit ? Number(requestedLimit) : null;
+  const limitParam = requestedLimit ? (requestedLimit === 'all' ? null : Number(requestedLimit)) : 1000;
   const maxResults = typeof limitParam === 'number' && Number.isFinite(limitParam)
     ? Math.min(Math.max(limitParam, 1), 1000)
-    : null;
+    : (limitParam === null ? null : 1000);
+
+  if (isFresh) {
+    clearFirestoreReadCache('tasks:');
+    clearFirestoreReadCache('scores:');
+  }
+
+  const responseHeaders = isFresh ? NO_CACHE_HEADERS : {
+    'Cache-Control': 'private, max-age=30, stale-while-revalidate=120',
+  };
 
   try {
     if (wantCounts) {
       const counts = await adminGetTaskCounts(department);
-      return NextResponse.json({ success: true, data: counts });
+      return NextResponse.json({ success: true, data: counts }, { headers: responseHeaders });
     }
 
     let tasks;
@@ -56,8 +86,8 @@ export async function GET(req: NextRequest) {
     if (searchQuery && searchQuery.trim()) {
       tasks = await adminSearchTasks(searchQuery, { department, limit: maxResults ?? 100 });
       tasks = filterTasksForSession(session, tasks);
-    } else if (scope === 'all') {
-      tasks = await adminGetAllTasks({ status: status as any, department, limit: maxResults });
+    } else if (scope === 'all' && (isAdmin || isLeader)) {
+      tasks = await adminGetAllTasks({ status: status as any, department, limit: maxResults, fresh: isFresh });
       tasks = filterTasksForSession(session, tasks);
     } else if (scope === 'handoff') {
       tasks = await adminGetTasksByHandoff(session.uid, status as any);
@@ -69,10 +99,10 @@ export async function GET(req: NextRequest) {
       tasks = mergePersonalDashboardTasks(databaseTasks, timelyTasks);
     }
 
-    return NextResponse.json({ success: true, data: tasks.map(serializeTask) });
+    return NextResponse.json({ success: true, data: tasks.map(serializeTask) }, { headers: responseHeaders });
   } catch (err) {
     console.error('GET /api/tasks error', err);
-    return NextResponse.json({ success: false, error: 'Failed to fetch tasks' }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Failed to fetch tasks' }, { status: 500, headers: NO_CACHE_HEADERS });
   }
 }
 
@@ -148,20 +178,85 @@ export async function POST(req: NextRequest) {
     }
 
     if (['Daily', 'Weekly', 'Monthly'].includes(body.category)) {
-      const timelyResult = await appendTimelyTaskToSheetInput({
-        category: body.category as ChecklistSheetCategory,
-        description: body.description,
-        assignedToUid: body.assignedTo,
-        assignedToName: assignee.name,
-        assignedToDept: assignee.department,
-        startDate: body.startDate,
-        endDate: body.endDate,
-        session,
-      });
+      const todayKey = indiaTodayKey();
+      let calculatedStartDate = body.startDate || todayKey;
+      let calculatedEndDate = body.endDate || todayKey;
+      let dayOfWeek: number | null = null;
+      let dayOfMonth: number | null = null;
+
+      if (body.category === 'Daily') {
+        calculatedStartDate = body.startDate || todayKey;
+        calculatedEndDate = body.endDate || todayKey;
+      } else if (body.category === 'Weekly') {
+        calculatedStartDate = body.startDate || todayKey;
+        calculatedEndDate = body.endDate || todayKey;
+        if (body.dayOfWeek != null) {
+          dayOfWeek = Number(body.dayOfWeek);
+        } else {
+          const [y, m, d] = calculatedEndDate.split('-').map(Number);
+          const dt = new Date(Date.UTC(y, m - 1, d, 6, 0, 0));
+          const dow = dt.getUTCDay();
+          dayOfWeek = dow === 0 ? 7 : dow; // 1=Mon...7=Sun
+        }
+      } else if (body.category === 'Monthly') {
+        const [y, m] = todayKey.split('-').map(Number);
+        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        const endOfMonthKey = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        calculatedStartDate = body.startDate || `${y}-${String(m).padStart(2, '0')}-01`;
+        calculatedEndDate = body.endDate || endOfMonthKey;
+        dayOfMonth = body.dayOfMonth != null ? Number(body.dayOfMonth) : lastDay;
+      }
+
+      let createdTaskRecord: any = null;
+      try {
+        createdTaskRecord = await adminCreateTask(
+          {
+            description: body.description,
+            assignedTo: assignee.uid,
+            department: assignee.department || body.department || '',
+            category: body.category,
+            priority: body.priority || 'Medium',
+            startDate: calculatedStartDate,
+            endDate: calculatedEndDate,
+            handoffUid: body.handoffUid || session.uid,
+          },
+          session.uid,
+          { name: session.name, waNumber: session.waNumber || '', department: session.department || '' },
+          { skipAcceptance: true }
+        );
+      } catch (createErr) {
+        console.warn('Failed to create recurring task record', createErr);
+      }
+
+      let d1Template = null;
+      if (hasCloudflareApi()) {
+        try {
+          const descText = String(body.description || '').trim();
+          const firstLine = descText.split('\n')[0].slice(0, 100).trim();
+          d1Template = await createRecurringTemplate({
+            title: firstLine || 'Recurring Task',
+            description: descText,
+            category: body.category,
+            frequency: body.category,
+            assignedTo: assignee.uid,
+            assignedToName: assignee.name,
+            department: assignee.department || body.department || '',
+            dayOfWeek,
+            dayOfMonth,
+            timeOfDay: body.timeOfDay || '10:00',
+            isActive: true,
+          });
+        } catch (cfErr) {
+          console.warn('Failed to save recurring template to Cloudflare D1', cfErr);
+        }
+      }
+
+      const effectiveTaskId = createdTaskRecord?.taskId || d1Template?.id || `T-${Date.now().toString().slice(-4)}`;
+      const effectiveDescription = body.description;
 
       await adminIncrementScore(assignee.uid, 'tasksAssigned').catch(() => {});
-      await adminLog('TASK_CREATED', `Timely task created in Google Sheets: ${timelyResult.description}`, {
-        taskId: timelyResult.taskId,
+      await adminLog('TASK_CREATED', `Recurring task created: ${effectiveDescription}`, {
+        taskId: effectiveTaskId,
         uid: session.uid,
       }).catch(() => {});
 
@@ -169,37 +264,38 @@ export async function POST(req: NextRequest) {
         await sendWhatsApp(
           assignee.waNumber,
           msgRecurringTaskAssigned({
-            taskId: timelyResult.taskId,
+            taskId: effectiveTaskId,
             category: body.category,
-            description: timelyResult.description,
+            description: effectiveDescription,
             assignedToName: assignee.name,
             priority: body.priority || 'Medium',
             createdByName: session.name,
-            startDate: body.startDate,
-            endDate: body.endDate,
+            startDate: calculatedStartDate,
+            endDate: calculatedEndDate,
           }),
-          timelyResult.taskId,
+          effectiveTaskId,
         ).catch(err => console.error('[Tasks API] Recurring task WAHA notification failed', err));
       }
 
       return NextResponse.json({
         success: true,
         data: {
-          taskId: timelyResult.taskId,
-          description: timelyResult.description,
+          taskId: effectiveTaskId,
+          description: effectiveDescription,
           assignedTo: assignee.uid,
           assignedToName: assignee.name,
           category: body.category,
           status: 'In Progress',
           priority: body.priority || 'Medium',
-          startDate: body.startDate || null,
-          endDate: body.endDate || null,
+          startDate: calculatedStartDate,
+          endDate: calculatedEndDate,
           createdAt: new Date().toISOString(),
           createdBy: session.uid,
           createdByName: session.name,
         },
       }, { status: 201 });
     }
+
 
     const skipAcceptance = session.role === 'admin';
     const task = await adminCreateTask(body, session.uid, {

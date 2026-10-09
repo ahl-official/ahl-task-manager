@@ -1,12 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertOctagon, CheckCircle2, Circle, MessageSquare, Loader2, RefreshCw, RotateCcw, Search, X } from 'lucide-react';
+import { AlertOctagon, CheckCircle2, Circle, MessageSquare, Loader2, RefreshCw, RotateCcw, Search, X, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn, formatDate } from '@/lib/utils';
 import { namesEqual, normalizePersonName } from '@/lib/utils/names';
+import { indiaTodayKey } from '@/lib/utils/indiaDate';
 
 type ChecklistCategory = 'Daily' | 'Weekly' | 'Monthly';
+
 
 interface ChecklistRow {
   id: string;
@@ -22,7 +24,7 @@ interface ChecklistRow {
   dueDate: string | null;
   completed: boolean;
   completedAt: string | null;
-  status: 'Completed' | 'Pending' | 'Dead';
+  status: 'Completed' | 'Verified' | 'Pending' | 'Dead';
   dead: boolean;
   deadAt: string | null;
   remark: string;
@@ -31,6 +33,7 @@ interface ChecklistRow {
   canComplete: boolean;
   canManage: boolean;
   mine?: boolean;
+  isPast?: boolean;
 }
 
 const CATEGORY_OPTIONS: ChecklistCategory[] = ['Daily', 'Weekly', 'Monthly'];
@@ -51,6 +54,8 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   const [remark, setRemark] = useState('');
 
   const categoryCache = useRef<Record<string, { rows: ChecklistRow[]; elevated: boolean; currentUserName: string }>>({});
+
+
 
   const departments = useMemo(() => {
     const seen = new Map<string, string>();
@@ -74,7 +79,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   const visibleRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter(row => {
-      const matchesDate = !date || row.dueDate === date ||
+      const matchesDate = !date || row.dueDate === date || row.periodKey === date ||
         (row.periodStart && row.periodEnd && date >= row.periodStart && date <= row.periodEnd);
       const matchesMine = !mineOnly || Boolean(row.mine) || namesEqual(row.userName, currentUserName);
       const matchesDept = !department || namesEqual(row.department, department);
@@ -94,8 +99,9 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   }, [rows, department, individual, date, mineOnly, currentUserName, search]);
   const completedCount = useMemo(() => visibleRows.filter(row => row.completed).length, [visibleRows]);
 
-  async function loadRows(nextCategory = category, forceRefresh = false) {
-    const cached = categoryCache.current[nextCategory];
+  async function loadRows(nextCategory = category, nextDate = date, forceRefresh = false) {
+    const cacheKey = `${nextCategory}:${nextDate || 'today'}`;
+    const cached = categoryCache.current[cacheKey];
     if (cached && !forceRefresh) {
       setRows(cached.rows);
       setElevated(cached.elevated);
@@ -106,12 +112,14 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
     }
 
     try {
-      const res = await fetch(`/api/checklist?category=${encodeURIComponent(nextCategory)}`);
+      const qs = new URLSearchParams({ category: nextCategory });
+      if (nextDate) qs.set('date', nextDate);
+      const res = await fetch(`/api/checklist?${qs.toString()}`);
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       const elevatedVal = Boolean(data.meta?.elevated);
       const userNameVal = String(data.meta?.currentUserName ?? '');
-      categoryCache.current[nextCategory] = {
+      categoryCache.current[cacheKey] = {
         rows: data.data,
         elevated: elevatedVal,
         currentUserName: userNameVal,
@@ -134,8 +142,9 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       : item);
 
     setRows(updatedRows);
-    if (categoryCache.current[row.category]) {
-      categoryCache.current[row.category].rows = updatedRows(categoryCache.current[row.category].rows);
+    const activeCacheKey = `${row.category}:${date || 'today'}`;
+    if (categoryCache.current[activeCacheKey]) {
+      categoryCache.current[activeCacheKey].rows = updatedRows(categoryCache.current[activeCacheKey].rows);
     }
     setTicking(row.id);
 
@@ -143,18 +152,29 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId: row.taskId, category: row.category, periodKey: row.periodKey, action: 'complete' }),
+        body: JSON.stringify({
+          taskId: row.taskId,
+          title: row.description,
+          description: row.description,
+          department: row.department,
+          assignedTo: row.userId,
+          assignedToName: row.userName,
+          category: row.category,
+          periodKey: row.periodKey,
+          action: 'complete',
+        }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
+      const nextStatus = data.data.status || (elevated ? 'Verified' : 'Completed');
       const serverUpdated = (list: ChecklistRow[]) => list.map(item => item.id === row.id
-        ? { ...item, completed: true, completedAt: data.data.completedAt, status: 'Completed' as const }
+        ? { ...item, completed: true, completedAt: data.data.completedAt, status: nextStatus }
         : item);
       setRows(serverUpdated);
       if (categoryCache.current[row.category]) {
         categoryCache.current[row.category].rows = serverUpdated(categoryCache.current[row.category].rows);
       }
-      toast.success('Checklist task marked complete');
+      toast.success(nextStatus === 'Verified' ? 'Checklist task marked verified' : 'Checklist task marked complete');
     } catch (err: any) {
       setRows(prevRows); // Rollback on failure
       if (categoryCache.current[row.category]) {
@@ -176,7 +196,18 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       const res = await fetch('/api/checklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId: row.taskId, category: row.category, periodKey: row.periodKey, action, remark }),
+        body: JSON.stringify({
+          taskId: row.taskId,
+          title: row.description,
+          description: row.description,
+          department: row.department,
+          assignedTo: row.userId,
+          assignedToName: row.userName,
+          category: row.category,
+          periodKey: row.periodKey,
+          action,
+          remark,
+        }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -202,10 +233,35 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
     }
   }
 
+  async function deleteTask(row: ChecklistRow) {
+    if (!window.confirm(`Are you sure you want to permanently delete this recurring task?\n\n"${row.description}"`)) {
+      return;
+    }
+    setTicking(row.id);
+    try {
+      const templateId = row.taskId;
+      const res = await fetch(`/api/recurring/templates/${encodeURIComponent(templateId)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+
+      setRows(prev => prev.filter(r => r.taskId !== templateId));
+      if (categoryCache.current[row.category]) {
+        categoryCache.current[row.category].rows = categoryCache.current[row.category].rows.filter(r => r.taskId !== templateId);
+      }
+      toast.success('Recurring task permanently deleted');
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to delete task');
+    } finally {
+      setTicking(null);
+    }
+  }
+
   useEffect(() => {
-    loadRows(category);
+    loadRows(category, date);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category]);
+  }, [category, date]);
 
   return (
     <div className="space-y-4">
@@ -214,7 +270,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
           <h1 className="text-xl font-semibold text-gray-900">Checklist</h1>
           <p className="mt-0.5 text-sm text-gray-500">
             {elevated
-              ? 'Team view of timely sheet tasks. Use Show my tasks to filter and complete your own.'
+              ? 'Team view of recurring tasks. Use Show my tasks to filter and complete your own.'
               : 'Tick recurring tasks for the current period'}
           </p>
         </div>
@@ -249,7 +305,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
           </select>
           <button
             type="button"
-            onClick={() => loadRows()}
+            onClick={() => loadRows(category, date, true)}
             className="btn-secondary py-2"
             disabled={loading}
           >
@@ -258,6 +314,8 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
           </button>
         </div>
       </div>
+
+
 
       {/* Search & Filter Bar */}
       <div className="space-y-3">
@@ -307,7 +365,16 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
               <input
                 type="date"
                 value={date}
-                onChange={event => setDate(event.target.value)}
+                max={indiaTodayKey()}
+                onChange={event => {
+                  const val = event.target.value;
+                  const today = indiaTodayKey();
+                  if (val && val > today) {
+                    toast.error('Cannot select future dates for checklist');
+                    return;
+                  }
+                  setDate(val);
+                }}
                 className="input min-w-0 flex-1 py-2 text-sm"
               />
               {date && (
@@ -369,55 +436,78 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
             {visibleRows.map(row => (
               <div key={row.id} className={cn('flex flex-col gap-3 px-5 py-4', row.dead && 'bg-red-50')}>
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="mb-1 flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-xs text-brand-600">{row.taskId}</span>
-                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">{row.label}</span>
-                    <span className={cn('badge text-[10px]', row.completed ? 'bg-green-100 text-green-700' : row.dead ? 'bg-red-600 text-white' : 'bg-amber-100 text-amber-700')}>{row.status}</span>
-                    {row.mine && <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-700">Mine</span>}
-                  </div>
-                  <p className="text-sm font-semibold text-gray-900">{row.description}</p>
-                  <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-400">
-                    <span>Period: {row.periodKey}</span>
-                    <span>Due: {formatDate(row.dueDate)}</span>
-                    <span>{row.userName}{row.department ? ` · ${row.department}` : ''}</span>
-                  </div>
-                  {row.remark && (
-                    <div className="mt-2 rounded-md border border-gray-200 bg-white px-3 py-2">
-                      <p className="mb-1 text-[10px] font-semibold uppercase text-gray-400">Remarks</p>
-                      <p className="whitespace-pre-line text-xs text-gray-700">{row.remark}</p>
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-xs text-brand-600">{row.taskId}</span>
+                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">{row.label}</span>
+                      <span className={cn(
+                        'badge text-[10px]',
+                        row.status === 'Verified' ? 'bg-brand-100 text-brand-700 font-semibold' :
+                        row.completed ? 'bg-green-100 text-green-700' :
+                        row.dead ? 'bg-red-600 text-white' :
+                        'bg-amber-100 text-amber-700'
+                      )}>
+                        {row.status}
+                      </span>
+                      {row.mine && <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-700">Mine</span>}
                     </div>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => tick(row)}
-                    disabled={row.completed || row.dead || !row.canComplete || ticking === row.id}
-                    className={cn(
-                      'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors',
-                      row.completed ? 'bg-green-100 text-green-700' : row.dead || !row.canComplete ? 'bg-gray-100 text-gray-500' : 'bg-brand-600 text-white hover:bg-brand-700'
+                    <p className="text-sm font-semibold text-gray-900">{row.description}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                      <span>Period: {row.periodKey}</span>
+                      <span>Due: {formatDate(row.dueDate)}</span>
+                      <span>{row.userName}{row.department ? ` · ${row.department}` : ''}</span>
+                    </div>
+                    {row.remark && (
+                      <div className="mt-2 rounded-md border border-gray-200 bg-white px-3 py-2">
+                        <p className="mb-1 text-[10px] font-semibold uppercase text-gray-400">Remarks</p>
+                        <p className="whitespace-pre-line text-xs text-gray-700">{row.remark}</p>
+                      </div>
                     )}
-                  >
-                    {ticking === row.id ? <Loader2 size={15} className="animate-spin" /> : row.completed ? <CheckCircle2 size={16} /> : <Circle size={16} />}
-                    {row.completed ? 'Completed' : row.dead ? 'Revive first' : row.canComplete ? 'Mark Complete' : row.userName}
-                  </button>
-                  {row.canManage && (
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => {
-                        setActiveRemarkRow(activeRemarkRow === row.id ? null : row.id);
-                        setRemark('');
-                      }}
-                      className="btn-secondary px-3 py-2"
-                      title="Add remark or change Dead status"
+                      onClick={() => tick(row)}
+                      disabled={row.completed || row.dead || !row.canComplete || ticking === row.id}
+                      title={!row.completed && !row.canComplete ? 'Past date tasks cannot be completed by members. Contact an admin.' : undefined}
+                      className={cn(
+                        'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors',
+                        row.status === 'Verified' ? 'bg-brand-100 text-brand-700 border border-brand-200' :
+                        row.completed ? 'bg-green-100 text-green-700' :
+                        row.dead || !row.canComplete ? 'bg-gray-100 text-gray-500 cursor-not-allowed' :
+                        'bg-brand-600 text-white hover:bg-brand-700'
+                      )}
                     >
-                      <MessageSquare size={15} />
-                      Remark
+                      {ticking === row.id ? <Loader2 size={15} className="animate-spin" /> : row.completed ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+                      {row.status === 'Verified' ? 'Verified' : row.completed ? 'Completed' : row.dead ? 'Revive first' : row.canComplete ? 'Mark Complete' : (row as any).isPast ? 'Past Due (Locked)' : row.userName}
                     </button>
-                  )}
-                </div>
+                    {row.canManage && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveRemarkRow(activeRemarkRow === row.id ? null : row.id);
+                          setRemark('');
+                        }}
+                        className="btn-secondary px-3 py-2"
+                        title="Add remark or change Dead status"
+                      >
+                        <MessageSquare size={15} />
+                        Remark
+                      </button>
+                    )}
+                    {elevated && (
+                      <button
+                        type="button"
+                        onClick={() => deleteTask(row)}
+                        disabled={ticking === row.id}
+                        className="btn-secondary px-2.5 py-2 text-gray-400 hover:text-red-600 hover:bg-red-50 transition"
+                        title="Permanently Delete Recurring Task"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {activeRemarkRow === row.id && (
@@ -455,3 +545,5 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
     </div>
   );
 }
+
+

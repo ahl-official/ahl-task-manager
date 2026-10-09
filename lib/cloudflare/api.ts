@@ -1,5 +1,6 @@
-const API_URL = process.env.CLOUDFLARE_API_URL || process.env.NEXT_PUBLIC_CLOUDFLARE_API_URL || '';
-const API_SECRET = process.env.CLOUDFLARE_API_SECRET || process.env.API_SHARED_SECRET || process.env.CRON_SECRET || '';
+const API_URL = (process.env.CLOUDFLARE_API_URL || process.env.NEXT_PUBLIC_CLOUDFLARE_API_URL || '').trim();
+const API_SECRET = (process.env.CLOUDFLARE_API_SECRET || process.env.API_SHARED_SECRET || process.env.CRON_SECRET || '').trim();
+
 
 export class CloudflareApiError extends Error {
   status: number;

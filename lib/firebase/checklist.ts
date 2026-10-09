@@ -4,11 +4,6 @@ import { adminGetActiveTasks, adminGetTasksByAssignee } from './tasks';
 import type { Task, TaskCategory } from '@/types';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { timestamp } from '@/lib/cloudflare/timestamp';
-import {
-  appendSheetChecklistCompletion,
-  getSheetChecklistCompletions,
-  hasChecklistSheets,
-} from '@/lib/google/sheets';
 
 const COL = 'checklistCompletions';
 const RECURRING_CATEGORIES: TaskCategory[] = ['Daily', 'Weekly', 'Monthly'];
@@ -87,14 +82,10 @@ export async function adminGetChecklistRowsForTasks(tasks: Task[]) {
   tasks
     .filter(task => isRecurringCategory(task.category) && OPEN_STATUSES.has(task.status))
     .forEach(task => {
-    const existing = byUid.get(task.assignedTo) ?? [];
-    existing.push(task);
-    byUid.set(task.assignedTo, existing);
-  });
-
-  if (hasChecklistSheets()) {
-    return hydrateChecklistTaskGroups(byUid);
-  }
+      const existing = byUid.get(task.assignedTo) ?? [];
+      existing.push(task);
+      byUid.set(task.assignedTo, existing);
+    });
 
   const results = [];
   for (const [uid, userTasks] of Array.from(byUid.entries())) {
@@ -105,30 +96,13 @@ export async function adminGetChecklistRowsForTasks(tasks: Task[]) {
 
 async function hydrateChecklistTasks(uid: string, tasks: Task[]) {
   const periodKeys = new Set(tasks.map(task => getChecklistPeriodKey(task.category)));
-  if (hasChecklistSheets()) {
-    const rows = await getSheetChecklistCompletions({
-      uid,
-      periodKeys: Array.from(periodKeys),
-    });
-    const completed = new Set(rows.map(row => `${row.taskId}:${row.periodKey}`));
-
-    return tasks.map(task => {
-      const periodKey = getChecklistPeriodKey(task.category);
-      return {
-        task,
-        periodKey,
-        completed: completed.has(`${task.taskId}:${periodKey}`),
-      };
-    });
-  }
 
   if (hasCloudflareApi()) {
     const params = new URLSearchParams({ uid });
     Array.from(periodKeys).forEach(periodKey => params.append('periodKey', periodKey));
     const rows = await cfApi<any[]>(`/checklist/completions?${params.toString()}`);
     const completed = new Set(
-      rows
-        .map(row => `${row.taskId}:${row.periodKey}`)
+      rows.map(row => `${row.taskId}:${row.periodKey}`)
     );
 
     return tasks.map(task => {
@@ -163,32 +137,6 @@ async function hydrateChecklistTasks(uid: string, tasks: Task[]) {
   });
 }
 
-async function hydrateChecklistTaskGroups(byUid: Map<string, Task[]>) {
-  const groups = Array.from(byUid.entries());
-  const periodKeys = new Set<string>();
-  groups.forEach(([, tasks]) => {
-    tasks.forEach(task => periodKeys.add(getChecklistPeriodKey(task.category)));
-  });
-
-  const rows = await getSheetChecklistCompletions({
-    uids: groups.map(([uid]) => uid),
-    periodKeys: Array.from(periodKeys),
-  });
-  const completed = new Set(rows.map(row => `${row.uid}:${row.taskId}:${row.periodKey}`));
-
-  return groups.map(([uid, tasks]) => ({
-    uid,
-    tasks: tasks.map(task => {
-      const periodKey = getChecklistPeriodKey(task.category);
-      return {
-        task,
-        periodKey,
-        completed: completed.has(`${uid}:${task.taskId}:${periodKey}`),
-      };
-    }),
-  }));
-}
-
 export async function adminCompleteChecklistTask(task: Task, uid: string): Promise<ChecklistCompletion> {
   if (!isRecurringCategory(task.category)) throw new Error('Only daily, weekly, and monthly tasks can be checked off');
   if (task.assignedTo !== uid) throw new Error('This checklist task is not assigned to you');
@@ -196,27 +144,6 @@ export async function adminCompleteChecklistTask(task: Task, uid: string): Promi
 
   const periodKey = getChecklistPeriodKey(task.category);
   const id = `${task.taskId}_${uid}_${periodKey}`;
-  if (hasChecklistSheets()) {
-    const existingRows = await getSheetChecklistCompletions({ uid, taskId: task.taskId, periodKey });
-    if (existingRows.length > 0) {
-      throw new Error(`${getCategoryLabel(task.category)} is already completed for this period`);
-    }
-    const row = await appendSheetChecklistCompletion({
-      id,
-      taskId: task.taskId,
-      uid,
-      category: task.category,
-      periodKey,
-    });
-    return {
-      id,
-      taskId: task.taskId,
-      uid,
-      category: task.category,
-      periodKey,
-      completedAt: timestamp(row.completedAt)! as Timestamp,
-    };
-  }
 
   if (hasCloudflareApi()) {
     const params = new URLSearchParams({ uid, taskId: task.taskId, periodKey });

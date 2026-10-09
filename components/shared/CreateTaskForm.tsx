@@ -276,9 +276,12 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
         </div>
 
         <div className="col-span-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
-          Admin-created tasks become active immediately. Add dates now, or the assigned person will be asked to set dates in the portal.
+          {['Daily', 'Weekly', 'Monthly'].includes(form.category)
+            ? `📌 Recurring ${form.category} Task: Repeats automatically on schedule. (Default due date: ${form.category === 'Monthly' ? 'End of Month (30th)' : "Today's date in IST"}).`
+            : 'Admin-created tasks become active immediately. Add dates now, or the assigned person will be asked to set dates in the portal.'}
         </div>
       </div>
+
 
       {/* Notes */}
       <div>

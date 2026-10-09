@@ -1,36 +1,13 @@
-import { getAllTimelyChecklistData, type SheetChecklistTask } from '@/lib/google/sheets';
 import { emptyBucket, type MisBucket } from '@/lib/mis/sheetFormula';
-import { dateKeyInRange } from '@/lib/mis/week';
-import { indiaDateKey } from '@/lib/utils/indiaDate';
 import { normalizePersonName } from '@/lib/utils/names';
+import { getRecurringMisCounts } from '@/lib/cloudflare/recurring';
+import { hasCloudflareApi } from '@/lib/cloudflare/api';
 
 export const CHECKLIST_PARAM_LABELS: Record<string, string> = {
   office: 'Office Daily',
   salon: 'Salon Daily',
   weekly: 'Weekly & Monthly',
 };
-
-function taskInWeek(task: SheetChecklistTask, weekStart: string, weekEnd: string) {
-  const due = task.dueDate || task.periodEnd || task.periodStart;
-  if (!due) return false;
-  return dateKeyInRange(due, weekStart, weekEnd);
-}
-
-function isOnTime(task: SheetChecklistTask) {
-  if (!task.completed) return false;
-  if (!task.completedAt || !task.dueDate) return true;
-  return compareKeys(task.completedAt, task.dueDate) <= 0;
-}
-
-function compareKeys(a: string, b: string) {
-  return indiaDateKey(a).localeCompare(indiaDateKey(b));
-}
-
-function sourceKeyOf(task: SheetChecklistTask) {
-  if (task.sourceKey) return task.sourceKey;
-  const match = String(task.taskId || '').match(/^(office|salon|weekly)-/i);
-  return match ? match[1].toLowerCase() : 'office';
-}
 
 export type ChecklistPersonBucket = MisBucket & { name: string; department: string };
 
@@ -42,7 +19,7 @@ export interface ChecklistParamCount {
 
 /**
  * Checklist bucket (E7/F7) + per-source parameters (Office / Salon / Weekly).
- * Reads timely Masters with includeAllPeriods so past weeks work for MIS.
+ * Reads directly and exclusively from Cloudflare D1 Database.
  */
 export async function getChecklistDetailedCounts(weekStart: string, weekEnd: string) {
   const byName = new Map<string, ChecklistPersonBucket>();
@@ -53,45 +30,43 @@ export async function getChecklistDetailedCounts(weekStart: string, weekEnd: str
   }));
   const paramById = new Map(paramCounts.map(row => [row.id, row]));
 
+  if (!hasCloudflareApi()) {
+    console.warn('Cloudflare API not configured for MIS recurring checklist source');
+    return { byName, paramCounts };
+  }
+
   try {
-    const data = await getAllTimelyChecklistData(true, { includeAllPeriods: true });
-    for (const task of data.tasks) {
-      if (!task.active || !taskInWeek(task, weekStart, weekEnd)) continue;
-      const key = normalizePersonName(task.userName);
+    const d1Data = await getRecurringMisCounts(weekStart, weekEnd);
+    const userEntries = Object.entries(d1Data?.byName || {});
+
+    for (const [keyName, row] of userEntries) {
+      const key = normalizePersonName(row.name || keyName);
       if (!key) continue;
 
-      const ensure = (map: Map<string, ChecklistPersonBucket>) => {
-        const existing = map.get(key);
-        if (existing) return existing;
-        const created: ChecklistPersonBucket = {
-          name: task.userName,
-          department: task.department || '',
-          ...emptyBucket(),
-        };
-        map.set(key, created);
-        return created;
+      const personBucket: ChecklistPersonBucket = {
+        name: row.name,
+        department: row.department || '',
+        planned: row.planned || 0,
+        done: row.done || 0,
+        onTime: row.onTime || 0,
       };
+      byName.set(key, personBucket);
 
-      const total = ensure(byName);
-      const sourceKey = sourceKeyOf(task);
-      const param = paramById.get(sourceKey);
-      const paramRow = param ? ensure(param.byName) : null;
-
-      total.planned += 1;
-      if (paramRow) paramRow.planned += 1;
-      if (task.completed) {
-        total.done += 1;
-        if (paramRow) paramRow.done += 1;
-        if (isOnTime(task)) {
-          total.onTime += 1;
-          if (paramRow) paramRow.onTime += 1;
+      for (const [catKey, catCounts] of Object.entries(row.byCategory || {})) {
+        const param = paramById.get(catKey);
+        if (param) {
+          param.byName.set(key, {
+            name: row.name,
+            department: row.department || '',
+            planned: catCounts.planned || 0,
+            done: catCounts.done || 0,
+            onTime: catCounts.onTime || 0,
+          });
         }
       }
-      if (!total.department && task.department) total.department = task.department;
-      if (paramRow && !paramRow.department && task.department) paramRow.department = task.department;
     }
   } catch (err) {
-    console.error('MIS checklist source failed', err);
+    console.error('Failed to get MIS checklist counts from Cloudflare D1 database', err);
   }
 
   return { byName, paramCounts };

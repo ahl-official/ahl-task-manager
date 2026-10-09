@@ -74,6 +74,7 @@ export async function GET(req: NextRequest) {
           msgHighPriorityRedBall({
             name,
             tasks: userTasks.map(task => ({
+              taskId: task.taskId,
               description: task.description,
               deadline: formatDdMmYyyy(task),
             })),
