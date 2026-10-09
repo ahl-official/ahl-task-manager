@@ -714,7 +714,6 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             )}
 
             {/* End of actions */}
-            <div className="h-6 shrink-0" />
           </div>
         </div>
       </div>
