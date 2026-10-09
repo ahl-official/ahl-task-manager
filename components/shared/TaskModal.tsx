@@ -212,8 +212,8 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   if (!mounted || typeof document === 'undefined') return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px] w-screen h-screen">
-      <div className="bg-white rounded-2xl shadow-modal w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-[2px] w-full h-[100dvh]">
+      <div className="bg-white rounded-2xl shadow-modal w-full max-w-lg max-h-[85dvh] sm:max-h-[90vh] flex flex-col overflow-hidden my-auto">
         {/* Compact Fixed Top Bar */}
         <div className="sticky top-0 z-20 flex items-center justify-between px-4 sm:px-5 py-3 border-b border-gray-100 bg-white min-w-0 shrink-0">
           <div className="flex items-center gap-2 min-w-0 flex-wrap">
@@ -232,7 +232,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
         </div>
 
         {/* Scrollable Body */}
-        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto overflow-x-hidden scrollbar-thin flex-1">
+        <div className="p-4 sm:p-5 pb-16 sm:pb-12 space-y-4 overflow-y-auto overflow-x-hidden scrollbar-thin flex-1">
           {/* Task Description (scrolls with content) */}
           <div>
             <h2 className="text-base font-semibold text-gray-900 leading-snug break-words [overflow-wrap:anywhere]">
@@ -714,6 +714,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             )}
 
             {/* End of actions */}
+            <div className="h-6 shrink-0" />
           </div>
         </div>
       </div>
