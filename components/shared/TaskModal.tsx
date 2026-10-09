@@ -232,7 +232,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
         </div>
 
         {/* Scrollable Body */}
-        <div className="p-4 sm:p-5 pb-16 sm:pb-12 space-y-4 overflow-y-auto overflow-x-hidden scrollbar-thin flex-1">
+        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto overflow-x-hidden scrollbar-thin flex-1">
           {/* Task Description (scrolls with content) */}
           <div>
             <h2 className="text-base font-semibold text-gray-900 leading-snug break-words [overflow-wrap:anywhere]">
