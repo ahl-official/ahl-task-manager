@@ -10,6 +10,8 @@ import TaskModal from './TaskModal';
 import type { TaskSerialized } from '@/types';
 
 interface Props {
+  headerTitle?: string;
+  headerSubtitle?: string;
   tasks: TaskSerialized[];
   role: 'admin' | 'user';
   currentUid: string;
@@ -75,7 +77,17 @@ function getTimeAgo(iso: string) {
   return `${days}d ago`;
 }
 
-export default function TaskListClient({ tasks, role, currentUid, currentUserName, users = [], initialCounts, totalCount }: Props) {
+export default function TaskListClient({
+  headerTitle,
+  headerSubtitle,
+  tasks,
+  role,
+  currentUid,
+  currentUserName,
+  users = [],
+  initialCounts,
+  totalCount,
+}: Props) {
   const [taskItems, setTaskItems] = useState(tasks);
   const [mineOnly, setMineOnly]     = useState(false);
   const [search, setSearch]         = useState('');
@@ -277,6 +289,65 @@ export default function TaskListClient({ tasks, role, currentUid, currentUserNam
 
   return (
     <>
+      {/* Top Header Row (Positioned at the VERY TOP, beside the Bell Icon with pr-14) */}
+      {(headerTitle || role === 'admin' || syncStatus) && (
+        <div className="surface-enter mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pr-14 sm:pr-16">
+          <div>
+            {headerTitle ? (
+              <h1 className="text-xl font-semibold text-gray-900">{headerTitle}</h1>
+            ) : role === 'admin' ? (
+              <h1 className="text-xl font-semibold text-gray-900">All Tasks</h1>
+            ) : null}
+            {headerSubtitle && <p className="mt-0.5 text-sm text-gray-500">{headerSubtitle}</p>}
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {syncStatus && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 border border-emerald-200">
+                <Check size={12} className="text-emerald-600" />
+                {syncStatus}
+              </span>
+            )}
+
+            {role === 'admin' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMineOnly(current => {
+                    const next = !current;
+                    if (next) {
+                      setUserFilter('all');
+                      setDepartment('all');
+                    }
+                    return next;
+                  });
+                }}
+                className={cn(
+                  'btn-secondary py-1.5 px-3.5 text-xs sm:text-sm font-medium whitespace-nowrap shadow-xs bg-white hover:bg-gray-50 border-gray-200 rounded-lg transition-colors',
+                  mineOnly && 'bg-brand-50 text-brand-700 border-brand-200 ring-1 ring-brand-200'
+                )}
+              >
+                {mineOnly ? 'Showing my tasks' : 'Show my tasks'}
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleSync}
+              disabled={isSyncing}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3.5 py-1.5 text-xs sm:text-sm font-medium text-gray-700 shadow-xs transition hover:bg-gray-50 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 whitespace-nowrap',
+                isSyncing && 'cursor-not-allowed opacity-75'
+              )}
+              title="Fetch most recent 1000 tasks"
+            >
+              <RotateCw size={14} className={cn('text-brand-600', isSyncing && 'animate-spin')} />
+              <span>{isSyncing ? 'Syncing…' : 'Sync Tasks'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {justAssignedTasks.length > 0 && (
         <section suppressHydrationWarning className="surface-enter mb-5">
           <div className="mb-3 flex items-center justify-between gap-3">
@@ -395,132 +466,84 @@ export default function TaskListClient({ tasks, role, currentUid, currentUserNam
         </div>
       )}
 
-      {/* Filters & Actions Bar */}
-      <div className="surface-enter mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[280px]">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search tasks (ID, name, description)…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="input pl-8 pr-8 py-2 text-sm"
-            />
-            {isSearchingServer && (
-              <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-brand-600" />
-            )}
-          </div>
-
-          <select
-            value={departmentFilter}
-            onChange={e => { setDepartment(e.target.value); setUserFilter('all'); setMineOnly(false); }}
-            className="input py-2 text-sm w-auto"
-          >
-            <option value="all">All Departments</option>
-            {departments.map(department => <option key={department} value={department}>{department}</option>)}
-          </select>
-
-          <select
-            value={userFilter}
-            onChange={e => { setUserFilter(e.target.value); setMineOnly(false); }}
-            className="input py-2 text-sm w-auto"
-          >
-            <option value="all">All Individuals</option>
-            {visibleUsers.map(user => <option key={user.uid} value={user.uid}>{user.name}</option>)}
-          </select>
-
-          <select
-            value={statusFilter}
-            onChange={e => setStatus(e.target.value)}
-            className="input py-2 text-sm w-auto"
-          >
-            {STATUS_OPTIONS.map(s => (
-              <option key={s} value={s}>{s === 'all' ? 'All Statuses' : s}</option>
-            ))}
-          </select>
-
-          <select
-            value={categoryFilter}
-            onChange={e => setCategory(e.target.value)}
-            className="input py-2 text-sm w-auto"
-          >
-            {CATEGORY_OPTIONS.map(c => (
-              <option key={c} value={c}>
-                {c === 'all' ? 'All Categories' : CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS]}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={priorityFilter}
-            onChange={e => setPriority(e.target.value)}
-            className="input py-2 text-sm w-auto"
-          >
-            <option value="all">All Priorities</option>
-            <option value="High">High</option>
-            <option value="Medium">Medium</option>
-            <option value="Low">Low</option>
-          </select>
-
-          <select
-            value={sortMode}
-            onChange={e => setSortMode(e.target.value as typeof sortMode)}
-            className="input py-2 text-sm w-auto"
-          >
-            <option value="recommended">Recommended Order</option>
-            <option value="newest">Newest First</option>
-          </select>
-
-          <div className="flex items-center text-xs text-gray-400">
-            {filtered.length} {totalCount && isDefaultView && totalCount > taskItems.length ? `loaded of ${totalCount}` : `of ${taskItems.length}`}
-          </div>
+      {/* Filters Bar */}
+      <div className="surface-enter mb-4 flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search tasks (ID, name, description)…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="input pl-8 pr-8 py-2 text-sm"
+          />
+          {isSearchingServer && (
+            <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-brand-600" />
+          )}
         </div>
 
-        {/* Action buttons (Show my tasks + Sync Tasks) */}
-        <div className="flex items-center gap-2 shrink-0">
-          {syncStatus && (
-            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 border border-emerald-200">
-              <Check size={12} className="text-emerald-600" />
-              {syncStatus}
-            </span>
-          )}
+        <select
+          value={departmentFilter}
+          onChange={e => { setDepartment(e.target.value); setUserFilter('all'); setMineOnly(false); }}
+          className="input py-2 text-sm w-auto"
+        >
+          <option value="all">All Departments</option>
+          {departments.map(department => <option key={department} value={department}>{department}</option>)}
+        </select>
 
-          {role === 'admin' && (
-            <button
-              type="button"
-              onClick={() => {
-                setMineOnly(current => {
-                  const next = !current;
-                  if (next) {
-                    setUserFilter('all');
-                    setDepartment('all');
-                  }
-                  return next;
-                });
-              }}
-              className={cn(
-                'btn-secondary py-1.5 px-3 text-xs sm:text-sm font-medium whitespace-nowrap shadow-xs bg-white hover:bg-gray-50 border-gray-200',
-                mineOnly && 'bg-brand-50 text-brand-700 border-brand-200 ring-1 ring-brand-200'
-              )}
-            >
-              {mineOnly ? 'Showing my tasks' : 'Show my tasks'}
-            </button>
-          )}
+        <select
+          value={userFilter}
+          onChange={e => { setUserFilter(e.target.value); setMineOnly(false); }}
+          className="input py-2 text-sm w-auto"
+        >
+          <option value="all">All Individuals</option>
+          {visibleUsers.map(user => <option key={user.uid} value={user.uid}>{user.name}</option>)}
+        </select>
 
-          <button
-            type="button"
-            onClick={handleSync}
-            disabled={isSyncing}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs sm:text-sm font-medium text-gray-700 shadow-xs transition hover:bg-gray-50 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 whitespace-nowrap',
-              isSyncing && 'cursor-not-allowed opacity-75'
-            )}
-            title="Fetch most recent 1000 tasks"
-          >
-            <RotateCw size={14} className={cn('text-brand-600', isSyncing && 'animate-spin')} />
-            <span>{isSyncing ? 'Syncing…' : 'Sync Tasks'}</span>
-          </button>
+        <select
+          value={statusFilter}
+          onChange={e => setStatus(e.target.value)}
+          className="input py-2 text-sm w-auto"
+        >
+          {STATUS_OPTIONS.map(s => (
+            <option key={s} value={s}>{s === 'all' ? 'All Statuses' : s}</option>
+          ))}
+        </select>
+
+        <select
+          value={categoryFilter}
+          onChange={e => setCategory(e.target.value)}
+          className="input py-2 text-sm w-auto"
+        >
+          {CATEGORY_OPTIONS.map(c => (
+            <option key={c} value={c}>
+              {c === 'all' ? 'All Categories' : CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS]}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={priorityFilter}
+          onChange={e => setPriority(e.target.value)}
+          className="input py-2 text-sm w-auto"
+        >
+          <option value="all">All Priorities</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+
+        <select
+          value={sortMode}
+          onChange={e => setSortMode(e.target.value as typeof sortMode)}
+          className="input py-2 text-sm w-auto"
+        >
+          <option value="recommended">Recommended Order</option>
+          <option value="newest">Newest First</option>
+        </select>
+
+        <div className="flex items-center text-xs text-gray-400 shrink-0">
+          {filtered.length} {totalCount && isDefaultView && totalCount > taskItems.length ? `loaded of ${totalCount}` : `of ${taskItems.length}`}
         </div>
       </div>
 

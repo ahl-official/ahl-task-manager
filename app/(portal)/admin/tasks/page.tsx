@@ -27,13 +27,13 @@ export default async function AdminTasksPage() {
 
   return (
     <div className="p-6">
-      <div className="mb-6 pr-14">
-        <h1 className="text-xl font-semibold text-gray-900">All Tasks</h1>
-        <p className="mt-0.5 text-sm text-gray-500">
-          Showing {tasks.length < counts.total ? `recent ${tasks.length} of ${counts.total}` : `all ${counts.total}`} tasks.
-        </p>
-      </div>
       <TaskListClient
+        headerTitle="All Tasks"
+        headerSubtitle={
+          tasks.length < counts.total
+            ? `Showing recent ${tasks.length} of ${counts.total} tasks.`
+            : `Showing all ${counts.total} tasks.`
+        }
         tasks={serialized}
         role="admin"
         currentUid={session?.uid || ''}
