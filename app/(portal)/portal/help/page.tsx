@@ -3,431 +3,243 @@
 import { useState } from 'react';
 import {
   ArrowRightLeft,
-  BarChart2,
+  Bell,
   CheckCircle2,
   CheckSquare,
   ChevronDown,
   Clock3,
   HelpCircle,
-  Info,
   ListChecks,
-  PlayCircle,
   RefreshCw,
-  Search,
-  ShieldCheck,
+  Smartphone,
   Sparkles,
-  Users,
   Zap,
 } from 'lucide-react';
 
-interface FeatureCard {
-  id: string;
-  title: string;
-  icon: typeof CheckSquare;
-  badge: string;
-  badgeColor: string;
-  summary: string;
-  steps: string[];
-  tips?: string;
-}
+const quickSteps = [
+  {
+    step: '1',
+    title: 'Check Daily Queue',
+    desc: 'Open "My Tasks" or "Checklist" every morning to see your assigned tasks and due dates.',
+    icon: Clock3,
+    color: 'bg-blue-50 text-brand-700 border-blue-200',
+  },
+  {
+    step: '2',
+    title: 'Work & Complete',
+    desc: 'Perform the task and click "Complete" on or before the due date to protect your MIS score.',
+    icon: CheckCircle2,
+    color: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  },
+  {
+    step: '3',
+    title: 'Verify via Bell 🔔',
+    desc: 'Checkers and Admins click the top Bell icon to review and verify completed work with 1 click.',
+    icon: Bell,
+    color: 'bg-purple-50 text-purple-700 border-purple-200',
+  },
+];
 
-const features: FeatureCard[] = [
+const updates = [
   {
-    id: 'my-tasks',
-    title: 'My Tasks & Workflows',
-    icon: CheckSquare,
-    badge: 'Core Workflow',
-    badgeColor: 'bg-blue-50 text-blue-700 ring-blue-200',
-    summary: 'Manage your active daily task queue, accept timelines, and complete deliverables.',
-    steps: [
-      'View tasks assigned directly to you under the "My Tasks" dashboard tab.',
-      'Accept new tasks with planned start and due dates before commencing work.',
-      'Mark tasks "Complete" immediately after finishing to lock in your on-time score.',
-      'Review pending checker feedback if a task is returned for rework.',
-    ],
-    tips: 'Pro-tip: Accepting tasks early helps checkers plan their verification schedule.',
+    title: 'Mobile App / Pin to Phone',
+    icon: Smartphone,
+    badge: 'New',
+    badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    desc: 'Open the portal in Chrome or Safari on your phone, tap the menu (⋮ / Share) and select "Add to Home screen". Your login session now stays active for 30 days.',
   },
   {
-    id: 'shift-tasks',
-    title: 'Task Shifting & Handovers',
-    icon: ArrowRightLeft,
-    badge: 'New Feature',
-    badgeColor: 'bg-purple-50 text-purple-700 ring-purple-200',
-    summary: 'Transfer active tasks to a teammate in your department with complete lineage and audit trail.',
-    steps: [
-      'Open the task modal and click the "Shift Task" button at the bottom.',
-      'Select a teammate in your department and provide a clear handover reason.',
-      'The original task is locked as "Shifted" and a new child task is assigned to your teammate.',
-      'Original start/due dates are preserved; the new assignee can request a revision if needed.',
-      'Safety rule: A task can only be shifted once (max 1 shift) to maintain accountability.',
-    ],
-    tips: 'Lineage notes and handover history are permanently visible on both parent and child tasks.',
+    title: 'Verification Bell (Top Right)',
+    icon: Bell,
+    badge: 'Top Header',
+    badgeColor: 'bg-brand-50 text-brand-700 border-brand-200',
+    desc: 'The notification bell sits at the top right. Checkers see all completed submissions waiting for verification in real time.',
   },
   {
-    id: 'checklist-search',
-    title: 'Checklist & Live Search',
-    icon: ListChecks,
-    badge: 'Updated',
-    badgeColor: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-    summary: 'Execute routine daily, weekly, and monthly recurring duties with live search filtering.',
-    steps: [
-      'Filter recurring duties by Daily, Weekly, or Monthly periodicity.',
-      'Use the top search bar to find checklists by Task ID, assignee, description, department, or remarks.',
-      'Instant 0ms tick-off updates your period completion progress bars immediately.',
-      'Clear search instantly with the "✕" button to view your full checklist list.',
-    ],
-    tips: 'Checklist tasks reset automatically at the start of each period.',
-  },
-  {
-    id: 'role-hierarchy',
-    title: 'Role & Hierarchy Rules',
-    icon: Users,
-    badge: 'Guide',
-    badgeColor: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-    summary: 'Clear guidelines on task assignment, checkers, and department permissions.',
-    steps: [
-      'Interns: Create tasks for themselves and select a Department Member as the Checker.',
-      'Members: Create tasks for themselves or assign tasks to Interns within their department.',
-      'Checkers: Inspect submitted work and verify completions on their "Handoff / To Check" tab.',
-      'Leaders & Admins: Assign tasks across all departments, reassign, and manage approvals.',
-    ],
-    tips: 'Interns cannot assign work to Members, but Members can act as Checkers for Interns.',
-  },
-  {
-    id: 'date-revisions',
-    title: 'Date Revisions & Extensions',
+    title: 'Quick Sync & My Tasks Filter',
     icon: RefreshCw,
-    badge: 'Workflow',
-    badgeColor: 'bg-amber-50 text-amber-700 ring-amber-200',
-    summary: 'Request official timeline extensions before deadlines to protect your MIS performance.',
-    steps: [
-      'If you foresee a delay, click "+ Request Revised Date" inside the task details.',
-      'Select the new proposed due date and write a transparent explanation for the extension.',
-      'Your Checker or Admin receives the request and can approve or reject with 1 click.',
-      'For shifted tasks, approving the child revision automatically syncs the parent task timeline.',
-    ],
-    tips: 'Always submit revisions before the task becomes Overdue for faster checker approval.',
+    badge: 'Updated',
+    badgeColor: 'bg-blue-50 text-blue-700 border-blue-200',
+    desc: 'Use "Show my tasks" to view only your tasks, or click "Sync Tasks" beside the bell to refresh the latest 1,000 tasks instantly.',
   },
   {
-    id: 'mis-scores',
-    title: 'MIS Performance Scores',
-    icon: BarChart2,
-    badge: 'MIS Scoring',
-    badgeColor: 'bg-rose-50 text-rose-700 ring-rose-200',
-    summary: 'Track your live performance metrics, weekly scores, and completion ratings.',
-    steps: [
-      'Live score is calculated dynamically based on on-time completions vs overdue tasks.',
-      'Your live score badge is always visible in the top portal navigation bar.',
-      'Visit the Scores page to compare "Current Week Score" vs "Last Week Score".',
-      'For shifted tasks, the MIS score counts for both the parent and child tasks in their weekly delegation metrics.',
-    ],
-    tips: 'Completing tasks on or before the due date guarantees a maximum 100% score contribution.',
+    title: 'Checklist & Housekeeping Routines',
+    icon: ListChecks,
+    badge: 'Active',
+    badgeColor: 'bg-amber-50 text-amber-700 border-amber-200',
+    desc: 'Daily and weekly recurring duties for all teams, including Housekeeping, Salon, and Office. 1-click tick-off saves instantly.',
+  },
+  {
+    title: 'Shift Task to Teammate',
+    icon: ArrowRightLeft,
+    badge: 'Handover',
+    badgeColor: 'bg-purple-50 text-purple-700 border-purple-200',
+    desc: 'Need to pass a task to a colleague? Click "Shift Task" inside task details. It transfers cleanly with complete history.',
+  },
+  {
+    title: 'Date Extensions & MIS Score',
+    icon: Zap,
+    badge: 'Scoring',
+    badgeColor: 'bg-rose-50 text-rose-700 border-rose-200',
+    desc: 'If delayed, click "+ Request Revised Date" before deadline. Approved extensions prevent overdue penalties on your weekly score.',
   },
 ];
 
 const statuses = [
-  {
-    name: 'Pending Accept',
-    description: 'Task is assigned. The assignee needs to accept and set timeline dates.',
-    color: 'bg-yellow-50 text-yellow-700 ring-yellow-200',
-    badgeDot: 'bg-yellow-500',
-  },
-  {
-    name: 'In Progress',
-    description: 'Task is accepted and actively being worked on by the assignee.',
-    color: 'bg-blue-50 text-blue-700 ring-blue-200',
-    badgeDot: 'bg-blue-500',
-  },
-  {
-    name: 'Delay Requested',
-    description: 'A revised due date was submitted and is currently awaiting checker approval.',
-    color: 'bg-orange-50 text-orange-700 ring-orange-200',
-    badgeDot: 'bg-orange-500',
-  },
-  {
-    name: 'Overdue',
-    description: 'The due date has passed. Immediate completion or date revision is required.',
-    color: 'bg-red-50 text-red-700 ring-red-200',
-    badgeDot: 'bg-red-500',
-  },
-  {
-    name: 'Completed',
-    description: 'Work is delivered. Ready for review and verification by the Checker or Admin.',
-    color: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-    badgeDot: 'bg-emerald-500',
-  },
-  {
-    name: 'Verified',
-    description: 'Checker has inspected and confirmed task completion. MIS score is locked in.',
-    color: 'bg-green-50 text-green-700 ring-green-200',
-    badgeDot: 'bg-green-600',
-  },
-  {
-    name: 'Shifted',
-    description: 'Task was handed over to a teammate; linked to the new active child task.',
-    color: 'bg-purple-50 text-purple-700 ring-purple-200',
-    badgeDot: 'bg-purple-500',
-  },
-  {
-    name: 'Dead',
-    description: 'Task is blocked or cancelled. Can be revived anytime by the creator or admin.',
-    color: 'bg-gray-100 text-gray-700 ring-gray-200',
-    badgeDot: 'bg-gray-400',
-  },
+  { name: 'Pending Accept', desc: 'New task assigned — open and accept it.', badge: 'bg-yellow-50 text-yellow-800 border-yellow-200' },
+  { name: 'In Progress', desc: 'Accepted and actively being worked on.', badge: 'bg-blue-50 text-blue-800 border-blue-200' },
+  { name: 'Completed', desc: 'Delivered by assignee — waiting for checker review.', badge: 'bg-purple-50 text-purple-800 border-purple-200' },
+  { name: 'Verified', desc: 'Approved by checker/admin — score locked in 100%.', badge: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
+  { name: 'Delay Requested', desc: 'Revised date submitted — awaiting approval.', badge: 'bg-orange-50 text-orange-800 border-orange-200' },
+  { name: 'Overdue', desc: 'Due date has passed without completion.', badge: 'bg-red-50 text-red-800 border-red-200' },
 ];
 
 const faqs = [
   {
-    q: 'Why do I see my teammate’s tasks on my dashboard?',
-    a: 'If you are a Member or Checker, tasks where you are designated as the "Checker" (handoffUid) appear in your "Handoff / To Check" tab and search results so you can verify them upon completion. Your personal actionable queue is always on the "My Tasks" tab.',
+    q: 'How do I add this app to my phone home screen?',
+    a: 'On Android (Chrome): Tap the 3 dots ⋮ in the top right and tap "Install app" or "Add to Home screen". On iPhone (Safari): Tap the Share button at the bottom and tap "Add to Home Screen". Your login will stay saved for 30 days.',
   },
   {
-    q: 'Can an Intern assign a task to a Member?',
-    a: 'Interns cannot assign work directly to Members. However, when an Intern creates a task for themselves, they can designate a Member in their department as the "Checker". The system allows this because the Intern is the Assignee and the Member is the Verifier.',
+    q: 'Where do I find tasks that need my verification?',
+    a: 'Click the Bell icon 🔔 at the top right of the page. It opens a popup list of all completed tasks waiting for your verification.',
   },
   {
-    q: 'What happens to start & due dates when a task is shifted?',
-    a: 'When you shift a task, the original timeline dates are carried forward to the new child task. If the new assignee requires additional time, they can simply use the "+ Request Revised Date" feature to submit a new proposed deadline.',
+    q: 'What if I cannot complete a task on time?',
+    a: 'Open the task before the deadline passes and click "+ Request Revised Date". Choose your new date and provide a short reason so your checker can approve it without score penalty.',
   },
   {
-    q: 'Can a task be shifted more than once?',
-    a: 'No. To ensure clear accountability and avoid endless handovers, each task can only be shifted once. A shifted child task cannot be shifted again.',
+    q: 'How do I see only my tasks when on the All Tasks page?',
+    a: 'Click the "Show my tasks" button at the top header (beside the bell). Click it again anytime to switch back to viewing all tasks.',
   },
-  {
-    q: 'How do date revisions work for shifted tasks?',
-    a: 'Only the active child task needs a revision request. When a checker or admin approves the child task’s revision, both the child and the parent tasks are automatically synchronized with the new dates.',
-  },
-  {
-    q: 'How is MIS score counted when a shifted task is completed?',
-    a: 'When a shifted task is completed and verified, the MIS score is counted for both the parent task and the child task in their respective weekly delegation metrics.',
-  },
-];
-
-const quickRules = [
-  { text: 'Accept new tasks promptly and confirm realistic start & due dates.', icon: Clock3 },
-  { text: 'Submit date revisions before deadlines pass to protect your score.', icon: RefreshCw },
-  { text: 'Use Shift Task when handing over responsibilities to a department peer.', icon: ArrowRightLeft },
-  { text: 'Mark tasks Complete immediately upon delivery for fast checker verification.', icon: CheckCircle2 },
-  { text: 'Use the Checklist search bar to quickly find recurring periodic duties.', icon: Search },
 ];
 
 export default function PortalHelpPage() {
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
 
   return (
-    <div className="space-y-8 p-6 max-w-7xl mx-auto">
-      {/* Header Banner */}
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between rounded-2xl bg-gradient-to-r from-brand-900 via-brand-800 to-indigo-950 p-6 text-white shadow-md">
-        <div className="space-y-2">
-          <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-medium backdrop-blur-sm text-brand-200">
-            <Sparkles size={14} className="text-amber-400" />
-            <span>Updated with Latest Features & Workflows</span>
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">AHL Task Manager Help Center</h1>
-          <p className="max-w-2xl text-sm leading-6 text-gray-200">
-            Your comprehensive guide to task workflows, shift handovers, checklist search, date revisions, role permissions, and MIS performance scores.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3 rounded-xl bg-white/10 p-3.5 backdrop-blur-md ring-1 ring-white/15 max-w-sm">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-brand-800 shadow-sm">
-            <ShieldCheck size={20} />
-          </div>
+    <div className="space-y-6 p-4 sm:p-6 max-w-6xl mx-auto">
+      {/* Top Banner */}
+      <div className="rounded-2xl bg-gradient-to-r from-brand-900 via-brand-800 to-indigo-950 p-5 sm:p-6 text-white shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <p className="text-xs font-bold text-white">Daily Best Practice</p>
-            <p className="text-[11px] leading-4 text-gray-200">Open your dashboard daily and clear Pending & In Progress actions.</p>
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-0.5 text-xs font-medium text-brand-200 backdrop-blur-sm mb-2">
+              <Sparkles size={13} className="text-amber-300" />
+              <span>Latest Portal Guide</span>
+            </div>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight">How to Use AHL Task Manager</h1>
+            <p className="mt-1 text-xs sm:text-sm text-gray-200 max-w-2xl">
+              Simple guide to daily workflows, mobile installation, checklists, verification, and scoring.
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Video & Daily Best Practices Grid */}
-      <section className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="card overflow-hidden border border-gray-200 shadow-sm flex flex-col justify-between">
-          <div className="border-b border-gray-100 px-5 py-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <PlayCircle size={18} className="text-brand-600" />
-                <h2 className="text-base font-semibold text-gray-900">Training & Walkthrough</h2>
-              </div>
-              <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-medium text-brand-700 ring-1 ring-brand-200">
-                Portal Video
-              </span>
-            </div>
-            <p className="mt-0.5 text-xs text-gray-500">Quick video walkthrough of the portal and key features.</p>
-          </div>
-          <div className="flex aspect-video items-center justify-center bg-gray-950 text-white">
-            <div className="text-center p-6">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-white/10 transition-transform hover:scale-105 cursor-pointer shadow-lg">
-                <PlayCircle size={36} className="text-white" />
-              </div>
-              <p className="mt-4 text-sm font-semibold tracking-wide">Video Walkthrough</p>
-              <p className="mt-1 text-xs text-gray-400">Portal demonstration and training video</p>
-            </div>
-          </div>
+      {/* 3-Step Daily Workflow */}
+      <section className="card p-5 border border-gray-200">
+        <div className="mb-4">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-brand-700">3-Step Daily Workflow</h2>
+          <p className="text-xs text-gray-500">Follow this simple cycle every working day</p>
         </div>
 
-        <div className="card p-5 border border-gray-200 shadow-sm flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Zap size={18} className="text-amber-600" />
-                <h2 className="text-base font-semibold text-gray-900">Daily Best Practices</h2>
-              </div>
-              <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-amber-200">
-                Quick Tips
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-gray-500">Essential habits to maintain a 100% on-time performance score.</p>
-
-            <div className="mt-4 space-y-3">
-              {quickRules.map((rule) => {
-                const RuleIcon = rule.icon;
-                return (
-                  <div key={rule.text} className="flex items-start gap-3 rounded-lg bg-gray-50 p-2.5 transition-colors hover:bg-gray-100/70">
-                    <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-brand-100 text-brand-700">
-                      <RuleIcon size={14} />
-                    </div>
-                    <p className="text-xs leading-5 text-gray-700">{rule.text}</p>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="mt-4 rounded-xl bg-brand-50/70 border border-brand-100 p-3">
-            <div className="flex items-center gap-2 text-xs font-semibold text-brand-900">
-              <ShieldCheck size={16} className="text-brand-700" />
-              Checker Tip:
-            </div>
-            <p className="mt-1 text-[11px] leading-4 text-brand-800">
-              Checkers should verify completed tasks on the &ldquo;Handoff / To Check&rdquo; tab promptly so teammate scores reflect immediately.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* Feature Knowledge Cards */}
-      <section>
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">Feature Modules & Guides</h2>
-            <p className="text-xs text-gray-500">Step-by-step instructions for all features</p>
-          </div>
-          <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-600">
-            {features.length} Reference Guides
-          </span>
-        </div>
-
-        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-          {features.map(item => {
+        <div className="grid gap-3 sm:grid-cols-3">
+          {quickSteps.map(item => {
             const Icon = item.icon;
             return (
-              <article
-                key={item.id}
-                className="card flex flex-col justify-between border border-gray-200 p-5 shadow-sm transition-all hover:border-brand-300 hover:shadow-md"
-              >
-                <div>
-                  {/* Card Header */}
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700 ring-1 ring-brand-100">
-                        <Icon size={20} />
-                      </div>
-                      <div>
-                        <h3 className="text-sm font-bold text-gray-900 leading-tight">{item.title}</h3>
-                      </div>
-                    </div>
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${item.badgeColor}`}>
-                      {item.badge}
-                    </span>
+              <div key={item.step} className="rounded-xl border border-gray-100 bg-gray-50/60 p-4 transition-all hover:bg-white hover:border-gray-200 hover:shadow-xs">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-600 text-xs font-bold text-white">
+                    {item.step}
+                  </span>
+                  <div className={`p-1.5 rounded-lg border ${item.color}`}>
+                    <Icon size={16} />
                   </div>
-
-                  <p className="mt-3 text-xs leading-5 text-gray-600 font-medium">{item.summary}</p>
-
-                  {/* Step list */}
-                  <ul className="mt-4 space-y-2 border-t border-gray-100 pt-3">
-                    {item.steps.map((step, idx) => (
-                      <li key={idx} className="flex items-start gap-2 text-xs leading-5 text-gray-600">
-                        <CheckCircle2 size={14} className="mt-1 shrink-0 text-emerald-600" />
-                        <span>{step}</span>
-                      </li>
-                    ))}
-                  </ul>
                 </div>
-
-                {item.tips && (
-                  <div className="mt-4 rounded-lg bg-gray-50 p-2.5 text-[11px] leading-4 text-gray-600 border border-gray-100 flex items-start gap-1.5">
-                    <Info size={14} className="mt-0.5 shrink-0 text-brand-600" />
-                    <span>{item.tips}</span>
-                  </div>
-                )}
-              </article>
+                <h3 className="text-sm font-semibold text-gray-900">{item.title}</h3>
+                <p className="mt-1 text-xs leading-relaxed text-gray-600">{item.desc}</p>
+              </div>
             );
           })}
         </div>
       </section>
 
-      {/* Task Status Badges Guide */}
-      <section className="card p-6 border border-gray-200 shadow-sm">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-bold text-gray-900">Task Statuses Explained</h2>
-            <p className="mt-0.5 text-xs text-gray-500">Understand the meaning and next required action for every badge</p>
-          </div>
-          <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600">
-            {statuses.length} Statuses
-          </span>
+      {/* Feature & Updates Grid */}
+      <section>
+        <div className="mb-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-gray-900">Key Features & Updates</h2>
+          <p className="text-xs text-gray-500">Everything you need to know in short summary</p>
         </div>
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {statuses.map(status => (
-            <div
-              key={status.name}
-              className="rounded-xl border border-gray-100 bg-gray-50/60 p-3.5 transition-all hover:bg-white hover:border-gray-300 hover:shadow-sm"
-            >
-              <div className="flex items-center gap-2">
-                <span className={`h-2 w-2 rounded-full ${status.badgeDot}`} />
-                <span className={`inline-flex rounded-md px-2 py-0.5 text-xs font-semibold ring-1 ${status.color}`}>
-                  {status.name}
-                </span>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {updates.map(item => {
+            const Icon = item.icon;
+            return (
+              <div key={item.title} className="card p-4 border border-gray-200 flex flex-col justify-between hover:border-brand-300 hover:shadow-xs transition-all">
+                <div>
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
+                        <Icon size={16} />
+                      </div>
+                      <h3 className="text-xs sm:text-sm font-bold text-gray-900">{item.title}</h3>
+                    </div>
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${item.badgeColor} shrink-0`}>
+                      {item.badge}
+                    </span>
+                  </div>
+                  <p className="text-xs leading-relaxed text-gray-600">{item.desc}</p>
+                </div>
               </div>
-              <p className="mt-2 text-xs leading-5 text-gray-600">{status.description}</p>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Task Status Guide */}
+      <section className="card p-5 border border-gray-200">
+        <div className="mb-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-gray-900">Task Status Guide</h2>
+          <p className="text-xs text-gray-500">What each task status badge means</p>
+        </div>
+
+        <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+          {statuses.map(status => (
+            <div key={status.name} className="flex items-start gap-2.5 rounded-lg border border-gray-100 bg-gray-50/50 p-3">
+              <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border shrink-0 ${status.badge}`}>
+                {status.name}
+              </span>
+              <p className="text-xs text-gray-600 leading-tight">{status.desc}</p>
             </div>
           ))}
         </div>
       </section>
 
-      {/* Interactive FAQ Accordion */}
-      <section className="card p-6 border border-gray-200 shadow-sm">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-bold text-gray-900">Frequently Asked Questions</h2>
-            <p className="mt-0.5 text-xs text-gray-500">Quick answers to common questions about tasks, checkers, shifts, and scoring</p>
-          </div>
-          <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-medium text-brand-700">
-            {faqs.length} FAQs
-          </span>
+      {/* Quick FAQ Accordion */}
+      <section className="card p-5 border border-gray-200">
+        <div className="mb-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-gray-900">Frequently Asked Questions</h2>
+          <p className="text-xs text-gray-500">Short answers to common questions</p>
         </div>
 
-        <div className="mt-4 divide-y divide-gray-100">
+        <div className="divide-y divide-gray-100">
           {faqs.map((faq, index) => {
             const isExpanded = expandedFaq === index;
             return (
-              <div key={faq.q} className="py-3.5">
+              <div key={faq.q} className="py-3">
                 <button
+                  type="button"
                   onClick={() => setExpandedFaq(isExpanded ? null : index)}
-                  className="flex w-full items-center justify-between text-left text-sm font-semibold text-gray-900 hover:text-brand-700 transition-colors"
+                  className="flex w-full items-center justify-between text-left text-xs sm:text-sm font-semibold text-gray-900 hover:text-brand-700 transition-colors"
                 >
-                  <span className="pr-4">{faq.q}</span>
+                  <span className="pr-3">{faq.q}</span>
                   <ChevronDown
-                    size={18}
+                    size={16}
                     className={`shrink-0 text-gray-400 transition-transform duration-200 ${
                       isExpanded ? 'rotate-180 text-brand-600' : ''
                     }`}
                   />
                 </button>
                 {isExpanded && (
-                  <div className="mt-2.5 rounded-lg bg-gray-50 p-3.5 text-xs leading-6 text-gray-700 border border-gray-100">
+                  <div className="mt-2 rounded-lg bg-gray-50 p-3 text-xs leading-relaxed text-gray-600 border border-gray-100">
                     {faq.a}
                   </div>
                 )}
