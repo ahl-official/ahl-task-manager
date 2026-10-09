@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import type { SessionUser, UserRole } from '@/types';
 
 const SESSION_COOKIE = 'ahl_session';
-const SESSION_EXPIRY = 60 * 60 * 24 * 7 * 1000; // 7 days in ms
+const SESSION_EXPIRY = 60 * 60 * 24 * 30 * 1000; // 30 days in ms
 const encoder = new TextEncoder();
 
 function base64url(input: ArrayBuffer | string): string {
