@@ -27,7 +27,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const isAdmin    = role === 'admin' || userRole === 'admin';
   const isTimelySheet = task.createdBy === 'timely-sheet' || /^(office|salon|weekly)-/i.test(task.taskId);
   const isDone = task.status === 'Completed' || task.status === 'Verified' || task.status === 'Shifted (Completed)' || task.status === 'Shifted (Verified)';
-  const canDelete  = isAdmin && !isTimelySheet && !isDone;
+  const canDelete  = isAdmin && !isTimelySheet && !isDone && task.category==='One Time' && !task.parentTaskId && !task.childTaskId;
   const displayStatus = task.status;
   const due        = getDueBadge(task.endDate, displayStatus);
   const needsDates = !isDone && isAssignee && (task.status === 'In Progress' || task.status === 'Pending Accept') && (!task.startDate || !task.endDate);
@@ -131,6 +131,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
         'set-dates': 'Task dates saved successfully',
         complete: isAdmin ? 'Task completed and verified successfully' : 'Task completed successfully',
         verify: 'Task verified successfully',
+        uncomplete: 'Completion undone',
         dead: 'Task flagged Dead',
         remark: 'Remark added',
         revive: 'Task revived',
@@ -193,6 +194,14 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   async function decideRevision(decision: 'approved' | 'rejected', revisionId: string) {
     setLoading(`revision-${decision}`);
     try {
+      if (revisionId === task.taskId) {
+        const lookup=await fetch('/api/revisions?taskId='+encodeURIComponent(task.taskId));
+        const result=await lookup.json();
+        if(!result.success)throw new Error(result.error);
+        const pending=result.data.find((row:any)=>row.status==='pending');
+        if(!pending)throw new Error('No pending revision; refresh the task');
+        revisionId=pending.id;
+      }
       const res = await fetch('/api/revisions', {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -535,6 +544,9 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
               </div>
             )}
 
+            {isDone && !task.childTaskId && !isTimelySheet && (isAssignee || isAdmin) && (
+              <ActionButton label="Undo completion" onClick={()=>doAction('uncomplete')} loading={loading==='uncomplete'} color="blue" />
+            )}
             {/* Assignee / Admin actions */}
             {(isAssignee || isAdmin) && (
               <div className="flex gap-2 flex-wrap w-full">
@@ -578,7 +590,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
 
 
 
-                {['In Progress', 'Delay Requested', 'Shifted (In Progress)', 'Shifted (Delay Requested)'].includes(task.status) && !isDone && (
+                {['In Progress', 'Overdue'].includes(task.status) && !task.childTaskId && !isDone && (
                   <ActionButton
                     label="Mark Complete"
                     onClick={() => {

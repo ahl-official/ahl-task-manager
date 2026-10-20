@@ -1,4 +1,5 @@
 'use client';
+import { clearTaskStorage } from '@/lib/utils/pendingCreatedTask';
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -58,6 +59,7 @@ export default function Sidebar({
     : USER_NAV.filter(item => item.href !== '/portal/department' || session.role === 'leader');
 
   async function handleLogout() {
+    clearTaskStorage();
     await signOut(auth);
     await fetch('/api/auth/session', { method: 'DELETE' });
     toast.success('Logged out');

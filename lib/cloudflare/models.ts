@@ -36,14 +36,19 @@ export function cfTask(row: any): Task | null {
     const parentMatch = notesStr.match(/\[Shifted\s+by\s+.*?\s+from\s+(T-\d+)/i) || notesStr.match(/parentTaskId:\s*(T-\d+)/i);
     if (parentMatch) parentTaskId = parentMatch[1];
   }
-  if (!childTaskId) {
+  if (!childTaskId && !parentTaskId) {
     const childMatch = notesStr.match(/to\s+(T-\d+)\]/i) || notesStr.match(/childTaskId:\s*(T-\d+)/i);
     if (childMatch) childTaskId = childMatch[1];
   }
+  let shift: any = {};
+  try { shift = JSON.parse(notesStr.match(/\[AHL_SHIFT (\{[^\n]*\})\]/)?.[1] || '{}'); } catch {}
+  parentTaskId = shift.parentTaskId || parentTaskId;
+  childTaskId = shift.childTaskId || childTaskId;
   const isShifted = Boolean(row.isShifted || row.is_shifted || parentTaskId || childTaskId || String(row.status || '').startsWith('Shifted'));
 
   return {
     ...row,
+    ...shift,
     category,
     handoffName,
     parentTaskId,

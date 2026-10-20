@@ -21,7 +21,7 @@ export default async function PortalScorePage() {
   if (session.role === 'leader') {
     const [scores, tasks, users] = await Promise.all([
       adminGetAllScores(),
-      adminGetAllTasks({ department: session.department, limit: null }),
+      adminGetAllTasks({ department: session.department, limit: 1000 }),
       adminGetAllUsers(),
     ]);
     const visibleScores = filterScoresForSession(session, scores);

@@ -1,0 +1,104 @@
+// Read-only reporting routes. No schema creation, materialization, or database writes.
+const cache = new Map();
+const periodCache = new Map();
+const TTL = 30_000;
+export function invalidateReadCache() { cache.clear(); periodCache.clear(); }
+export function getCachedRead(req, url) {
+  if (req.method !== 'GET' || url.searchParams.get('fresh') === 'true') return null;
+  const entry = cache.get(url.href);
+  if (!entry || entry.until <= Date.now()) { cache.delete(url.href); return null; }
+  return new Response(entry.body, { status: 200, headers: { 'content-type': 'application/json', 'x-data-as-of': entry.asOf } });
+}
+export async function cacheRead(req, url, response) {
+  if (req.method !== 'GET' || response.status !== 200 || !['/tasks/counts','/tasks/search','/mis/delegation-counts','/recurring/mis-counts','/mis/reconciled','/mis/weekly','/mis/weekly/latest'].includes(url.pathname)) return;
+  const body = await response.clone().text();
+  if (body.length > 1_000_000) return;
+  if (cache.size >= 128) cache.delete(cache.keys().next().value);
+  cache.set(url.href, { body, until: Date.now() + TTL, asOf: new Date().toISOString() });
+}
+const json = data => new Response(JSON.stringify({success:true,data,meta:{asOf:new Date().toISOString()}}),{headers:{'content-type':'application/json'}});
+function scopeFilters(url) {
+  const clauses=[],binds=[],scope=url.searchParams.get('scope')||'all',uid=url.searchParams.get('uid');
+  if (scope !== 'all') {
+    if (!uid) throw new Error('A scoped request requires uid');
+    if (scope==='visible') { clauses.push('(assigned_to=? OR created_by=? OR handoff_uid=?)');binds.push(uid,uid,uid); }
+    else if (scope==='mine'||scope==='handoff') {clauses.push((scope==='mine'?'assigned_to':'handoff_uid')+'=?');binds.push(uid);}
+    else throw new Error('Invalid task scope');
+  }
+  const department=url.searchParams.get('department');if(department){clauses.push('department=?');binds.push(department);}
+  if(url.searchParams.get('excludeRecurring')==='true')clauses.push("LOWER(COALESCE(category,'')) NOT IN ('daily','weekly','monthly')");
+  for(const [param,col] of [['assignedTo','assigned_to'],['category','category'],['priority','priority']]){const value=url.searchParams.get(param);if(value){clauses.push(col+'=?');binds.push(value);}}
+  return {clauses,binds};
+}
+const empty=()=>({total:0,pending:0,inProgress:0,delayRequested:0,overdue:0,completed:0,verified:0,dead:0,active:0});
+function add(bucket,status,n,overdue){
+  const normalized=String(status||'').replace(/^Shifted \((.*)\)$/,'$1');
+  bucket.total+=n;
+  const field={'Pending Accept':'pending','In Progress':'inProgress','Delay Requested':'delayRequested','Completed':'completed','Verified':'verified','Dead':'dead'}[normalized];
+  if(field)bucket[field]+=n;
+  if(overdue)bucket.overdue+=n;
+  if(['In Progress','Delay Requested','Overdue'].includes(normalized))bucket.active+=n;
+}
+const today=()=>new Date(Date.now()+19_800_000).toISOString().slice(0,10);
+function statusFilter(clauses,binds,status){
+  if(status==='Completed')clauses.push("status IN ('Completed','Verified','Shifted (Completed)','Shifted (Verified)')");
+  else if(status==='Overdue'){clauses.push("(status='Overdue' OR (status IN ('Pending Accept','In Progress','Delay Requested') AND date(end_date,'+5 hours','+30 minutes') < ?))");binds.push(today());}
+  else if(status){clauses.push('(status=? OR status=?)');binds.push(status,'Shifted ('+status+')');}
+}
+export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
+  if(req.method!=='GET')return null;
+  if(url.pathname==='/tasks/counts'){
+    const {clauses,binds}=scopeFilters(url);
+    statusFilter(clauses,binds,url.searchParams.get('status'));
+    const due="(status='Overdue' OR (status IN ('Pending Accept','In Progress','Delay Requested') AND date(end_date,'+5 hours','+30 minutes') < ?))";
+    const result=await env.DB.prepare(`SELECT assigned_to,department,status,${due} AS overdue_flag,COUNT(*) AS n FROM tasks_current ${clauses.length?'WHERE '+clauses.join(' AND '):''} GROUP BY assigned_to,department,status,overdue_flag`).bind(today(),...binds).all();
+    const overall=empty(),byUser=Object.create(null),byDepartment=Object.create(null);
+    for(const row of result.results||[]){const n=Number(row.n),user=row.assigned_to||'',dept=row.department||'Unassigned';add(overall,row.status,n,Boolean(row.overdue_flag));add(byUser[user]??=empty(),row.status,n,Boolean(row.overdue_flag));add(byDepartment[dept]??=empty(),row.status,n,Boolean(row.overdue_flag));}
+    const params=url.searchParams,uid=params.get('uid');
+    if(params.get('includeChecklist')==='true'&&params.get('scope')==='mine'&&(!params.get('assignedTo')||params.get('assignedTo')===uid)&&(!params.get('category')||params.get('category')==='Daily')&&(!params.get('priority')||params.get('priority')==='Medium')){
+      const department=params.get('department');
+      const periods=await env.DB.prepare("SELECT department,status,COUNT(*) AS n FROM recurring_period_rows WHERE assigned_to=? AND category='Daily' AND is_deleted=0 AND status!='Deleted' AND due_date=?"+(department?' AND department=?':'')+" GROUP BY department,status").bind(uid,today(),...(department?[department]:[])).all();
+      for(const row of periods.results||[]){const status=['Completed','Verified'].includes(row.status)?'Completed':'In Progress',requested=params.get('status');if(requested&&requested!==status&&!(requested==='Completed'&&status==='Verified'))continue;const n=Number(row.n),uid=url.searchParams.get('uid'),dept=row.department||'Unassigned';add(overall,status,n,false);add(byUser[uid]??=empty(),status,n,false);add(byDepartment[dept]??=empty(),status,n,false);}
+    }
+    return json({...overall,byUser,byDepartment});
+  }
+  if(url.pathname==='/tasks/search'){
+    const {clauses,binds}=scopeFilters(url),q=(url.searchParams.get('q')||'').trim();
+    const limit=Math.min(Math.max(Number(url.searchParams.get('limit'))||100,1),100);
+    const status=url.searchParams.get('status');
+    statusFilter(clauses,binds,status);
+    const id=q.match(/^T-?(\d+)$/i);
+    if(id){clauses.push('task_id=?');binds.push('T-'+id[1].padStart(4,'0'));}
+    else if(q){
+      if(q.length<3)return json([]);
+      const pattern='%'+q.replace(/[\\%_]/g,'\\$&')+'%';
+      clauses.push("(task_id LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')");binds.push(pattern,pattern);
+    }else if(!status&&!url.searchParams.get('assignedTo')&&!url.searchParams.get('category')&&!url.searchParams.get('priority')&&!url.searchParams.get('department')&&(url.searchParams.get('scope')||'all')==='all')return json([]);
+    const result=await env.DB.prepare(`SELECT * FROM tasks_current WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC,task_id DESC LIMIT ?`).bind(...binds,limit).all();
+    return json((result.results||[]).map(mapTask));
+  }
+  if(url.pathname==='/mis/delegation-counts'){
+    const start=url.searchParams.get('weekStart'),end=url.searchParams.get('weekEnd');
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(start||'')||!/^\d{4}-\d{2}-\d{2}$/.test(end||'')||start>end)throw new Error('Invalid MIS week');
+    const final="date(COALESCE(NULLIF(t.delayed_date,''),NULLIF(t.end_date,''),NULLIF(t.start_date,''),NULLIF(t.completed_at,'')),'+5 hours','+30 minutes')";
+    const first="date(t.start_date,'+5 hours','+30 minutes')";
+    const revised="date(COALESCE(NULLIF(t.delayed_date,''),NULLIF(t.end_date,'')),'+5 hours','+30 minutes')";
+    const done="t.status NOT IN ('Pending','Shifted')";
+    const result=await env.DB.prepare(`SELECT t.assigned_to AS uid,COALESCE(NULLIF(u.name,''),t.assigned_to_name) AS name,COALESCE(NULLIF(u.department,''),t.department) AS department,u.wa_number AS waNumber,COUNT(*) AS planned,SUM(CASE WHEN ${done} THEN 1 ELSE 0 END) AS done,SUM(CASE WHEN ${done} AND NOT (t.status IN ('Completed','Verified') AND COALESCE(${first}<${revised},0)) THEN 1 ELSE 0 END) AS onTime FROM tasks_current t LEFT JOIN users u ON u.uid=t.assigned_to WHERE LOWER(COALESCE(t.category,'')) NOT IN ('daily','weekly','monthly') AND ${final}>=? AND ${final}<=? GROUP BY t.assigned_to,COALESCE(NULLIF(u.name,''),t.assigned_to_name),COALESCE(NULLIF(u.department,''),t.department),u.wa_number`).bind(start,end).all();
+    return json(result.results||[]);
+  }
+  return null;
+}
+export async function aggregatePeriods(env,start,end){
+  const key=start+':'+end,cached=periodCache.get(key);
+  if(cached&&cached.until>Date.now())return cached.promise;
+  const promise=loadPeriodAggregates(env,start,end).catch(error=>{periodCache.delete(key);throw error;});
+  if(periodCache.size>=32)periodCache.delete(periodCache.keys().next().value);
+  periodCache.set(key,{promise,until:Date.now()+TTL});
+  return promise;
+}
+async function loadPeriodAggregates(env,start,end){
+  const due="COALESCE(NULLIF(p.due_date,''),substr(p.period_key,1,10))";
+  const result=await env.DB.prepare(`SELECT p.assigned_to_name AS name,p.department,p.category,s.source_kind,COUNT(*) AS planned,SUM(CASE WHEN p.status IN ('Completed','Verified') THEN 1 ELSE 0 END) AS done,SUM(CASE WHEN p.status IN ('Completed','Verified') AND COALESCE(p.is_on_time,1)=1 THEN 1 ELSE 0 END) AS onTime FROM recurring_period_rows p LEFT JOIN (SELECT period_row_id,MIN(source_kind) AS source_kind FROM recurring_period_sources GROUP BY period_row_id) s ON s.period_row_id=p.id WHERE p.is_deleted=0 AND p.status!='Deleted' AND ${due}>=? AND ${due}<=? GROUP BY p.assigned_to_name,p.department,p.category,s.source_kind`).bind(start,end).all();
+  return result.results||[];
+}

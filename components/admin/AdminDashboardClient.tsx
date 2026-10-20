@@ -1,4 +1,5 @@
 'use client';
+import type { TaskAggregateCounts } from '@/lib/firebase/tasks';
 
 import { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
@@ -6,6 +7,10 @@ import { ArrowRight, Building2, Clock3, X } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS, normalizeBaseStatus } from '@/lib/utils';
 import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import TaskModal from '@/components/shared/TaskModal';
+import {
+  mergeTasksWithPending,
+  takePendingCreatedTask,
+} from '@/lib/utils/pendingCreatedTask';
 import type { TaskSerialized } from '@/types';
 
 type TaskFilter = 'all' | 'Pending Accept' | 'In Progress' | 'Completed' | 'Verified' | 'Overdue';
@@ -67,13 +72,15 @@ function getTimeAgo(iso: string) {
 }
 
 interface Props {
+  currentUid: string;
+  taskCounts: TaskAggregateCounts;
   users: any[];
   tasks: TaskSerialized[];
   scores: any[];
   departments: { id: string; name: string }[];
 }
 
-export default function AdminDashboardClient({ users, tasks, scores, departments: initialDepartments }: Props) {
+export default function AdminDashboardClient({ currentUid, taskCounts, users, tasks, scores, departments: initialDepartments }: Props) {
   const [taskItems, setTaskItems] = useState(tasks);
   const [filter, setFilter]         = useState<TaskFilter>('all');
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
@@ -87,8 +94,23 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
   }, []);
 
   useEffect(() => {
-    setTaskItems(tasks);
-  }, [tasks]);
+    const pending = takePendingCreatedTask(currentUid);
+    setTaskItems(mergeTasksWithPending(tasks, pending));
+  }, [tasks, currentUid]);
+
+
+  useEffect(() => {
+    if (!selectedUser || taskItems.some(t => t.assignedTo === selectedUser && matchesFilter(t,filter))) return;
+    const controller = new AbortController();
+    const params = new URLSearchParams({filter:'true',scope:'all',assignedTo:selectedUser,limit:'100'});
+    if (filter !== 'all') params.set('status',filter);
+    fetch('/api/tasks?'+params,{signal:controller.signal}).then(r=>r.json()).then(json=>{
+      if (!controller.signal.aborted && json.success && json.data.length) setTaskItems(current=>{
+        const rows=new Map(current.map(t=>[t.taskId,t]));for(const task of json.data)rows.set(task.taskId,task);return Array.from(rows.values());
+      });
+    }).catch(error=>{if(error.name!=='AbortError')console.error('User task lookup failed',error);});
+    return ()=>controller.abort();
+  },[selectedUser,filter,taskItems]);
 
   function updateTask(updated?: TaskSerialized) {
     if (!updated) {
@@ -134,8 +156,10 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
       tasksByUser.set(task.assignedTo, userTasks);
     }
 
-    return { overall, byUser, byDepartment, tasksByUser };
-  }, [taskItems]);
+    return { overall: taskCounts,
+      byUser: new Map<string, TaskCounts>(Object.entries(taskCounts.byUser || {})),
+      byDepartment: new Map<string, TaskCounts>(Object.entries(taskCounts.byDepartment || {})), tasksByUser };
+  }, [taskItems, taskCounts]);
 
   const scoreMap = useMemo(() =>
     Object.fromEntries(scores.map((s: any) => [s.uid, s])),
@@ -148,7 +172,8 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
     .map(department => {
       const departmentUsers = activeUsers.filter((u: any) => u.department === department);
       const visibleUsers = departmentUsers.filter((u: any) =>
-        filter === 'all' || (taskMetrics.tasksByUser.get(u.uid) ?? []).some(task => matchesFilter(task, filter))
+        filter === 'all' || (() => { const counts = taskMetrics.byUser.get(u.uid) || emptyCounts();
+          return filter === 'Completed' ? counts.completed + counts.verified > 0 : counts[({ 'Pending Accept': 'pending', 'In Progress': 'inProgress', 'Verified': 'verified', 'Overdue': 'overdue' } as const)[filter]] > 0; })()
       );
 
       return {
@@ -485,7 +510,7 @@ export default function AdminDashboardClient({ users, tasks, scores, departments
           task={selectedTask}
           onClose={() => setSelectedTask(null)}
           role="admin"
-          currentUid=""
+          currentUid={currentUid}
           onUpdate={updateTask}
           onDelete={removeTask}
           users={users}

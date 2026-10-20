@@ -65,109 +65,21 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    if (hasCloudflareApi()) {
+      const result = await cfApi<{parentTask:any;childTask:any}>('/tasks/shift', {
+        method:'POST',body:JSON.stringify({taskId:task.taskId,targetUid:targetUser.uid,shiftNote,
+          actorUid:session.uid,actorName:session.name,actorRole:session.role,actorDepartment:session.department})
+      });
+      const child=cfTask(result.childTask)!,parent=cfTask(result.parentTask)!;
+      await adminLog('TASK_SHIFTED',task.taskId+' shifted to '+child.taskId,{taskId:task.taskId,uid:session.uid}).catch(()=>{});
+      if(targetUser.waNumber) await sendWhatsApp(targetUser.waNumber,msgTaskAssigned({taskId:child.taskId,description:child.description,priority:child.priority,endDate:child.endDate?.toDate().toISOString().slice(0,10)||'Pending',createdByName:session.name,datesRequired:!child.endDate,acceptanceRequired:child.status==='Pending Accept'}),child.taskId).catch(()=>{});
+      return NextResponse.json({success:true,data:{parentTask:serializeTask(parent),childTask:serializeTask(child)}});
+    }
     const childTaskId = await generateTaskId();
     const cleanNote = String(shiftNote).trim();
-
-    const parentNotes = task.notes
-      ? `${task.notes}\n\n[Shifted by ${session.name} to ${childTaskId}]: ${cleanNote || 'Task shifted'}`
-      : `[Shifted by ${session.name} to ${childTaskId}]: ${cleanNote || 'Task shifted'}`;
-
-    const childNotes = task.notes
-      ? `${task.notes}\n\n[Shifted by ${session.name} from ${task.taskId} to ${childTaskId}]: ${cleanNote || 'Task shifted'}`
-      : `[Shifted by ${session.name} from ${task.taskId} to ${childTaskId}]: ${cleanNote || 'Task shifted'}`;
-
-    const childStatus = (task.startDate && task.endDate) ? 'In Progress' : 'Pending Accept';
-
-    if (hasCloudflareApi()) {
-      const toIso = (val: unknown) => {
-        if (!val) return null;
-        if (typeof val === 'string') return val;
-        if (typeof val === 'object' && val && typeof (val as any).toDate === 'function') {
-          return (val as any).toDate().toISOString();
-        }
-        return String(val);
-      };
-
-      const nowIso = new Date().toISOString();
-
-      // 1. Create child task in Cloudflare
-      const childTask = cfTask(await cfApi('/tasks', {
-        method: 'POST',
-        body: JSON.stringify({
-          taskId: childTaskId,
-          description: task.description,
-          assignedTo: targetUser.uid,
-          assignedToName: targetUser.name,
-          assignedToWa: targetUser.waNumber || '',
-          creatorUid: session.uid,
-          creatorFallback: { uid: session.uid, name: session.name, waNumber: session.waNumber || '' },
-          createdBy: session.uid,
-          createdByName: session.name,
-          handoffUid: task.handoffUid || session.uid,
-          handoffName: task.handoffName || session.name,
-          handoffWa: task.handoffWa || '',
-          category: task.category || 'One Time',
-          priority: task.priority || 'Medium',
-          status: childStatus,
-          department: targetUser.department || task.department || '',
-          startDate: toIso(task.startDate),
-          endDate: toIso(task.endDate),
-          delayedDate: toIso(task.delayedDate),
-          delayReason: task.delayReason || null,
-          revisionStatus: 'none',
-          notes: childNotes,
-          acceptedAt: childStatus === 'In Progress' ? nowIso : null,
-          skipAcceptance: childStatus === 'In Progress',
-          isShifted: true,
-          parentTaskId: task.taskId,
-          shiftedByUid: session.uid,
-          shiftedByName: session.name,
-          shiftedNote: cleanNote || null,
-          shiftedAt: nowIso,
-        }),
-      }))!;
-
-      // 2. Update parent task in Cloudflare
-      const updatedParent = cfTask(await cfApi(`/tasks/${encodeURIComponent(task.taskId)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          status: `Shifted (${childStatus})`,
-          notes: parentNotes,
-        }),
-      }));
-
-      await adminLog('TASK_SHIFTED', `Task ${task.taskId} shifted to ${targetUser.name} (${childTaskId}) by ${session.name}`, {
-        taskId: task.taskId,
-        uid: session.uid,
-        meta: { childTaskId, targetUid: targetUser.uid },
-      }).catch(() => {});
-
-      if (targetUser.waNumber) {
-        const dueText = task.endDate ? (toIso(task.endDate)?.slice(0, 10) || 'Pending') : 'Pending';
-        await sendWhatsApp(
-          targetUser.waNumber,
-          msgTaskAssigned({
-            taskId: childTaskId,
-            description: task.description,
-            priority: task.priority,
-            endDate: dueText,
-            createdByName: session.name,
-            datesRequired: !task.endDate,
-            acceptanceRequired: childStatus === 'Pending Accept',
-          }),
-          childTaskId,
-        ).catch(() => {});
-      }
-
-      return NextResponse.json({
-        success: true,
-        data: {
-          parentTask: updatedParent ? serializeTask(updatedParent) : null,
-          childTask: serializeTask(childTask),
-        },
-      });
-    }
-
+    const parentNotes = (task.notes||'')+'\n[Shifted by '+session.name+' to '+childTaskId+']: '+cleanNote;
+    const childNotes = (task.notes||'')+'\n[Shifted by '+session.name+' from '+task.taskId+' to '+childTaskId+']: '+cleanNote;
+    const childStatus = task.startDate && task.endDate ? 'In Progress' : 'Pending Accept';
     const now = Timestamp.now();
     const childTaskData: Task = {
       taskId: childTaskId,

@@ -1,6 +1,8 @@
+import { isCronOrAdmin } from "@/lib/utils/cronAuth";
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  adminGetAllTasks,
+  adminGetActiveTasks,
   adminUpdateTaskStatus,
 } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
@@ -20,12 +22,13 @@ import type { Task } from '@/types';
  * Protected by CRON_SECRET.
  */
 export async function GET(req: NextRequest) {
+  if (!await isCronOrAdmin(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const errors: string[] = [];
   let sent = 0;
 
   try {
     const [tasks, users] = await Promise.all([
-      adminGetAllTasks({ limit: null }),
+      adminGetActiveTasks(1000),
       adminGetAllUsers(),
     ]);
 
@@ -92,6 +95,3 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
   }
 }
-
-
-

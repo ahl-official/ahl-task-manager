@@ -1,5 +1,7 @@
+import { isCronOrAdmin } from "@/lib/utils/cronAuth";
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from 'next/server';
-import { adminGetAllTasks } from '@/lib/firebase/tasks';
+import { adminGetActiveTasks } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminLog } from '@/lib/firebase/scores';
 import {
@@ -19,13 +21,6 @@ import type { Task } from '@/types';
  * ?mode=today (default) — all open One Time due today (IST), grouped per person
  * ?mode=priority — top 5 open One Time by overdue/priority (legacy digest)
  */
-function isAuthorized(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  const headerSecret = req.headers.get('x-cron-secret');
-  const bearer = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-  return headerSecret === secret || bearer === secret;
-}
 
 function taskRank(task: Task) {
   const overdueRank = task.status === 'Overdue' ? 0 : 1;
@@ -34,6 +29,7 @@ function taskRank(task: Task) {
 }
 
 export async function GET(req: NextRequest) {
+  if (!await isCronOrAdmin(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const mode = new URL(req.url).searchParams.get('mode') || 'today';
   const sent: string[] = [];
   const skipped: string[] = [];
@@ -42,7 +38,7 @@ export async function GET(req: NextRequest) {
   try {
     const [users, tasks] = await Promise.all([
       adminGetAllUsers(),
-      adminGetAllTasks({ limit: null }),
+      adminGetActiveTasks(1000),
     ]);
 
     const todayKey = indiaTodayKey();

@@ -1,16 +1,19 @@
+import { getSession } from '@/lib/utils/auth';
 import { adminGetAllUsers } from '@/lib/firebase/users';
-import { adminGetAllTasks, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetAllTasks, adminGetTaskCounts, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllScores } from '@/lib/firebase/scores';
 import { adminGetDepartments, serializeDepartment } from '@/lib/firebase/departments';
 import AdminDashboardClient from '@/components/admin/AdminDashboardClient';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
 export default async function AdminDashboardPage() {
-  const [users, tasks, scores, departments] = await Promise.all([
+  const session = await getSession();
+  const [users, tasks, scores, departments, taskCounts] = await Promise.all([
     adminGetAllUsers(),
-    adminGetAllTasks({ limit: null }),
+    adminGetAllTasks({ limit: 1000 }),
     adminGetAllScores(),
     adminGetDepartments(),
+    adminGetTaskCounts(),
   ]);
 
   // Serialize for client
@@ -31,6 +34,8 @@ export default async function AdminDashboardPage() {
 
   return (
     <AdminDashboardClient
+      currentUid={session?.uid || ''}
+      taskCounts={taskCounts}
       users={serializedUsers}
       tasks={serializedTasks}
       scores={serializedScores}

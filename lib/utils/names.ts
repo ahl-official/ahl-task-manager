@@ -8,8 +8,7 @@ export function normalizePersonName(value: unknown) {
     .replace(/\s+/g, ' ');
 
   s = s.replace(/\b(sir|mam|ma'am|g|j|hr|ahl)\b/gi, '').trim().replace(/\s+/g, ' ');
-  const first = s.split(' ')[0];
-  return first || s;
+  return s;
 }
 
 export function namesEqual(left: unknown, right: unknown) {

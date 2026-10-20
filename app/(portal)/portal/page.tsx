@@ -1,5 +1,5 @@
 import { getSession } from '@/lib/utils/auth';
-import { adminGetTasksByAssignee, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetTasksByAssignee, adminGetTaskCounts, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetScore } from '@/lib/firebase/scores';
 import TaskListClient from '@/components/shared/TaskListClient';
 import { Trophy } from 'lucide-react';
@@ -31,11 +31,12 @@ export default async function PortalPage() {
   const currentWeek = getMisWeekPeriod();
   const prevWeek = getPreviousMisWeekPeriod();
 
-  const [databaseTasks, score, timelyTasks, storedSnapshots] = await Promise.all([
+  const [databaseTasks, score, timelyTasks, storedSnapshots, taskCounts] = await Promise.all([
     adminGetTasksByAssignee(session.uid),
     adminGetScore(session.uid),
     getPersonalTimelyTasks(session),
     adminGetMisWeeklySnapshots({ year: currentWeek.year, monthName: currentWeek.monthName }).catch(() => []),
+    adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true, includeChecklist: true }),
   ]);
   const tasks = mergePersonalDashboardTasks(databaseTasks, timelyTasks);
   const hydratedTasks = hydrateTasksWithUsers(tasks, [{
@@ -112,7 +113,7 @@ export default async function PortalPage() {
       </div>
 
       {/* Task list with interactive filter cards */}
-      <TaskListClient tasks={serialized} role="user" currentUid={session.uid} currentUserName={session.name} />
+      <TaskListClient initialCounts={taskCounts} totalCount={taskCounts.total} tasks={serialized} role="user" currentUid={session.uid} currentUserName={session.name} />
     </div>
   );
 }

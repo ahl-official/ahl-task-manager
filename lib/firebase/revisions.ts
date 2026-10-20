@@ -98,16 +98,19 @@ export async function adminGetRevisionsByTask(taskId: string, limitCount = DEFAU
 
 export async function adminGetAllRevisions(options?: {
   status?: RevisionDecision;
+  department?: string;
   limit?: number | null;
 }): Promise<RevisionLog[]> {
   if (hasCloudflareApi()) {
     const params = new URLSearchParams();
     if (options?.status) params.set('status', options.status);
-    if (options?.limit !== null) params.set('limit', String(options?.limit ?? DEFAULT_REVISION_READ_LIMIT));
+    if (options?.department) params.set('department', options.department);
+    params.set('limit', options?.limit === null ? 'all' : String(options?.limit ?? DEFAULT_REVISION_READ_LIMIT));
     const revisions = await cfApi<any[]>(`/revisions?${params.toString()}`);
     return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
   }
 
+  if (options?.department) throw new Error('Department-scoped revisions require Cloudflare API');
   const readLimit = options?.limit === null ? null : clampRevisionLimit(options?.limit);
   const key = `revisions:all:${options?.status ?? 'any'}:${readLimit ?? 'all'}`;
 

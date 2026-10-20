@@ -1,6 +1,6 @@
 import { getSession } from '@/lib/utils/auth';
 import { adminGetAllRevisions, adminGetRevisionsForUser } from '@/lib/firebase/revisions';
-import { adminGetAllTasks, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetAllTasks, adminGetTasksByAssignee, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import RevisionsClient from '@/components/shared/RevisionsClient';
 import { filterTasksForSession, filterUsersForSession } from '@/lib/utils/access';
@@ -13,8 +13,8 @@ export default async function PortalRevisionsPage() {
   const [revisions, allTasks, allUsers] = await Promise.all([
     session.role === 'leader' ? adminGetAllRevisions() : adminGetRevisionsForUser(session.uid),
     session.role === 'leader'
-      ? adminGetAllTasks({ department: session.department, limit: null })
-      : adminGetAllTasks({ limit: null }),
+      ? adminGetAllTasks({ department: session.department, limit: 1000 })
+      : adminGetTasksByAssignee(session.uid),
     adminGetAllUsers(),
   ]);
   const visibleUsers = filterUsersForSession(session, allUsers);

@@ -4,6 +4,8 @@ type Entry<T> = { value: T; expiresAt: number };
 
 const store = new Map<string, Entry<unknown>>();
 
+export function clearMisCache() { store.clear(); }
+
 export function misCacheGet<T>(key: string): T | null {
   const row = store.get(key);
   if (!row) return null;

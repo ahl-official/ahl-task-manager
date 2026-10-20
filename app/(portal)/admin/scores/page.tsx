@@ -21,7 +21,7 @@ function scoreLastUpdatedIso(value: unknown): string {
 export default async function AdminScoresPage() {
   const [scores, tasks, users, departments] = await Promise.all([
     adminGetAllScores(),
-    adminGetAllTasks({ limit: null }),
+    adminGetAllTasks({ limit: 1000 }),
     adminGetAllUsers(),
     adminGetDepartments(),
   ]);

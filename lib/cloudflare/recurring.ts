@@ -159,11 +159,7 @@ export async function createRecurringTemplate(data: RecurringTemplateInput): Pro
         method: 'POST',
         body: JSON.stringify(data),
       });
-    } catch (err: any) {
-      if (!(err instanceof CloudflareApiError && err.status === 404)) {
-        console.warn('Cloudflare createRecurringTemplate error, using local fallback', err.message);
-      }
-    }
+    } catch (err) { throw err; }
   }
 
   localTemplates.unshift(newTemplate);
@@ -180,11 +176,7 @@ export async function updateRecurringTemplate(
         method: 'PATCH',
         body: JSON.stringify(data),
       });
-    } catch (err: any) {
-      if (!(err instanceof CloudflareApiError && err.status === 404)) {
-        console.warn('Cloudflare updateRecurringTemplate error, using local fallback', err.message);
-      }
-    }
+    } catch (err) { throw err; }
   }
 
   const idx = localTemplates.findIndex(t => t.id === id);
@@ -195,25 +187,12 @@ export async function updateRecurringTemplate(
   throw new Error('Template not found');
 }
 
+export async function getRecurringTemplate(id: string): Promise<RecurringTemplate> {
+  return cfApi<RecurringTemplate>('/recurring/templates/'+encodeURIComponent(id));
+}
 export async function deleteRecurringTemplate(id: string): Promise<{ deletedId: string; permanent: boolean }> {
-  if (hasCloudflareApi()) {
-    try {
-      if (id.startsWith('T-')) {
-        await cfApi(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => null);
-      }
-      return await cfApi<{ deletedId: string; permanent: boolean }>(`/recurring/templates/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-      });
-    } catch (err: any) {
-      if (!(err instanceof CloudflareApiError && err.status === 404)) {
-        console.warn('Cloudflare deleteRecurringTemplate error, using local fallback', err.message);
-      }
-    }
-  }
-
-  const idx = localTemplates.findIndex(t => t.id === id);
-  if (idx >= 0) localTemplates.splice(idx, 1);
-  return { deletedId: id, permanent: true };
+  if (!hasCloudflareApi()) throw new Error('Cloudflare D1 is not configured');
+  return cfApi('/recurring/templates/'+encodeURIComponent(id), {method:'DELETE'});
 }
 
 export async function getRecurringChecklist(params: {
@@ -534,83 +513,22 @@ export async function getRecurringChecklist(params: {
   return resultItems;
 }
 
+export async function getRecurringPeriod(templateId: string, periodKey: string): Promise<RecurringChecklistItem> {
+  return cfApi<RecurringChecklistItem>('/recurring/period?' + new URLSearchParams({ templateId, periodKey }));
+}
+
 export async function completeRecurringTask(data: {
-  templateId: string;
-  title?: string;
-  description?: string;
-  department?: string;
-  uid?: string;
-  userName?: string;
-  category?: string;
-  periodKey: string;
-  action?: 'complete' | 'uncomplete' | 'dead' | 'remark' | 'verify';
-  isAdmin?: boolean;
-  remark?: string;
-  remarkBy?: string;
-}) {
-  const isPastDate = data.periodKey && /^\d{4}-\d{2}-\d{2}$/.test(data.periodKey) && data.periodKey < indiaTodayKey();
-  const compDateStr = isPastDate ? `${data.periodKey}T18:00:00+05:30` : new Date().toISOString();
-  const key = `${data.templateId}:${data.periodKey}`;
-  const isVerify = Boolean(data.isAdmin || data.action === 'verify');
-  const targetStatus: 'Completed' | 'Verified' | 'Dead' = data.action === 'dead' ? 'Dead' : isVerify ? 'Verified' : 'Completed';
-
-  if (hasCloudflareApi()) {
-    try {
-      if (data.templateId.startsWith('T-') && !isPastDate) {
-        const isUncomplete = data.action === 'uncomplete';
-        await cfApi(`/tasks/${data.templateId}`, {
-          method: 'PATCH',
-          body: JSON.stringify({
-            status: isUncomplete ? 'In Progress' : targetStatus,
-            completedAt: isUncomplete ? null : compDateStr,
-            verifiedAt: isUncomplete ? null : isVerify ? compDateStr : undefined,
-            notes: data.remark || undefined,
-          }),
-        }).catch(() => null);
-      }
-      return await cfApi('/recurring/completions', {
-        method: 'POST',
-        body: JSON.stringify({
-          ...data,
-          status: targetStatus,
-          isAdmin: isVerify,
-          completedAt: compDateStr,
-        }),
-      });
-    } catch (err: any) {
-      if (!(err instanceof CloudflareApiError && err.status === 404)) {
-        console.warn('Cloudflare completeRecurringTask error, using local fallback', err.message);
-      }
-    }
-  }
-
-  if (data.action === 'uncomplete') {
-    localCompletions.delete(key);
-    return { uncompleted: true, templateId: data.templateId, periodKey: data.periodKey };
-  }
-
-  localCompletions.set(key, {
-    templateId: data.templateId,
-    title: data.title || data.description || 'Recurring Task',
-    description: data.description || data.title || '',
-    department: data.department || '',
-    userId: data.uid || '',
-    userName: data.userName || 'Unassigned',
-    category: data.category || 'Daily',
-    completedAt: compDateStr,
-    status: targetStatus,
-    remark: data.remark,
-    remarkBy: data.remarkBy,
+  templateId: string; title?: string; description?: string; department?: string;
+  uid?: string; userName?: string; category?: string; periodKey: string;
+  action?: 'complete' | 'uncomplete' | 'dead' | 'skip_day' | 'remark' | 'verify' | 'revive';
+  isAdmin?: boolean; remark?: string; remarkBy?: string;
+}): Promise<Record<string, unknown>> {
+  if (!hasCloudflareApi()) throw new Error('Cloudflare D1 is not configured');
+  // A checklist occurrence never changes the standing task definition.
+  // Propagate write failures: an in-memory fallback must not report a persisted completion.
+  return cfApi<Record<string, unknown>>('/recurring/completions', {
+    method: 'POST', body: JSON.stringify(data),
   });
-
-  return {
-    templateId: data.templateId,
-    periodKey: data.periodKey,
-    completedAt: compDateStr,
-    status: targetStatus,
-    remark: data.remark,
-    remarkBy: data.remarkBy,
-  };
 }
 
 export async function getRecurringMisCounts(weekStart: string, weekEnd: string): Promise<RecurringMisCounts> {
@@ -620,9 +538,9 @@ export async function getRecurringMisCounts(weekStart: string, weekEnd: string):
         `/recurring/mis-counts?weekStart=${encodeURIComponent(weekStart)}&weekEnd=${encodeURIComponent(weekEnd)}`
       );
     } catch (err: any) {
-      console.warn('Cloudflare getRecurringMisCounts error:', err.message);
+      throw err;
     }
   }
 
-  return { weekStart, weekEnd, byName: {} };
+  throw new Error('Cloudflare MIS counts are not configured');
 }

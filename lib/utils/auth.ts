@@ -17,7 +17,11 @@ function fromBase64url(input: string): string {
 }
 
 async function sign(value: string): Promise<string> {
-  const secret = process.env.SESSION_SECRET || process.env.NEXTAUTH_SECRET || process.env.CLOUDFLARE_API_SECRET || 'ahl-dev-session-secret';
+  const configuredSecret = process.env.SESSION_SECRET || process.env.NEXTAUTH_SECRET;
+  if (process.env.NODE_ENV === 'production' && (!configuredSecret || configuredSecret.length < 32)) {
+    throw new Error('SESSION_SECRET must contain at least 32 characters in production');
+  }
+  const secret = configuredSecret || 'ahl-dev-session-secret';
   const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(value));
   return base64url(signature);

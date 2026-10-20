@@ -4,34 +4,29 @@ import { adminGetUserByUid } from '@/lib/firebase/users';
 import { createSessionCookie, setSessionCookieHeaders, clearSessionCookieHeaders } from '@/lib/utils/auth';
 import type { SessionUser, UserRole } from '@/types';
 
-// POST /api/auth/session — exchange Firebase ID token or user payload for session cookie
+// POST /api/auth/session — exchange a verified Firebase ID token for a session cookie.
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     let sessionUser: SessionUser | null = null;
 
-    if (body.user && body.user.uid) {
-      sessionUser = {
-        uid: body.user.uid,
-        name: body.user.name || '',
-        role: (body.user.role || 'intern') as UserRole,
-        department: body.user.department || '',
-        waNumber: body.user.waNumber || '',
-      };
-    } else if (body.idToken) {
-      const decoded = await adminAuth.verifyIdToken(body.idToken);
-      const user = await adminGetUserByUid(decoded.uid).catch(() => null);
+    if (typeof body.idToken === 'string' && body.idToken) {
+      const decoded = await adminAuth.verifyIdToken(body.idToken, true);
+      const user = await adminGetUserByUid(decoded.uid);
+      if (!user || user.isActive === false) {
+        return NextResponse.json({ success: false, error: 'Account is not active' }, { status: 403 });
+      }
       sessionUser = {
         uid: decoded.uid,
         name: user?.name || (decoded.name as string) || '',
-        role: (user?.role || decoded.role || 'intern') as UserRole,
+        role: (user.role || 'intern') as UserRole,
         department: user?.department || (decoded.department as string) || '',
         waNumber: user?.waNumber || (decoded.waNumber as string) || '',
       };
     }
 
     if (!sessionUser || !sessionUser.uid) {
-      return NextResponse.json({ success: false, error: 'Invalid user or token' }, { status: 400 });
+      return NextResponse.json({ success: false, error: 'A verified ID token is required' }, { status: 401 });
     }
 
     const sessionCookie = await createSessionCookie(sessionUser);

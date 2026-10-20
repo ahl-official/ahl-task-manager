@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Loader2, Mic, Square, Wand2 } from 'lucide-react';
 import { canAssignTask, describeAssignmentRule, roleLabel } from '@/lib/utils/hierarchy';
+import { stashPendingCreatedTask } from '@/lib/utils/pendingCreatedTask';
 import type { UserRole } from '@/types';
 
 const CATEGORIES = ['Daily', 'Weekly', 'Monthly', 'One Time'];
@@ -166,7 +167,10 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       toast.success(`Task ${data.data.taskId} created successfully!`);
-      router.push(redirectTo);
+      // Show on dashboard immediately from POST body — skip the 1000-task refetch.
+      stashPendingCreatedTask(data.data, currentUser.uid);
+      const sep = redirectTo.includes('?') ? '&' : '?';
+      router.push(`${redirectTo}${sep}created=1`);
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to create task');
     } finally {

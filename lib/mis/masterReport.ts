@@ -1,4 +1,4 @@
-import { computeMisScoresForWeek } from '@/lib/mis/compute';
+import { computeMisScoresForWeek, getReconciledScores } from '@/lib/mis/compute';
 import {
   computeG4,
   emptyBucket,
@@ -70,7 +70,7 @@ function rollup(
     done: bucket.done,
     onTime: bucket.onTime,
     gapPercent: gapPercent(bucket.done, bucket.planned),
-    onTimeGapPercent: gapPercent(bucket.onTime, bucket.planned),
+    onTimeGapPercent: gapPercent(bucket.onTime, bucket.done),
   };
 }
 
@@ -129,10 +129,12 @@ export async function buildMisMasterReport(input: {
   if (!key) return null;
 
   const current = getMisWeekPeriod();
-  let person: Awaited<ReturnType<typeof computeMisScoresForWeek>>[number] | null = null;
+  const reconciled = await getReconciledScores(week.weekStart, week.weekEnd);
+  let person: Awaited<ReturnType<typeof computeMisScoresForWeek>>[number] | null =
+    reconciled.find(row => normalizePersonName(row.name) === key) ?? null;
 
   // Past weeks: use saved weekly snapshot when present (avoids re-hitting sheets).
-  if (week.weekKey !== current.weekKey) {
+  if (!person && week.weekKey !== current.weekKey) {
     const { adminGetMisWeeklySnapshots } = await import('@/lib/mis/weeklySnapshot');
     const snapshots = await adminGetMisWeeklySnapshots({ weekKey: week.weekKey });
     const hit = snapshots.find(row => normalizePersonName(row.name) === key) ?? null;
@@ -175,7 +177,7 @@ export async function buildMisMasterReport(input: {
     rollup('Overall', 'All work should be done', '% Work Not Done', scored.total),
     {
       ...rollup('Overall (On-Time)', 'All work should be done On-Time', '% Work Not Done On-Time', {
-        planned: scored.total.planned,
+        planned: scored.total.done,
         done: scored.total.onTime,
         onTime: scored.total.onTime,
       }),

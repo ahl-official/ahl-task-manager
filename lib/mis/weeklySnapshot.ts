@@ -21,6 +21,7 @@ function serializeSnapshot(data: Record<string, any>): MisWeeklySnapshot {
     checklist: data.checklist ?? { planned: 0, done: 0, onTime: 0 },
     delegation: data.delegation ?? { planned: 0, done: 0, onTime: 0 },
     fms: data.fms ?? { planned: 0, done: 0, onTime: 0 },
+    parameters: Array.isArray(data.parameters) ? data.parameters : [],
     planned: Number(data.planned ?? 0),
     done: Number(data.done ?? 0),
     onTime: Number(data.onTime ?? 0),

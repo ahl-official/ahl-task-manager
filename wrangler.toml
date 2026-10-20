@@ -1,6 +1,7 @@
 name = "ahl-task-manager-api"
-main = "cloudflare/worker/src/index.ts"
+main = "cloudflare/worker/reconciled/index.js"
 compatibility_date = "2026-06-16"
+keep_vars = true
 
 [[d1_databases]]
 binding = "DB"

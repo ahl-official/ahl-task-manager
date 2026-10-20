@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertOctagon, CheckCircle2, Circle, MessageSquare, Loader2, RefreshCw, RotateCcw, Search, X, Trash2 } from 'lucide-react';
+import { AlertOctagon, CalendarOff, CheckCircle2, Circle, MessageSquare, Loader2, RefreshCw, RotateCcw, Search, X, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn, formatDate } from '@/lib/utils';
 import { namesEqual, normalizePersonName } from '@/lib/utils/names';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
+import { isoWeekday } from '@/lib/mis/weeklyOff';
 
 type ChecklistCategory = 'Daily' | 'Weekly' | 'Monthly';
 
@@ -31,6 +32,7 @@ interface ChecklistRow {
   remarkBy: string;
   label: string;
   canComplete: boolean;
+  canUncomplete?: boolean;
   canManage: boolean;
   mine?: boolean;
   isPast?: boolean;
@@ -52,8 +54,11 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   const [date, setDate] = useState('');
   const [activeRemarkRow, setActiveRemarkRow] = useState<string | null>(null);
   const [remark, setRemark] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<ChecklistRow | null>(null);
+  const [deleteConfirmMode, setDeleteConfirmMode] = useState<'day' | 'whole' | null>(null);
 
   const categoryCache = useRef<Record<string, { rows: ChecklistRow[]; elevated: boolean; currentUserName: string }>>({});
+  const viewingMonday = Boolean(date && isoWeekday(date) === 1);
 
 
 
@@ -138,7 +143,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
     // Optimistic UI update for 0ms instant feedback
     const prevRows = rows;
     const updatedRows = (list: ChecklistRow[]) => list.map(item => item.id === row.id
-      ? { ...item, completed: true, completedAt: new Date().toISOString(), status: 'Completed' as const }
+      ? { ...item, completed: true, completedAt: new Date().toISOString(), status: 'Completed' as const, canComplete: false, canUncomplete: true }
       : item);
 
     setRows(updatedRows);
@@ -168,7 +173,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       if (!data.success) throw new Error(data.error);
       const nextStatus = data.data.status || (elevated ? 'Verified' : 'Completed');
       const serverUpdated = (list: ChecklistRow[]) => list.map(item => item.id === row.id
-        ? { ...item, completed: true, completedAt: data.data.completedAt, status: nextStatus }
+        ? { ...item, completed: true, completedAt: data.data.completedAt, status: nextStatus, canComplete: false, canUncomplete: true }
         : item);
       setRows(serverUpdated);
       if (categoryCache.current[row.category]) {
@@ -181,6 +186,56 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
         categoryCache.current[row.category].rows = prevRows;
       }
       toast.error(err.message ?? 'Failed to complete checklist task');
+    } finally {
+      setTicking(null);
+    }
+  }
+
+  async function uncomplete(row: ChecklistRow) {
+    const prevRows = rows;
+    const updatedRows = (list: ChecklistRow[]) => list.map(item => item.id === row.id
+      ? {
+          ...item,
+          completed: false,
+          completedAt: null,
+          status: 'Pending' as const,
+          canComplete: true,
+          canUncomplete: false,
+        }
+      : item);
+
+    setRows(updatedRows);
+    const activeCacheKey = `${row.category}:${date || 'today'}`;
+    if (categoryCache.current[activeCacheKey]) {
+      categoryCache.current[activeCacheKey].rows = updatedRows(categoryCache.current[activeCacheKey].rows);
+    }
+    setTicking(row.id);
+
+    try {
+      const res = await fetch('/api/checklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: row.taskId,
+          title: row.description,
+          description: row.description,
+          department: row.department,
+          assignedTo: row.userId,
+          assignedToName: row.userName,
+          category: row.category,
+          periodKey: row.periodKey,
+          action: 'uncomplete',
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      toast.success('Marked as not completed');
+    } catch (err: any) {
+      setRows(prevRows);
+      if (categoryCache.current[row.category]) {
+        categoryCache.current[row.category].rows = prevRows;
+      }
+      toast.error(err.message ?? 'Failed to undo completion');
     } finally {
       setTicking(null);
     }
@@ -233,10 +288,44 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
     }
   }
 
-  async function deleteTask(row: ChecklistRow) {
-    if (!window.confirm(`Are you sure you want to permanently delete this recurring task?\n\n"${row.description}"`)) {
-      return;
+  async function deleteForDayOnly(row: ChecklistRow) {
+    setTicking(row.id);
+    try {
+      const res = await fetch('/api/checklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: row.taskId,
+          title: row.description,
+          description: row.description,
+          department: row.department,
+          assignedTo: row.userId,
+          assignedToName: row.userName,
+          category: row.category,
+          periodKey: row.periodKey,
+          action: 'skip_day',
+          remark: `Removed for ${row.periodKey} only (absent / skip day)`,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      // Day skip hides from checklist and drops that day from planned score; past days stay.
+      setRows(prev => prev.filter(r => r.id !== row.id));
+      const cacheKey = `${row.category}:${date || 'today'}`;
+      if (categoryCache.current[cacheKey]) {
+        categoryCache.current[cacheKey].rows = categoryCache.current[cacheKey].rows.filter(r => r.id !== row.id);
+      }
+      toast.success(`Deleted ${row.periodKey} row — other days kept`);
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to remove this day');
+    } finally {
+      setTicking(null);
+      setDeleteTarget(null);
+      setDeleteConfirmMode(null);
     }
+  }
+
+  async function deleteEntireTask(row: ChecklistRow) {
     setTicking(row.id);
     try {
       const templateId = row.taskId;
@@ -247,14 +336,17 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       if (!data.success) throw new Error(data.error);
 
       setRows(prev => prev.filter(r => r.taskId !== templateId));
-      if (categoryCache.current[row.category]) {
-        categoryCache.current[row.category].rows = categoryCache.current[row.category].rows.filter(r => r.taskId !== templateId);
+      // Clear from all category caches for this template going forward
+      for (const key of Object.keys(categoryCache.current)) {
+        categoryCache.current[key].rows = categoryCache.current[key].rows.filter(r => r.taskId !== templateId);
       }
-      toast.success('Recurring task permanently deleted');
+      toast.success('Whole task deleted — today/future rows removed, past rows kept');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to delete task');
     } finally {
       setTicking(null);
+      setDeleteTarget(null);
+      setDeleteConfirmMode(null);
     }
   }
 
@@ -417,6 +509,15 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
         </div>
       </div>
 
+      {viewingMonday && category === 'Daily' && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <CalendarOff size={16} className="mt-0.5 shrink-0" />
+          <p>
+            Monday is weekly off for <span className="font-medium">Salon Daily</span> doers — their daily checklist does not appear or score on Mondays. Office daily tasks still show.
+          </p>
+        </div>
+      )}
+
       <div className="card overflow-hidden">
         {loading && (
           <div className="flex items-center justify-center gap-2 px-4 py-12 text-sm text-gray-400">
@@ -482,6 +583,18 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
                       {ticking === row.id ? <Loader2 size={15} className="animate-spin" /> : row.completed ? <CheckCircle2 size={16} /> : <Circle size={16} />}
                       {row.status === 'Verified' ? 'Verified' : row.completed ? 'Completed' : row.dead ? 'Revive first' : row.canComplete ? 'Mark Complete' : (row as any).isPast ? 'Past Due (Locked)' : row.userName}
                     </button>
+                    {row.completed && !row.dead && row.canUncomplete && (
+                      <button
+                        type="button"
+                        onClick={() => uncomplete(row)}
+                        disabled={ticking === row.id}
+                        title="Undo accidental complete"
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        {ticking === row.id ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />}
+                        Mark as not completed
+                      </button>
+                    )}
                     {row.canManage && (
                       <button
                         type="button"
@@ -496,13 +609,16 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
                         Remark
                       </button>
                     )}
-                    {elevated && (
+                    {row.canManage && (
                       <button
                         type="button"
-                        onClick={() => deleteTask(row)}
+                        onClick={() => {
+                          setDeleteConfirmMode(null);
+                          setDeleteTarget(row);
+                        }}
                         disabled={ticking === row.id}
                         className="btn-secondary px-2.5 py-2 text-gray-400 hover:text-red-600 hover:bg-red-50 transition"
-                        title="Permanently Delete Recurring Task"
+                        title="Delete this day or whole recurring task"
                       >
                         <Trash2 size={15} />
                       </button>
@@ -542,6 +658,106 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
           </div>
         )}
       </div>
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-gray-900">
+                  {deleteConfirmMode ? 'Confirm delete' : 'Remove checklist task'}
+                </h2>
+                <p className="mt-1 text-sm text-gray-500 line-clamp-2">{deleteTarget.description}</p>
+                <p className="mt-1 text-xs text-gray-400">
+                  {deleteTarget.userName} · {deleteTarget.periodKey}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteTarget(null);
+                  setDeleteConfirmMode(null);
+                }}
+                className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {!deleteConfirmMode ? (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  disabled={ticking === deleteTarget.id}
+                  onClick={() => setDeleteConfirmMode('day')}
+                  className="flex w-full flex-col items-start gap-0.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-left hover:bg-amber-100 disabled:opacity-50"
+                >
+                  <span className="text-sm font-semibold text-amber-900">Delete for this day only</span>
+                  <span className="text-xs text-amber-800">
+                    Hard-deletes the {deleteTarget.periodKey} row from the database. Other days stay.
+                  </span>
+                </button>
+                {elevated && (
+                  <button
+                    type="button"
+                    disabled={ticking === deleteTarget.id}
+                    onClick={() => setDeleteConfirmMode('whole')}
+                    className="flex w-full flex-col items-start gap-0.5 rounded-md border border-red-200 bg-red-50 px-3 py-3 text-left hover:bg-red-100 disabled:opacity-50"
+                  >
+                    <span className="text-sm font-semibold text-red-800">Delete whole recurring task</span>
+                    <span className="text-xs text-red-700">
+                      Removes the template and hard-deletes today + future period rows. Past rows stay.
+                    </span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteTarget(null);
+                    setDeleteConfirmMode(null);
+                  }}
+                  className="btn-secondary w-full py-2"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                  {deleteConfirmMode === 'day'
+                    ? `Are you sure? This permanently deletes the ${deleteTarget.periodKey} row from the database. Other days stay.`
+                    : 'Are you sure? This permanently deletes today and future rows for this task. Past rows stay in the database.'}
+                </p>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    disabled={ticking === deleteTarget.id}
+                    onClick={() => setDeleteConfirmMode(null)}
+                    className="btn-secondary flex-1 py-2"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    disabled={ticking === deleteTarget.id}
+                    onClick={() => {
+                      if (deleteConfirmMode === 'day') deleteForDayOnly(deleteTarget);
+                      else deleteEntireTask(deleteTarget);
+                    }}
+                    className={cn(
+                      'flex-1 inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-white disabled:opacity-50',
+                      deleteConfirmMode === 'day' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-red-600 hover:bg-red-700'
+                    )}
+                  >
+                    {ticking === deleteTarget.id ? <Loader2 size={15} className="animate-spin" /> : null}
+                    {deleteConfirmMode === 'day' ? 'Yes, delete this day' : 'Yes, delete whole task'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

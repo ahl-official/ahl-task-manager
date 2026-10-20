@@ -49,6 +49,7 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const isAdmin = session.role === 'admin';
   const isLeader = session.role === 'leader';
+  if (isLeader && !session.department?.trim()) return NextResponse.json({success:false,error:'Department is required'}, {status:403});
   
   // Non-admins can only see their own tasks or their department (if leader)
   const defaultScope = isAdmin ? 'all' : 'mine';
@@ -61,7 +62,7 @@ export async function GET(req: NextRequest) {
   const wantCounts = searchParams.get('counts') === 'true';
   const isFresh    = searchParams.get('fresh') === 'true' || searchParams.get('sync') === 'true';
   const requestedLimit = searchParams.get('limit');
-  const limitParam = requestedLimit ? (requestedLimit === 'all' ? null : Number(requestedLimit)) : 1000;
+  const limitParam = Number(requestedLimit) || 1000;
   const maxResults = typeof limitParam === 'number' && Number.isFinite(limitParam)
     ? Math.min(Math.max(limitParam, 1), 1000)
     : (limitParam === null ? null : 1000);
@@ -77,14 +78,28 @@ export async function GET(req: NextRequest) {
 
   try {
     if (wantCounts) {
-      const counts = await adminGetTaskCounts(department);
+      const counts = await adminGetTaskCounts(department, {
+        scope: isAdmin || isLeader ? (scope === 'mine' ? 'mine' : scope === 'handoff' ? 'handoff' : 'all') : (scope === 'handoff' ? 'handoff' : 'mine'),
+        uid: session.uid,
+        assignedTo: searchParams.get('assignedTo') || undefined,
+        category: searchParams.get('category') || undefined,
+        priority: searchParams.get('priority') || undefined,
+        status,
+        excludeRecurring: !isAdmin && !isLeader,
+        includeChecklist: !isAdmin && !isLeader && scope !== 'handoff',
+      });
       return NextResponse.json({ success: true, data: counts }, { headers: responseHeaders });
     }
 
     let tasks;
 
-    if (searchQuery && searchQuery.trim()) {
-      tasks = await adminSearchTasks(searchQuery, { department, limit: maxResults ?? 100 });
+    if (searchQuery?.trim() || searchParams.get('filter') === 'true') {
+      tasks = await adminSearchTasks(searchQuery || '', {
+        department, limit: Math.min(maxResults || 100, 100), status,
+        scope: isAdmin || isLeader ? (scope === 'mine' ? 'mine' : scope === 'handoff' ? 'handoff' : 'all') : (scope === 'handoff' ? 'handoff' : 'visible'),
+        uid: session.uid, assignedTo: searchParams.get('assignedTo') || undefined,
+        category: searchParams.get('category') || undefined, priority: searchParams.get('priority') || undefined,
+      });
       tasks = filterTasksForSession(session, tasks);
     } else if (scope === 'all' && (isAdmin || isLeader)) {
       tasks = await adminGetAllTasks({ status: status as any, department, limit: maxResults, fresh: isFresh });
@@ -99,7 +114,7 @@ export async function GET(req: NextRequest) {
       tasks = mergePersonalDashboardTasks(databaseTasks, timelyTasks);
     }
 
-    return NextResponse.json({ success: true, data: tasks.map(serializeTask) }, { headers: responseHeaders });
+    return NextResponse.json({ success: true, data: tasks.slice(0, 1000).map(serializeTask) }, { headers: responseHeaders });
   } catch (err) {
     console.error('GET /api/tasks error', err);
     return NextResponse.json({ success: false, error: 'Failed to fetch tasks' }, { status: 500, headers: NO_CACHE_HEADERS });
@@ -108,11 +123,11 @@ export async function GET(req: NextRequest) {
 
 // POST /api/tasks — create task (admin only)
 export async function POST(req: NextRequest) {
-  const apiSecret = process.env.API_SHARED_SECRET || 'Americanhairline@1234';
+  const apiSecret = process.env.API_SHARED_SECRET;
   const authHeader = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || req.headers.get('x-api-secret');
   let session = await getSession();
 
-  if (!session && authHeader === apiSecret) {
+  if (!session && apiSecret && authHeader === apiSecret) {
     session = {
       uid: 'automation-system',
       name: 'Consultation Automation',
@@ -207,51 +222,16 @@ export async function POST(req: NextRequest) {
         dayOfMonth = body.dayOfMonth != null ? Number(body.dayOfMonth) : lastDay;
       }
 
-      let createdTaskRecord: any = null;
-      try {
-        createdTaskRecord = await adminCreateTask(
-          {
-            description: body.description,
-            assignedTo: assignee.uid,
-            department: assignee.department || body.department || '',
-            category: body.category,
-            priority: body.priority || 'Medium',
-            startDate: calculatedStartDate,
-            endDate: calculatedEndDate,
-            handoffUid: body.handoffUid || session.uid,
-          },
-          session.uid,
-          { name: session.name, waNumber: session.waNumber || '', department: session.department || '' },
-          { skipAcceptance: true }
-        );
-      } catch (createErr) {
-        console.warn('Failed to create recurring task record', createErr);
-      }
-
-      let d1Template = null;
-      if (hasCloudflareApi()) {
-        try {
-          const descText = String(body.description || '').trim();
-          const firstLine = descText.split('\n')[0].slice(0, 100).trim();
-          d1Template = await createRecurringTemplate({
-            title: firstLine || 'Recurring Task',
-            description: descText,
-            category: body.category,
-            frequency: body.category,
-            assignedTo: assignee.uid,
-            assignedToName: assignee.name,
-            department: assignee.department || body.department || '',
-            dayOfWeek,
-            dayOfMonth,
-            timeOfDay: body.timeOfDay || '10:00',
-            isActive: true,
-          });
-        } catch (cfErr) {
-          console.warn('Failed to save recurring template to Cloudflare D1', cfErr);
-        }
-      }
-
-      const effectiveTaskId = createdTaskRecord?.taskId || d1Template?.id || `T-${Date.now().toString().slice(-4)}`;
+      if (!hasCloudflareApi()) throw new Error('Cloudflare D1 is required for recurring creation');
+      const descText=String(body.description||'').trim();
+      if (!descText) return NextResponse.json({success:false,error:'Description is required'},{status:400});
+      const d1Template = await createRecurringTemplate({
+        title:descText.split('\n')[0].slice(0,100),description:descText,category:body.category,
+        frequency:body.category,assignedTo:assignee.uid,assignedToName:assignee.name,
+        department:assignee.department||body.department||'',dayOfWeek,dayOfMonth,
+        timeOfDay:body.timeOfDay||'10:00',isActive:true,metadata:{startDate:calculatedStartDate}
+      });
+      const effectiveTaskId = d1Template.id;
       const effectiveDescription = body.description;
 
       await adminIncrementScore(assignee.uid, 'tasksAssigned').catch(() => {});

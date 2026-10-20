@@ -7,6 +7,11 @@ import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDa
 import { scheduleByTaskId, scheduleTasks } from '@/lib/utils/scheduling';
 import { namesEqual } from '@/lib/utils/names';
 import TaskModal from './TaskModal';
+import { matchesTaskSearch } from '@/lib/utils/taskSearch';
+import {
+  mergeTasksWithPending,
+  takePendingCreatedTask,
+} from '@/lib/utils/pendingCreatedTask';
 import type { TaskSerialized } from '@/types';
 
 interface Props {
@@ -26,6 +31,7 @@ interface Props {
     completed: number;
     verified: number;
     dead: number;
+    active?: number;
   };
   totalCount?: number;
 }
@@ -108,8 +114,10 @@ export default function TaskListClient({
   }, []);
 
   useEffect(() => {
-    setTaskItems(tasks);
-  }, [tasks]);
+    const pending = takePendingCreatedTask(currentUid);
+    setTaskItems(mergeTasksWithPending(tasks, pending));
+  }, [tasks, currentUid]);
+
 
   const handleSync = async () => {
     try {
@@ -136,39 +144,43 @@ export default function TaskListClient({
     }
   };
 
-  // Debounced server search for any tasks outside the initially loaded batch
+  // Search locally first; query the server only when the loaded batch has no matching row.
   useEffect(() => {
-    const trimmed = search.trim();
-    if (trimmed.length < 2) return;
-
+    const q = search.trim().toLowerCase();
+    const filteredRequest = mineOnly || statusFilter !== 'all' || departmentFilter !== 'all' || userFilter !== 'all' || categoryFilter !== 'all' || priorityFilter !== 'all';
+    if (!q && !filteredRequest) return;
+    if (q && q.length < 3) return;
+    const local = taskItems.some(t =>
+      matchesTaskSearch(t, q) &&
+      (departmentFilter === 'all' || t.department === departmentFilter) &&
+      (userFilter === 'all' || t.assignedTo === userFilter) &&
+      (categoryFilter === 'all' || t.category === categoryFilter) &&
+      (priorityFilter === 'all' || t.priority === priorityFilter) &&
+      (!mineOnly || t.assignedTo === currentUid) &&
+      (statusFilter === 'all' || (statusFilter === 'Completed' ? ['Completed','Verified'].includes(t.status) : statusFilter === 'Overdue' ? t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(indiaTodayKey(),indiaDateKey(t.endDate!)) < 0 && ['Pending Accept','In Progress','Delay Requested'].includes(t.status)) : normalizeBaseStatus(t.status) === statusFilter)));
+    if (local) return;
+    const controller = new AbortController();
     const timer = setTimeout(async () => {
+      setIsSearchingServer(true);
       try {
-        setIsSearchingServer(true);
-        const deptParam = departmentFilter !== 'all' ? `&department=${encodeURIComponent(departmentFilter)}` : '';
-        const res = await fetch(`/api/tasks?search=${encodeURIComponent(trimmed)}${deptParam}&limit=100`);
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          setTaskItems(current => {
-            const existingMap = new Map(current.map(t => [t.taskId, t]));
-            let changed = false;
-            for (const item of json.data) {
-              if (!existingMap.has(item.taskId)) {
-                existingMap.set(item.taskId, item);
-                changed = true;
-              }
-            }
-            return changed ? Array.from(existingMap.values()) : current;
-          });
-        }
-      } catch (err) {
-        console.error('Server task search failed:', err);
-      } finally {
-        setIsSearchingServer(false);
-      }
-    }, 350);
-
-    return () => clearTimeout(timer);
-  }, [search, departmentFilter]);
+        const params = new URLSearchParams({ search: q, limit: '100', filter: 'true', scope: mineOnly ? 'mine' : 'all' });
+        for (const [key,value] of [['department',departmentFilter],['status',statusFilter],['assignedTo',userFilter],['category',categoryFilter],['priority',priorityFilter]]) if(value !== 'all') params.set(key,value);
+        const response = await fetch('/api/tasks?' + params, { signal: controller.signal });
+        const json = await response.json();
+        if (!controller.signal.aborted && json.success && Array.isArray(json.data)) setTaskItems(current => {
+          const byId = new Map(current.map(task => [task.taskId,task]));
+          let changed = false;
+          for (const task of json.data) {
+            const previous = byId.get(task.taskId);
+            if (!previous || previous.updatedAt !== task.updatedAt) { byId.set(task.taskId,task); changed = true; }
+          }
+          return changed ? Array.from(byId.values()) : current;
+        });
+      } catch (error: any) { if(error.name !== 'AbortError') console.error('Task search failed',error); }
+      finally { if(!controller.signal.aborted) setIsSearchingServer(false); }
+    }, 500);
+    return () => { clearTimeout(timer); controller.abort(); setIsSearchingServer(false); };
+  }, [search, departmentFilter, statusFilter, userFilter, categoryFilter, priorityFilter, mineOnly, currentUid, taskItems]);
 
   function updateTask(updated?: TaskSerialized) {
     if (!updated) {
@@ -214,7 +226,7 @@ export default function TaskListClient({
     const rows = taskItems.filter(t => {
       const isOverdueTask = t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(today, indiaDateKey(t.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status));
       const matchMine     = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
-      const matchSearch   = !search || t.description.toLowerCase().includes(search.toLowerCase()) || t.taskId.toLowerCase().includes(search.toLowerCase());
+      const matchSearch   = matchesTaskSearch(t, search);
       const matchStatus = statusFilter === 'all'
         || (statusFilter === 'Overdue'
           ? isOverdueTask
@@ -251,14 +263,14 @@ export default function TaskListClient({
     });
   }, [taskItems, mineOnly, currentUid, currentUserName, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter, sortMode, scheduleMap]);
 
-  const cardCounts = useMemo(() => {
+  const loadedCardCounts = useMemo(() => {
     const today = indiaTodayKey();
     const rows = taskItems.filter(t => {
       const matchMine = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
       const matchDepartment = departmentFilter === 'all' || t.department === departmentFilter;
       const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
       const matchCategory = categoryFilter === 'all' || t.category === categoryFilter;
-      const matchSearch = !search || t.description.toLowerCase().includes(search.toLowerCase()) || t.taskId.toLowerCase().includes(search.toLowerCase());
+      const matchSearch = matchesTaskSearch(t, search);
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
       return matchMine && matchDepartment && matchUser && matchCategory && matchSearch && matchPriority;
     });
@@ -270,6 +282,30 @@ export default function TaskListClient({
 
     return { pending, inProgress, overdue, completed, total: rows.length };
   }, [taskItems, mineOnly, currentUid, currentUserName, departmentFilter, userFilter, categoryFilter, search, priorityFilter]);
+
+  const [aggregateCards, setAggregateCards] = useState<Props['initialCounts']>(initialCounts);
+  useEffect(() => {
+    if (search.trim()) return;
+    const controller = new AbortController();
+    setAggregateCards(undefined);
+    const timer = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ counts: 'true', scope: mineOnly ? 'mine' : 'all' });
+        for (const [key,value] of [['department',departmentFilter],['assignedTo',userFilter],['category',categoryFilter],['priority',priorityFilter]]) if(value !== 'all') params.set(key,value);
+        const response = await fetch('/api/tasks?' + params, { signal: controller.signal });
+        const json = await response.json();
+        if (!controller.signal.aborted && json.success) setAggregateCards(json.data);
+      } catch (error: any) { if (error.name !== 'AbortError') console.error('Task counts unavailable',error); }
+    }, 500);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [mineOnly,departmentFilter,userFilter,categoryFilter,priorityFilter,search,taskItems]);
+  const cardCounts = search.trim() ? loadedCardCounts : {
+    pending: aggregateCards?.pending ?? '…',
+    inProgress: aggregateCards ? aggregateCards.inProgress + aggregateCards.delayRequested : '…',
+    overdue: aggregateCards?.overdue ?? '…',
+    completed: aggregateCards ? aggregateCards.completed + aggregateCards.verified : '…',
+    total: aggregateCards?.total ?? '…',
+  };
 
   const justAssignedTasks = useMemo(() =>
     [...taskItems]
@@ -291,7 +327,7 @@ export default function TaskListClient({
       return {
         total: totalCount ?? initialCounts.total,
         pending: initialCounts.pending,
-        active: initialCounts.inProgress + initialCounts.delayRequested + initialCounts.overdue,
+        active: initialCounts.active ?? (initialCounts.inProgress + initialCounts.delayRequested + initialCounts.overdue),
         done: initialCounts.completed + initialCounts.verified,
       };
     }
@@ -537,7 +573,7 @@ export default function TaskListClient({
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
-            placeholder="Search tasks (ID, name, description)…"
+            placeholder="Search ID or description (3+ characters)…"
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="input pl-8 pr-8 py-1.5 sm:py-2 text-xs sm:text-sm h-9 sm:h-10"
@@ -608,7 +644,7 @@ export default function TaskListClient({
         </select>
 
         <div className="flex items-center text-xs text-gray-400 shrink-0">
-          {filtered.length} {totalCount && isDefaultView && totalCount > taskItems.length ? `loaded of ${totalCount}` : `of ${taskItems.length}`}
+          {filtered.length} loaded{!search.trim() && aggregateCards ? ` of ${aggregateCards.total} total` : search.trim() ? " matches (server lookup returns up to 100)" : " (total unavailable)"}
         </div>
       </div>
 

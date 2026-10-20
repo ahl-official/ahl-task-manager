@@ -501,8 +501,8 @@ export async function adminGetAllTasks(filters?: {
     const params = new URLSearchParams({ scope: 'all' });
     if (filters?.status) params.set('status', filters.status);
     if (filters?.department) params.set('department', filters.department);
-    params.set('limit', filters?.limit === null ? 'all' : String(filters?.limit ?? DEFAULT_TASK_READ_LIMIT));
-    const limitKey = filters?.limit === null ? 'all' : String(filters?.limit ?? DEFAULT_TASK_READ_LIMIT);
+    params.set('limit', String(Math.min(Math.max(Number(filters?.limit) || DEFAULT_TASK_READ_LIMIT, 1), MAX_TASK_READ_LIMIT)));
+    const limitKey = params.get('limit');
     const key = `tasks:all:${filters?.department ?? 'any'}:${filters?.status ?? 'any'}:${limitKey}`;
     return cachedFirestoreRead(key, 5 * 60 * 1000, async () => {
       const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
@@ -511,11 +511,7 @@ export async function adminGetAllTasks(filters?: {
   }
 
   try {
-    const readLimit = filters?.limit === null
-      ? null
-      : typeof filters?.limit === 'number'
-        ? Math.min(Math.max(filters.limit, 1), MAX_TASK_READ_LIMIT)
-        : DEFAULT_TASK_READ_LIMIT;
+    const readLimit = Math.min(Math.max(Number(filters?.limit) || DEFAULT_TASK_READ_LIMIT, 1), MAX_TASK_READ_LIMIT);
     const key = `tasks:all:${filters?.department ?? 'any'}:${filters?.status ?? 'any'}:${readLimit}`;
 
     return await cachedFirestoreRead(key, 2 * 60 * 1000, async () => {
@@ -557,61 +553,43 @@ export interface TaskAggregateCounts {
   completed: number;
   verified: number;
   dead: number;
+  active?: number;
+  byUser?: Record<string, TaskAggregateCounts>;
+  byDepartment?: Record<string, TaskAggregateCounts>;
 }
 
-export async function adminGetTaskCounts(department?: string): Promise<TaskAggregateCounts> {
-  const key = `tasks:counts:${department ?? 'all'}`;
-  return cachedFirestoreRead(key, 60 * 1000, async () => {
-    const all = await adminGetAllTasks({ department, limit: null });
-    let pending = 0;
-    let inProgress = 0;
-    let delayRequested = 0;
-    let overdue = 0;
-    let completed = 0;
-    let verified = 0;
-    let dead = 0;
+export interface TaskReadScope {
+  scope?: 'all' | 'mine' | 'handoff' | 'visible'; uid?: string; status?: string;
+  assignedTo?: string; category?: string; priority?: string;
+  excludeRecurring?: boolean; includeChecklist?: boolean;
+}
 
-    for (const t of all) {
-      if (t.status === 'Pending Accept') pending++;
-      else if (t.status === 'In Progress') inProgress++;
-      else if (t.status === 'Delay Requested') delayRequested++;
-      else if (t.status === 'Overdue') overdue++;
-      else if (t.status === 'Completed') completed++;
-      else if (t.status === 'Verified') verified++;
-      else if (t.status === 'Dead') dead++;
-    }
+function taskScopeParams(department?: string, options: TaskReadScope = {}) {
+  const params = new URLSearchParams();
+  if (department) params.set('department', department);
+  for (const [key, value] of Object.entries(options)) if (value) params.set(key, String(value));
+  return params;
+}
 
-    return {
-      total: all.length,
-      pending,
-      inProgress,
-      delayRequested,
-      overdue,
-      completed,
-      verified,
-      dead,
-    };
+export async function adminGetTaskCounts(department?: string, options: TaskReadScope = {}): Promise<TaskAggregateCounts> {
+  const params = taskScopeParams(department, options);
+  return cachedFirestoreRead('tasks:counts:' + params.toString(), 30_000, async () => {
+    if (hasCloudflareApi()) return cfApi<TaskAggregateCounts>('/tasks/counts?' + params);
+    // Counts must never be calculated from a truncated task list.
+    throw new Error('Complete task counts require the Cloudflare aggregate endpoint');
   });
 }
 
-export async function adminSearchTasks(queryText: string, options?: { department?: string; limit?: number }): Promise<Task[]> {
-  const q = (queryText || '').trim().toLowerCase();
-  if (!q) return [];
-  const max = options?.limit ?? 50;
-
-  const all = await adminGetAllTasks({ department: options?.department, limit: null });
-  const matches = all.filter(t => {
-    if ((t.taskId || '').toLowerCase().includes(q)) return true;
-    if ((t.description || '').toLowerCase().includes(q)) return true;
-    if ((t.assignedToName || '').toLowerCase().includes(q)) return true;
-    if ((t.createdByName || '').toLowerCase().includes(q)) return true;
-    if ((t.department || '').toLowerCase().includes(q)) return true;
-    if ((t.category || '').toLowerCase().includes(q)) return true;
-    if ((t.notes || '').toLowerCase().includes(q)) return true;
-    return false;
+export async function adminSearchTasks(queryText: string, options: TaskReadScope & { department?: string; limit?: number } = {}): Promise<Task[]> {
+  if (!hasCloudflareApi()) throw new Error('Server search requires Cloudflare');
+  const { department, limit, ...scope } = options;
+  const params = taskScopeParams(department, scope);
+  params.set('q', queryText.trim());
+  params.set('limit', String(Math.min(Math.max(limit || 100, 1), 100)));
+  return cachedFirestoreRead('tasks:search:' + params.toString(), 30_000, async () => {
+    const rows = await cfApi<any[]>('/tasks/search?' + params);
+    return rows.map(cfTask).filter(Boolean) as Task[];
   });
-
-  return matches.slice(0, max);
 }
 
 export async function adminGetOverdueTasks(): Promise<Task[]> {

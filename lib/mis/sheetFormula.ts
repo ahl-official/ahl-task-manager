@@ -2,7 +2,8 @@
 
 export function gapPercent(done: number, planned: number): number | null {
   if (!Number.isFinite(done) || !Number.isFinite(planned) || planned <= 0) return null;
-  return Math.round(((done / planned) * 100 - 100) * 100) / 100;
+  const value = (done / planned) * 100 - 100;
+  return Math.sign(value) * Math.round((Math.abs(value) + Number.EPSILON * Math.max(1, Math.abs(value))) * 100) / 100;
 }
 
 /** MIS Data stores G4 as a decimal fraction (−12.07% → −0.1207). */
@@ -59,7 +60,8 @@ export function computeG4(checklist: MisBucket, delegation: MisBucket, fms: MisB
     fms,
     gapPercent: gapPercent(total.done, total.planned),
     gapDecimal: gapToDecimal(gapPercent(total.done, total.planned)),
-    onTimeGapPercent: gapPercent(total.onTime, total.planned),
+    // Master E5 is completed work (F4), and F5 is work completed on time.
+    onTimeGapPercent: gapPercent(total.onTime, total.done),
   };
 }
 

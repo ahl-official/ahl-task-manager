@@ -7,6 +7,8 @@ import { sendWhatsApp, msgTaskAccepted, msgTaskCompleted, msgTaskVerified } from
 import { Timestamp } from 'firebase-admin/firestore';
 import type { TaskPriority, TaskStatus } from '@/types';
 import { canViewTask } from '@/lib/utils/access';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
+import { cfTask } from '@/lib/cloudflare/models';
 
 // GET /api/tasks/[id]
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -44,6 +46,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   let updatedTask: Awaited<ReturnType<typeof adminUpdateTaskStatus>> = null;
 
   try {
+    if (['complete','verify','uncomplete'].includes(action) && hasCloudflareApi()) {
+      const result=cfTask(await cfApi('/tasks/'+encodeURIComponent(params.id)+'/lifecycle',{
+        method:'POST',body:JSON.stringify({action,actorUid:session.uid,actorRole:session.role})
+      }))!;
+      if(action==='complete' && !['Completed','Verified'].includes(task.status)) {
+        if(isAdmin) await sendWhatsApp(task.assignedToWa,msgTaskVerified({taskId:task.taskId,handoffName:session.name}),task.taskId).catch(()=>{});
+        else if(task.handoffWa && task.handoffWa!==task.assignedToWa) await sendWhatsApp(task.handoffWa,msgTaskCompleted({taskId:task.taskId,description:task.description,assignedToName:task.assignedToName}),task.taskId).catch(()=>{});
+      } else if(action==='verify' && task.status!=='Verified') await sendWhatsApp(task.assignedToWa,msgTaskVerified({taskId:task.taskId,handoffName:session.name}),task.taskId).catch(()=>{});
+      await adminLog('TASK_UPDATED',params.id+' '+action+' by '+session.name,{taskId:params.id,uid:session.uid}).catch(()=>{});
+      return NextResponse.json({success:true,data:serializeTask(result)});
+    }
+    if (action === 'uncomplete') return NextResponse.json({success:false,error:'Cloudflare required for atomic undo'},{status:503});
+    if (['accept','set-dates','revive'].includes(action) && (task.status==='Completed'||task.status==='Verified'||task.childTaskId)) return NextResponse.json({success:false,error:'This action is not allowed for the current task state'},{status:409});
+    if (action==='revive' && task.status!=='Dead') return NextResponse.json({success:false,error:'Only Dead tasks can be revived'},{status:409});
+    if ([startDate,endDate].some(value=>value && Number.isNaN(Date.parse(value)))) return NextResponse.json({success:false,error:'Invalid date'},{status:400});
     if (action === 'accept') {
       if (!actorIsAssignee && !isAdmin) {
         return NextResponse.json({ success: false, error: 'Only assignee can accept' }, { status: 403 });
@@ -251,8 +268,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
           else if (updatedTask.status === 'Pending Accept') parentStatus = 'Shifted (Pending Accept)';
 
           await adminUpdateTaskStatus(task.parentTaskId, parentStatus, {
-            completedAt: updatedTask.completedAt ?? parentTask.completedAt,
-            verifiedAt: updatedTask.verifiedAt ?? parentTask.verifiedAt,
+            completedAt: updatedTask.completedAt,
+            verifiedAt: updatedTask.verifiedAt,
             acceptedAt: updatedTask.acceptedAt ?? parentTask.acceptedAt,
           }).catch(() => { });
         }
@@ -273,7 +290,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ success: true, data: serializeTask(updated!) });
   } catch (err: any) {
     console.error(`PATCH /api/tasks/${params.id} error`, err);
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: err.message }, { status: err.status || 500 });
   }
 }
 
@@ -301,6 +318,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       }, { status: 400 });
     }
 
+    if(task.parentTaskId||task.childTaskId) return NextResponse.json({success:false,error:'Shifted tasks must be kept to preserve parent/child tracking; mark Dead instead'},{status:409});
     const deleted = await adminDeleteTask(params.id);
     if (!deleted) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
 

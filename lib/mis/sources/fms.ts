@@ -41,8 +41,19 @@ function ensureRow(map: Map<string, FmsPersonBucket>, name: string) {
 }
 
 function isDoneStatus(status: string, step: FmsStepDef) {
-  const allowed = step.doneStatuses?.length ? step.doneStatuses : ['Done'];
-  return allowed.some(value => value.toLowerCase() === status.toLowerCase());
+  if (!status) return false;
+  const s = status.trim().toLowerCase();
+  if (step.doneStatuses?.length) {
+    return step.doneStatuses.some(value => value.toLowerCase() === s);
+  }
+  return s === 'done';
+}
+
+function isOnTimeStatus(onTimeFlag: string) {
+  const f = onTimeFlag.trim().toLowerCase();
+  if (!f) return false;
+  // Match MIS Report COUNTIFS on-time criterion ("On-Time"), not every non-late string.
+  return f === 'on-time';
 }
 
 function rowInWeek(
@@ -51,8 +62,17 @@ function rowInWeek(
   weekStart: string,
   weekEnd: string,
 ) {
-  const startKey = parseSheetDate(row[step.dateCol]);
+  const cellVal = row[step.dateCol];
+  if (!cellVal) return false;
+  const startKey = parseSheetDate(cellVal);
   if (!startKey) return false;
+
+  if (step.endCol !== undefined) {
+    const endKey = parseSheetDate(row[step.endCol]);
+    if (!endKey) return false;
+    return startKey >= weekStart && endKey <= weekEnd;
+  }
+
   return dateKeyInRange(startKey, weekStart, weekEnd);
 }
 
@@ -111,13 +131,15 @@ export async function getFmsDetailedCounts(
 
   if (sheetsToQuery.length > 0) {
     try {
-      const ranges = sheetsToQuery.map(name => `${quoteSheet(name)}!A2:AZ`);
+      // Name columns sit as far right as CG. A2:AZ stopped before them, so those steps never counted.
+      const ranges = sheetsToQuery.map(name => `${quoteSheet(name)}!A2:CZ`);
       const allResults = await readSpreadsheetValues(misReportSpreadsheetId(), ranges, 'FORMATTED_VALUE');
       sheetsToQuery.forEach((name, idx) => {
         sheetRows.set(name, allResults[idx] || []);
       });
     } catch (err) {
       console.error('Failed to batch read FMS sheets from Google Sheets', err);
+      throw err;
     }
   }
 
@@ -139,7 +161,7 @@ export async function getFmsDetailedCounts(
       const status = cell(row, statusCol);
       const onTimeFlag = cell(row, onTimeCol);
       const done = isDoneStatus(status, step);
-      const onTime = done && /^on[- ]?time$/i.test(onTimeFlag);
+      const onTime = done && isOnTimeStatus(onTimeFlag);
 
       const totalBucket = ensureRow(byName, name);
       if (!totalBucket) continue;

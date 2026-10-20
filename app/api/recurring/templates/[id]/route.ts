@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/utils/auth';
-import { updateRecurringTemplate, deleteRecurringTemplate } from '@/lib/cloudflare/recurring';
+import { adminGetUserByUid } from '@/lib/firebase/users';
+import { updateRecurringTemplate, deleteRecurringTemplate, getRecurringTemplate } from '@/lib/cloudflare/recurring';
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSession();
@@ -11,7 +12,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   try {
+    const existing=await getRecurringTemplate(params.id);
+    if(session.role==='leader' && (!session.department || existing.department!==session.department))return NextResponse.json({success:false,error:'Forbidden for this department'},{status:403});
     const body = await req.json();
+    if(session.role==='leader'){
+      const assignee=body.assignedTo ? await adminGetUserByUid(body.assignedTo) : null;
+      if((body.department && body.department!==session.department)||(body.assignedTo && (!assignee || assignee.department!==session.department)))return NextResponse.json({success:false,error:'Assignee must be in your department'},{status:403});
+    }
     const updated = await updateRecurringTemplate(params.id, body);
     return NextResponse.json({ success: true, data: updated });
   } catch (err: any) {
@@ -28,6 +35,8 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   }
 
   try {
+    const existing=await getRecurringTemplate(params.id);
+    if(session.role==='leader' && (!session.department || existing.department!==session.department))return NextResponse.json({success:false,error:'Forbidden for this department'},{status:403});
     const result = await deleteRecurringTemplate(params.id);
     return NextResponse.json({ success: true, data: result });
   } catch (err: any) {

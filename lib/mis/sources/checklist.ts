@@ -50,23 +50,27 @@ export async function getChecklistDetailedCounts(weekStart: string, weekEnd: str
         done: row.done || 0,
         onTime: row.onTime || 0,
       };
+      const previous = byName.get(key);
+      if (previous) { personBucket.planned += previous.planned; personBucket.done += previous.done; personBucket.onTime += previous.onTime; }
       byName.set(key, personBucket);
 
       for (const [catKey, catCounts] of Object.entries(row.byCategory || {})) {
         const param = paramById.get(catKey);
         if (param) {
+          const prior = param.byName.get(key);
           param.byName.set(key, {
             name: row.name,
             department: row.department || '',
-            planned: catCounts.planned || 0,
-            done: catCounts.done || 0,
-            onTime: catCounts.onTime || 0,
+            planned: (catCounts.planned || 0) + (prior?.planned || 0),
+            done: (catCounts.done || 0) + (prior?.done || 0),
+            onTime: (catCounts.onTime || 0) + (prior?.onTime || 0),
           });
         }
       }
     }
   } catch (err) {
     console.error('Failed to get MIS checklist counts from Cloudflare D1 database', err);
+    throw err;
   }
 
   return { byName, paramCounts };

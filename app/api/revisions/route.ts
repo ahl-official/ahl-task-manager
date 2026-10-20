@@ -1,36 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/utils/auth';
 import {
-  adminCreateRevision,
-  adminDecideRevision,
   adminGetAllRevisions,
+  adminGetRevisionsByTask,
   adminGetPendingRevisionsByHandoff,
   serializeRevision,
 } from '@/lib/firebase/revisions';
-import { adminGetAllTasks, adminGetTask, adminUpdateTaskStatus } from '@/lib/firebase/tasks';
+import { adminGetTask } from '@/lib/firebase/tasks';
 import { adminLog } from '@/lib/firebase/scores';
 import { sendWhatsApp, msgRevisionRequested, msgRevisionApproved, msgRevisionRejected } from '@/lib/waha';
-import { Timestamp } from 'firebase-admin/firestore';
 import { formatDate } from '@/lib/utils';
-import { filterTasksForSession } from '@/lib/utils/access';
+import { canViewTask } from '@/lib/utils/access';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
+import { cfRevision } from '@/lib/cloudflare/models';
 
 // GET /api/revisions — get pending revisions for handoff user
 export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
+  const taskId=new URL(req.url).searchParams.get('taskId');
+  if(taskId){
+    const task=await adminGetTask(taskId);
+    if(!task||!canViewTask(session,task))return NextResponse.json({success:false,error:'Forbidden'},{status:403});
+    const revisions=await adminGetRevisionsByTask(taskId,100);
+    return NextResponse.json({success:true,data:revisions.map(serializeRevision)});
+  }
   if (session.role === 'admin' || session.role === 'leader') {
-    const [allRevisions, allTasks] = await Promise.all([
-      adminGetAllRevisions(),
-      session.role === 'leader'
-        ? adminGetAllTasks({ department: session.department, limit: null })
-        : adminGetAllTasks({ limit: null }),
-    ]);
-    const visibleTaskIds = new Set(filterTasksForSession(session, allTasks).map(task => task.taskId));
-    const revisions = allRevisions.filter(revision =>
-      revision.status === 'pending' &&
-      visibleTaskIds.has(revision.taskId)
-    );
+    if(session.role === 'leader' && !session.department) return NextResponse.json({ success:false,error:'Department required' }, { status:403 });
+    const revisions = await adminGetAllRevisions({ status: 'pending', limit: 1000, department: session.role === 'leader' ? session.department : undefined });
     return NextResponse.json({ success: true, data: revisions.map(serializeRevision) });
   }
 
@@ -54,24 +52,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Only assignee can request revision' }, { status: 403 });
     }
 
-    const revision = await adminCreateRevision({
-      taskId,
-      requestedBy:     session.uid,
-      requestedByName: session.name,
-      requestedDate,
-      reason,
-    });
-
-    // Update task status to Delay Requested
-    await adminUpdateTaskStatus(taskId, 'Delay Requested', {
-      revisionStatus: 'requested',
-    });
-
-    if (task.parentTaskId) {
-      await adminUpdateTaskStatus(task.parentTaskId, 'Shifted (Delay Requested)', {
-        revisionStatus: 'requested',
-      }).catch(() => {});
-    }
+    if (!requestedDate || Number.isNaN(Date.parse(requestedDate)) || !String(reason||'').trim()) return NextResponse.json({success:false,error:'Valid date and reason required'},{status:400});
+    if (!hasCloudflareApi()) throw new Error('Cloudflare is required for atomic revision requests');
+    const revision=cfRevision(await cfApi('/revisions',{method:'POST',body:JSON.stringify({taskId,requestedBy:session.uid,requestedByName:session.name,requestedDate,reason})}))!;
 
     // Notify handoff
     await sendWhatsApp(
@@ -84,16 +67,16 @@ export async function POST(req: NextRequest) {
         reason,
       }),
       taskId,
-    );
+    ).catch(()=>{});
 
     await adminLog('REVISION_REQUESTED_PORTAL', `Revision requested for ${taskId} by ${session.name}`, {
       taskId, uid: session.uid,
-    });
+    }).catch(()=>{});
 
     return NextResponse.json({ success: true, data: serializeRevision(revision) }, { status: 201 });
   } catch (err: any) {
     console.error('POST /api/revisions error', err);
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: err.message }, { status: err.status || 500 });
   }
 }
 
@@ -113,27 +96,10 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Only handoff can decide revision' }, { status: 403 });
     }
 
-    const revision = await adminDecideRevision(revisionId, decision, session.uid, session.name);
-
+    if (!['approved','rejected'].includes(decision) || !revisionId) return NextResponse.json({success:false,error:'Valid revision ID and decision required'},{status:400});
+    if (!hasCloudflareApi()) throw new Error('Cloudflare is required for atomic revision decisions');
+    const revision=cfRevision(await cfApi('/revisions',{method:'PATCH',body:JSON.stringify({revisionId,taskId,decision,decidedBy:session.uid,decidedByName:session.name,actorRole:session.role})}))!;
     if (decision === 'approved') {
-      const newEndDate = Timestamp.fromDate(new Date(revision.requestedDate.toDate()));
-      // Update task with new date
-      await adminUpdateTaskStatus(taskId, 'In Progress', {
-        revisionStatus: 'accepted',
-        delayedDate:    newEndDate,
-        delayReason:    revision.reason,
-        endDate:        newEndDate,
-      });
-
-      if (task.parentTaskId) {
-        await adminUpdateTaskStatus(task.parentTaskId, 'Shifted (In Progress)', {
-          revisionStatus: 'accepted',
-          delayedDate:    newEndDate,
-          delayReason:    revision.reason,
-          endDate:        newEndDate,
-        }).catch(() => {});
-      }
-
       await sendWhatsApp(
         task.assignedToWa,
         msgRevisionApproved({
@@ -141,32 +107,22 @@ export async function PATCH(req: NextRequest) {
           newDate: formatDate(revision.requestedDate.toDate().toISOString()),
         }),
         taskId,
-      );
+      ).catch(()=>{});
     } else {
-      await adminUpdateTaskStatus(taskId, 'In Progress', {
-        revisionStatus: 'rejected',
-      });
-
-      if (task.parentTaskId) {
-        await adminUpdateTaskStatus(task.parentTaskId, 'Shifted (In Progress)', {
-          revisionStatus: 'rejected',
-        }).catch(() => {});
-      }
-
       await sendWhatsApp(
         task.assignedToWa,
         msgRevisionRejected({ taskId: task.taskId }),
         taskId,
-      );
+      ).catch(()=>{});
     }
 
     await adminLog('REVISION_DECIDED_PORTAL', `Revision ${decision} for ${taskId} by ${session.name}`, {
       taskId, uid: session.uid,
-    });
+    }).catch(()=>{});
 
     return NextResponse.json({ success: true, data: serializeRevision(revision) });
   } catch (err: any) {
     console.error('PATCH /api/revisions error', err);
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: err.message }, { status: err.status || 500 });
   }
 }

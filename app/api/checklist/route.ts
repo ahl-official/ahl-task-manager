@@ -4,21 +4,12 @@ import { hasCloudflareApi } from '@/lib/cloudflare/api';
 import {
   completeRecurringTask,
   getRecurringChecklist,
+  getRecurringPeriod,
 } from '@/lib/cloudflare/recurring';
-import { namesEqual } from '@/lib/utils/names';
+import { checklistPermissions } from '@/lib/utils/checklistPermissions';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 
 const CATEGORIES = ['Daily', 'Weekly', 'Monthly'];
-
-function isPastPeriodKey(periodKey?: string | null, dueDate?: string | null, cat?: string) {
-  const today = indiaTodayKey();
-  const key = periodKey || dueDate;
-  if (!key) return false;
-  if (cat?.toLowerCase() === 'monthly') {
-    return key.slice(0, 7) < today.slice(0, 7);
-  }
-  return key < today;
-}
 
 export async function GET(req: NextRequest) {
   const session = await getSession();
@@ -63,27 +54,12 @@ export async function GET(req: NextRequest) {
       userName: elevated ? undefined : session.name,
     });
 
-    const rows = (d1Items || []).map(row => {
-      const mine = namesEqual(row.userName, session.name);
-      const isPast = isPastPeriodKey(row.periodKey, row.dueDate, row.category);
-
-      // Members and interns are blocked from marking incomplete tasks for past dates
-      // Admins (and leaders for their team) can complete past tasks
-      const canComplete = row.completed
-        ? false
-        : isAdmin
-          ? true
-          : elevated
-            ? !isPast || mine
-            : mine && !isPast;
-
-      return {
-        ...row,
-        mine,
-        isPast,
-        canComplete,
-        canManage: elevated || mine,
-      };
+    const rows = (d1Items || []).filter(row => checklistPermissions(session, row).canView).map(row => {
+      const permissions = checklistPermissions(session, row);
+      return { ...row, mine: permissions.mine, isPast: permissions.isPast,
+        canComplete: !row.completed && !row.dead && permissions.canChange,
+        canUncomplete: row.completed && !row.dead && permissions.canChange,
+        canManage: permissions.canChange };
     });
 
     return NextResponse.json({
@@ -109,51 +85,28 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-
   try {
-    const { taskId, title, description, department, assignedTo, assignedToName, category, periodKey, action = 'complete', remark = '' } = await req.json();
-    if (!taskId || !periodKey || !CATEGORIES.includes(category)) {
-      throw new Error('Task id, category, and period are required');
+    const { taskId, category, periodKey, action = 'complete', remark = '' } = await req.json();
+    if (typeof taskId !== 'string' || typeof periodKey !== 'string' || !CATEGORIES.includes(category) ||
+        !['complete', 'uncomplete', 'skip_day', 'dead', 'remark', 'verify', 'revive'].includes(action)) {
+      return NextResponse.json({ success: false, error: 'Invalid checklist task, period or action' }, { status: 400 });
     }
-
-    const isAdmin = session.role === 'admin';
-    const elevated = session.role === 'admin' || session.role === 'leader';
-    const isPast = isPastPeriodKey(periodKey, null, category);
-
-    // Block non-admin/non-leader from completing past tasks
-    if (action === 'complete' && isPast && !elevated) {
-      return NextResponse.json({
-        success: false,
-        error: 'Only administrators can mark past checklist tasks complete.',
-      }, { status: 403 });
+    if (!hasCloudflareApi()) throw new Error('Cloudflare D1 is not configured');
+    // Resolve the persisted assignee; never authorize against client-provided names or IDs.
+    const row = await getRecurringPeriod(taskId, periodKey);
+    const permissions = checklistPermissions(session, row);
+    if (row.category !== category || !permissions.canChange || (action === 'verify' && !permissions.canVerify)) {
+      return NextResponse.json({ success: false, error: 'Forbidden for this checklist period' }, { status: 403 });
     }
-
-    if (!hasCloudflareApi()) {
-      throw new Error('Cloudflare D1 is not configured');
-    }
-
     const result = await completeRecurringTask({
-      templateId: taskId,
-      title: title || description,
-      description: description || title,
-      department: department || '',
-      uid: assignedTo || session.uid,
-      userName: assignedToName || session.name,
-      category,
-      periodKey,
-      action,
-      isAdmin,
-      remark,
-      remarkBy: session.name,
+      templateId: row.templateId, periodKey: row.periodKey,
+      title: row.title, description: row.description, department: row.department,
+      uid: row.userId, userName: row.userName, category: row.category,
+      action, isAdmin: session.role === 'admin',
+      remark: String(remark).trim(), remarkBy: session.name,
     });
-
     return NextResponse.json({ success: true, data: result });
-  } catch (err: any) {
-    return NextResponse.json({
-      success: false,
-      error: err.message ?? 'Failed to update checklist task in Cloudflare D1',
-    }, { status: 400 });
+  } catch (error: any) {
+    return NextResponse.json({ success: false, error: error.message || 'Checklist update failed' }, { status: error.status === 404 ? 404 : 400 });
   }
 }
-
-

@@ -11,8 +11,14 @@ import {
 } from '@/lib/waha';
 import { Timestamp } from 'firebase-admin/firestore';
 import { formatDate } from '@/lib/utils';
+import { isWebhookAuthorized } from '@/lib/utils/webhookAuth';
 
 export async function POST(req: NextRequest) {
+  const secret = process.env.WAHA_WEBHOOK_SECRET;
+  if (!secret) return NextResponse.json({ error: 'Webhook authentication is not configured' }, { status: 503 });
+  if (!isWebhookAuthorized(req.headers, secret)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   let rawBody = '';
 
   try {

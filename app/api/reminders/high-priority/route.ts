@@ -1,5 +1,7 @@
+import { isCronOrAdmin } from "@/lib/utils/cronAuth";
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from 'next/server';
-import { adminGetAllTasks } from '@/lib/firebase/tasks';
+import { adminGetActiveTasks } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminLog } from '@/lib/firebase/scores';
 import {
@@ -14,21 +16,9 @@ import { sendWhatsApp, msgHighPriorityRedBall } from '@/lib/waha';
  * Replaces newdelegation 2hourRedBallReminder (High priority 🔴).
  * Only sends during IST 11:00–19:00 unless ?force=1.
  */
-function isAuthorized(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  const headerSecret = req.headers.get('x-cron-secret');
-  const bearer = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-  return headerSecret === secret || bearer === secret;
-}
 
 export async function GET(req: NextRequest) {
-  if (process.env.CRON_SECRET && !isAuthorized(req)) {
-    const force = new URL(req.url).searchParams.get('force') === '1';
-    if (!force) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-  }
+  if (!await isCronOrAdmin(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const force = new URL(req.url).searchParams.get('force') === '1';
   const hour = indiaHourNow();
@@ -47,7 +37,7 @@ export async function GET(req: NextRequest) {
   try {
     const [users, tasks] = await Promise.all([
       adminGetAllUsers(),
-      adminGetAllTasks({ limit: null }),
+      adminGetActiveTasks(1000),
     ]);
 
     const high = oneTimeHighPriority(tasks);

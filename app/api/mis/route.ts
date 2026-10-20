@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/utils/auth';
-import { computeMisScoresForWeek } from '@/lib/mis/compute';
+import { computeMisScoresForWeek, overlayLiveFmsOnScores } from '@/lib/mis/compute';
 import { buildMisMasterReport } from '@/lib/mis/masterReport';
 import { formatGapPercent } from '@/lib/mis/sheetFormula';
 import { getMisWeekPeriod } from '@/lib/mis/week';
@@ -100,7 +100,10 @@ export async function GET(req: NextRequest) {
     let rows: Awaited<ReturnType<typeof computeMisScoresForWeek>> = [];
     let source: 'live' | 'snapshot' = 'live';
 
-    if (preferSnapshot) {
+    // Allow forcing full live recompute (skips stale weekly snapshots).
+    const forceLive = searchParams.get('source') === 'live';
+
+    if (preferSnapshot && !forceLive) {
       const snapshots = await adminGetMisWeeklySnapshots({ weekKey: week.weekKey });
       // Only use snapshots that include parameter breakdown (Office/Salon/Weekly).
       const withParams = snapshots.filter(row => Array.isArray(row.parameters) && row.parameters.length > 0);
@@ -125,6 +128,8 @@ export async function GET(req: NextRequest) {
           weekStart: row.weekStart,
           weekEnd: row.weekEnd,
         }));
+        // Snapshots often store stale FMS; refresh from MIS Report sheets (no D1).
+        rows = await overlayLiveFmsOnScores(rows, week.weekStart, week.weekEnd);
         const { misCacheKey, misCacheSet } = await import('@/lib/mis/cache');
         misCacheSet(misCacheKey(['live', 'v2-params', week.weekStart, week.weekEnd]), rows, 60_000);
       }

@@ -1,5 +1,5 @@
 import { getSession } from '@/lib/utils/auth';
-import { adminGetAllTasks, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetAllTasks, adminGetTasksByAssignee, adminGetTaskCounts, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import TaskListClient from '@/components/shared/TaskListClient';
 import { filterTasksForSession, filterUsersForSession } from '@/lib/utils/access';
@@ -10,11 +10,12 @@ export default async function DepartmentTasksPage() {
   const session = await getSession();
   if (!session) return null;
 
-  const [allTasks, allUsers, timelyTasks] = await Promise.all([
+  const [allTasks, allUsers, taskCounts, timelyTasks] = await Promise.all([
     session.role === 'leader'
-      ? adminGetAllTasks({ department: session.department, limit: null })
-      : adminGetAllTasks({ limit: null }),
+      ? adminGetAllTasks({ department: session.department, limit: 1000 })
+      : adminGetTasksByAssignee(session.uid),
     adminGetAllUsers(),
+    session.role === 'leader' ? adminGetTaskCounts(session.department) : adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true, includeChecklist: true }),
     session.role === 'leader' ? Promise.resolve([]) : getPersonalTimelyTasks(session),
   ]);
   const visibleUsers = filterUsersForSession(session, allUsers);
@@ -38,9 +39,11 @@ export default async function DepartmentTasksPage() {
         <h1 className="text-xl font-semibold text-gray-900">
           {session.role === 'leader' ? 'Department Tasks' : 'My Tasks'}
         </h1>
-        <p className="mt-0.5 text-sm text-gray-500">{session.department} - {tasks.length} tasks</p>
+        <p className="mt-0.5 text-sm text-gray-500">{session.department} - {taskCounts.total} tasks</p>
       </div>
       <TaskListClient
+        initialCounts={taskCounts}
+        totalCount={taskCounts.total}
         tasks={serialized}
         role="user"
         currentUid={session.uid}

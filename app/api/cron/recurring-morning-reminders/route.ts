@@ -1,3 +1,5 @@
+import { isCronOrAdmin } from "@/lib/utils/cronAuth";
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from 'next/server';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { getRecurringChecklist } from '@/lib/cloudflare/recurring';
@@ -5,19 +7,9 @@ import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { namesEqual } from '@/lib/utils/names';
 import { sendWhatsApp, msgUnifiedRecurringReminder } from '@/lib/waha';
 
-function isAuthorized(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return true; // allow if no cron secret configured or during testing
-  const headerSecret = req.headers.get('x-cron-secret');
-  const bearer = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-  const querySecret = new URL(req.url).searchParams.get('secret');
-  return headerSecret === secret || bearer === secret || querySecret === secret;
-}
 
 export async function GET(req: NextRequest) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  }
+  if (!await isCronOrAdmin(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const todayKey = indiaTodayKey();
   const dateLabel = (() => {

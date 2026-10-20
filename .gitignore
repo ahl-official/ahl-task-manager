@@ -80,6 +80,18 @@ newdelegation/
 
 # Temporary scratch and migration scripts
 scratch/
+tools/mis-audit/
+# Local audit, handover, and one-off Worker generation helpers.
+# The deployed Worker source lives in cloudflare/worker/reconciled/.
+tools/*.cjs
+tools/build*.py
+tools/create*.py
+cloudflare/tools/mis-audit/
+cloudflare/out.txt
+cloudflare/err.txt
+/DEPLOYMENT_READINESS.md
+/READ_BUDGET.md
+/TASK_FLOW_AUDIT.md
 scripts/
 *.sql
 *.mjs
