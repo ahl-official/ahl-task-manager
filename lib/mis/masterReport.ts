@@ -74,13 +74,50 @@ function rollup(
   };
 }
 
+function mergeDailyParameters(params: MisParameterRow[]): MisParameterRow[] {
+  const hasOfficeOrSalon = params.some(p => p.id === 'office' || p.id === 'salon');
+  if (!hasOfficeOrSalon) return params;
+
+  const merged: MisParameterRow[] = [];
+  let dailyPlanned = 0;
+  let dailyDone = 0;
+  let dailyOnTime = 0;
+  let foundDaily = false;
+
+  for (const p of params) {
+    if (p.id === 'office' || p.id === 'salon' || p.id === 'daily') {
+      dailyPlanned += p.planned || 0;
+      dailyDone += p.done || 0;
+      dailyOnTime += p.onTime || 0;
+      foundDaily = true;
+    } else {
+      merged.push(p);
+    }
+  }
+
+  if (foundDaily) {
+    merged.unshift({
+      id: 'daily',
+      label: 'Daily Task',
+      section: 'Checklist',
+      group: 'checklist',
+      planned: dailyPlanned,
+      done: dailyDone,
+      onTime: dailyOnTime,
+      gapPercent: gapPercent(dailyDone, dailyPlanned),
+    });
+  }
+
+  return merged;
+}
+
 function ensureParameters(
   person: Awaited<ReturnType<typeof computeMisScoresForWeek>>[number] | null,
   checklist: MisBucket,
   delegationBucket: MisBucket,
   fms: MisBucket,
 ): MisParameterRow[] {
-  if (person?.parameters?.length) return person.parameters;
+  if (person?.parameters?.length) return mergeDailyParameters(person.parameters);
   const parameters: MisParameterRow[] = Object.entries(CHECKLIST_PARAM_LABELS).map(([id, label]) => ({
     id,
     label,

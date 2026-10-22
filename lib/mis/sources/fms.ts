@@ -46,14 +46,14 @@ function isDoneStatus(status: string, step: FmsStepDef) {
   if (step.doneStatuses?.length) {
     return step.doneStatuses.some(value => value.toLowerCase() === s);
   }
-  return s === 'done';
+  return s === 'done' || (step.sheet.includes('O2D') && s === 'completed');
 }
 
 function isOnTimeStatus(onTimeFlag: string) {
   const f = onTimeFlag.trim().toLowerCase();
   if (!f) return false;
-  // Match MIS Report COUNTIFS on-time criterion ("On-Time"), not every non-late string.
-  return f === 'on-time';
+  // Match MIS Report COUNTIFS on-time criterion ("On-Time" / "On Time")
+  return f === 'on-time' || f === 'on time';
 }
 
 function rowInWeek(

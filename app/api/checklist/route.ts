@@ -25,7 +25,8 @@ export async function GET(req: NextRequest) {
   const elevated = session.role === 'admin' || session.role === 'leader';
   const dateParam = searchParams.get('date') || undefined;
   const cursor = searchParams.get('cursor') || undefined;
-  const search = (searchParams.get('search') || '').trim().slice(0, 100);
+  const rawSearch = (searchParams.get('search') || '').trim();
+  const search = rawSearch.replace(/[^a-zA-Z0-9\s\-_.:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
 
   const today = indiaTodayKey();
   if (dateParam && dateParam > today) {
@@ -84,6 +85,22 @@ export async function GET(req: NextRequest) {
     }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (err: any) {
     console.error('Cloudflare D1 recurring checklist fetch error', err);
+    // If a search query caused an execution error/timeout in D1, return empty results gracefully
+    if (search.length >= 2) {
+      return NextResponse.json({
+        success: true,
+        meta: {
+          currentUserName: session.name,
+          currentUserId: session.uid,
+          elevated,
+          isAdmin,
+          source: 'cloudflare_d1',
+          hasMore: false,
+          nextCursor: null,
+        },
+        data: [],
+      });
+    }
     return NextResponse.json({
       success: false,
       error: err.message || 'Failed to fetch checklist from Cloudflare D1',

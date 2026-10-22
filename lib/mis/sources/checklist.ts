@@ -4,8 +4,7 @@ import { getRecurringMisCounts } from '@/lib/cloudflare/recurring';
 import { hasCloudflareApi } from '@/lib/cloudflare/api';
 
 export const CHECKLIST_PARAM_LABELS: Record<string, string> = {
-  office: 'Office Daily',
-  salon: 'Salon Daily',
+  daily: 'Daily Task',
   weekly: 'Weekly & Monthly',
 };
 
@@ -55,7 +54,8 @@ export async function getChecklistDetailedCounts(weekStart: string, weekEnd: str
       byName.set(key, personBucket);
 
       for (const [catKey, catCounts] of Object.entries(row.byCategory || {})) {
-        const param = paramById.get(catKey);
+        const targetId = (catKey === 'office' || catKey === 'salon' || catKey === 'daily') ? 'daily' : catKey;
+        const param = paramById.get(targetId);
         if (param) {
           const prior = param.byName.get(key);
           param.byName.set(key, {

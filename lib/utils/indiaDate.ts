@@ -41,7 +41,7 @@ export function parseSheetDate(value: unknown) {
     return indiaDateKey(value);
   }
   if (typeof value === 'number' && Number.isFinite(value)) {
-    const utc = Date.UTC(1899, 11, 30) + Math.round(value) * 86_400_000;
+    const utc = Date.UTC(1899, 11, 30) + Math.floor(value) * 86_400_000;
     return indiaDateKey(new Date(utc));
   }
 

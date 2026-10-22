@@ -206,4 +206,8 @@ export const FMS_STEP_CATALOG: FmsStepDef[] = [
   step("order-management-system-mexico-14", "Step 3", "Step 3", "Order Management System Mexico", 14),
   step("local-custom-orders-42", "Step 7", "Step 7", "Local Custom Orders", 42),
   step("order-management-system-mexico-21", "Step 4", "Step 4", "Order Management System Mexico", 21),
+  step("new-product-launch-0", "Step 1", "Step 1", "New Product/Service Launch FMS", 0, { doneStatuses: ["Done"] }),
+  step("new-product-launch-7", "Step 2", "Step 2", "New Product/Service Launch FMS", 7, { doneStatuses: ["Approved"] }),
+  step("new-product-launch-14", "Step 3", "Step 3", "New Product/Service Launch FMS", 14, { doneStatuses: ["Done"] }),
+  step("new-product-launch-21", "Step 4", "Step 4", "New Product/Service Launch FMS", 21, { doneStatuses: ["Done"] }),
 ];

@@ -1061,15 +1061,44 @@ function MisDashboard({
       planned > 0 ? Math.round(((done / planned) * 100 - 100) * 100) / 100 : null;
     const gapPercent = mis.gapPercent;
     const onTimeGapPercent = mis.onTimeGapPercent;
-    const parameters = (mis.parameters?.length
+    const rawParams = (mis.parameters?.length
       ? mis.parameters
       : [
-        { id: 'office', label: 'Office Daily', section: 'Checklist', group: 'checklist' as const, planned: 0, done: 0, onTime: 0, gapPercent: null },
-        { id: 'salon', label: 'Salon Daily', section: 'Checklist', group: 'checklist' as const, planned: 0, done: 0, onTime: 0, gapPercent: null },
+        { id: 'daily', label: 'Daily Task', section: 'Checklist', group: 'checklist' as const, planned: checklist.planned, done: checklist.done, onTime: checklist.onTime, gapPercent: gapOf(checklist.done, checklist.planned) },
         { id: 'weekly', label: 'Weekly & Monthly', section: 'Checklist', group: 'checklist' as const, planned: 0, done: 0, onTime: 0, gapPercent: null },
         { id: 'delegation', label: 'Delegation', section: 'Delegation', group: 'delegation' as const, ...delegation, gapPercent: gapOf(delegation.done, delegation.planned) },
         { id: 'fms', label: 'FMS Total', section: 'FMS', group: 'fms' as const, ...fms, gapPercent: gapOf(fms.done, fms.planned) },
       ]);
+
+    // Merge Office Daily and Salon Daily into a single Daily Task
+    const parameters: MisParameterView[] = [];
+    let dailyRow: MisParameterView | null = null;
+    for (const p of rawParams) {
+      if (p.id === 'office' || p.id === 'salon' || p.id === 'daily') {
+        if (!dailyRow) {
+          dailyRow = {
+            id: 'daily',
+            label: 'Daily Task',
+            section: 'Checklist',
+            group: 'checklist',
+            planned: p.planned || 0,
+            done: p.done || 0,
+            onTime: p.onTime || 0,
+            gapPercent: null,
+          };
+        } else {
+          dailyRow.planned += p.planned || 0;
+          dailyRow.done += p.done || 0;
+          dailyRow.onTime += p.onTime || 0;
+        }
+      } else {
+        parameters.push(p);
+      }
+    }
+    if (dailyRow) {
+      dailyRow.gapPercent = gapOf(dailyRow.done, dailyRow.planned);
+      parameters.unshift(dailyRow);
+    }
 
     return {
       name: mis.name || score?.name || '',
