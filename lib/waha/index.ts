@@ -5,6 +5,10 @@ const WAHA_SESSION = process.env.WAHA_SESSION ?? 'default';
 const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
 const PORTAL_URL   = process.env.NEXT_PUBLIC_APP_URL || 'https://ahl-task-manager.vercel.app';
 
+export function automatedWhatsAppDisabled(): boolean {
+  return process.env.VERCEL_ENV === 'production' || process.env.DISABLE_WHATSAPP === 'true';
+}
+
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (WAHA_API_KEY) headers['X-Api-Key'] = WAHA_API_KEY;
@@ -103,14 +107,14 @@ function enqueueSend<T>(fn: () => Promise<T>): Promise<T> {
 function isEssentialMessage(text: string, options?: { bypassDisable?: boolean }): boolean {
   if (options?.bypassDisable === true) return true;
   if (!text) return false;
+  const heading = text.split('\n', 1)[0];
   // OTP messages (Critical for Login)
-  if (text.includes('Login OTP') || text.includes('verification code is:')) return true;
+  if (heading.includes('Login OTP')) return true;
   // Task Creation / Assignment notifications
   if (
-    text.includes('New Task Assigned') ||
-    text.includes('Task Assigned') ||
-    text.includes('Task Created:') ||
-    text.includes('Task Delegated')
+    heading.includes('Task Assigned') ||
+    heading.includes('Task Created:') ||
+    heading.includes('Task Delegated')
   ) {
     return true;
   }
@@ -131,7 +135,7 @@ export async function sendWhatsApp(
     // DISABLE_WHATSAPP=true only suppresses background triggers/reminders/crons.
     // OTP sending and Task Creation notifications always send.
     const isEssential = isEssentialMessage(text, options);
-    if (process.env.DISABLE_WHATSAPP === 'true' && !isEssential) {
+    if (automatedWhatsAppDisabled() && !isEssential) {
       return { ok: true, chatId: formatWaId(waNumber) };
     }
 
@@ -191,7 +195,7 @@ export async function sendWhatsAppFile(input: {
   caption?: string;
   taskId?: string;
 }): Promise<SendWhatsAppResult> {
-  if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
+  if (automatedWhatsAppDisabled() || !process.env.WAHA_URL) {
     return { ok: true, chatId: formatWaId(input.waNumber) };
   }
 
@@ -246,7 +250,7 @@ export async function sendWhatsAppPdfFromDriveLink(
   _processName: string,
   message: string,
 ): Promise<SendWhatsAppResult> {
-  if (process.env.DISABLE_WHATSAPP === 'true' || !process.env.WAHA_URL) {
+  if (automatedWhatsAppDisabled() || !process.env.WAHA_URL) {
     return { ok: true, chatId: formatWaId(waNumber) };
   }
 

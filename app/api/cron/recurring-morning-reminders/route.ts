@@ -5,11 +5,14 @@ import { adminGetAllUsers } from '@/lib/firebase/users';
 import { getRecurringChecklist } from '@/lib/cloudflare/recurring';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { namesEqual } from '@/lib/utils/names';
-import { sendWhatsApp, msgUnifiedRecurringReminder } from '@/lib/waha';
+import { automatedWhatsAppDisabled, sendWhatsApp, msgUnifiedRecurringReminder } from '@/lib/waha';
 
 
 export async function GET(req: NextRequest) {
   if (!await isCronOrAdmin(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (automatedWhatsAppDisabled()) {
+    return NextResponse.json({ success: true, skipped: true, reason: 'WhatsApp reminders disabled', sent: 0 });
+  }
 
   const todayKey = indiaTodayKey();
   const dateLabel = (() => {

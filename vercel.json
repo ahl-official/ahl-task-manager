@@ -1,4 +1,7 @@
 {
+  "env": {
+    "DISABLE_WHATSAPP": "true"
+  },
   "crons": [
     {
       "path": "/api/reminders/high-priority?slot=11am",

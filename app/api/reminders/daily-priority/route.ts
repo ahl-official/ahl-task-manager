@@ -11,7 +11,7 @@ import {
 } from '@/lib/reminders/oneTime';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { formatDate } from '@/lib/utils';
-import { sendWhatsApp, msgDailyHighPriorityTasks, msgDailyTasksDueToday } from '@/lib/waha';
+import { automatedWhatsAppDisabled, sendWhatsApp, msgDailyHighPriorityTasks, msgDailyTasksDueToday } from '@/lib/waha';
 import type { Task } from '@/types';
 
 /**
@@ -30,6 +30,9 @@ function taskRank(task: Task) {
 
 export async function GET(req: NextRequest) {
   if (!await isCronOrAdmin(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (automatedWhatsAppDisabled()) {
+    return NextResponse.json({ success: true, skipped: true, reason: 'WhatsApp reminders disabled', sent: 0 });
+  }
   const mode = new URL(req.url).searchParams.get('mode') || 'today';
   const sent: string[] = [];
   const skipped: string[] = [];

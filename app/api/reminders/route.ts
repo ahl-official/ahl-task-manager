@@ -13,7 +13,7 @@ import {
   taskEndDateKey,
 } from '@/lib/reminders/oneTime';
 import { indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
-import { sendWhatsApp, msgRecentOverdueTasks } from '@/lib/waha';
+import { automatedWhatsAppDisabled, sendWhatsApp, msgRecentOverdueTasks } from '@/lib/waha';
 import type { Task } from '@/types';
 
 /**
@@ -23,6 +23,9 @@ import type { Task } from '@/types';
  */
 export async function GET(req: NextRequest) {
   if (!await isCronOrAdmin(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (automatedWhatsAppDisabled()) {
+    return NextResponse.json({ success: true, skipped: true, reason: 'WhatsApp reminders disabled', sent: 0 });
+  }
   const errors: string[] = [];
   let sent = 0;
 

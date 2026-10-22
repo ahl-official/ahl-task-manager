@@ -9,7 +9,7 @@ import {
   indiaHourNow,
   oneTimeHighPriority,
 } from '@/lib/reminders/oneTime';
-import { sendWhatsApp, msgHighPriorityRedBall } from '@/lib/waha';
+import { automatedWhatsAppDisabled, sendWhatsApp, msgHighPriorityRedBall } from '@/lib/waha';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 
 /**
@@ -20,6 +20,9 @@ import { indiaTodayKey } from '@/lib/utils/indiaDate';
 
 export async function GET(req: NextRequest) {
   if (!await isCronOrAdmin(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (automatedWhatsAppDisabled()) {
+    return NextResponse.json({ success: true, skipped: true, reason: 'WhatsApp reminders disabled', sent: 0 });
+  }
 
   const force = new URL(req.url).searchParams.get('force') === '1';
   const hour = indiaHourNow();

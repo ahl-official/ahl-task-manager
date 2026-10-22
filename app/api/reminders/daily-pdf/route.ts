@@ -7,7 +7,7 @@ import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminLog } from '@/lib/firebase/scores';
 import { isOpenOneTimeTask, taskEndDateKey } from '@/lib/reminders/oneTime';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
-import { sendWhatsAppFile } from '@/lib/waha';
+import { automatedWhatsAppDisabled, sendWhatsAppFile } from '@/lib/waha';
 import { buildDailyPendingTasksPdf } from '@/lib/reminders/pendingTasksPdf';
 import type { Task } from '@/types';
 
@@ -24,6 +24,9 @@ function formatTargetDate(task: Task): string {
 
 export async function GET(req: NextRequest) {
   if (!await isCronOrAdmin(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (automatedWhatsAppDisabled()) {
+    return NextResponse.json({ success: true, skipped: true, reason: 'WhatsApp reminders disabled', sent: 0 });
+  }
 
   const targetUid = new URL(req.url).searchParams.get('uid');
   const sent: string[] = [];
