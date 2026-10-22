@@ -10,6 +10,7 @@ export type UserRole = 'admin' | 'leader' | 'member' | 'intern';
 export interface AHLUser {
   uid: string;
   name: string;
+  rawName?: string;
   waNumber: string;       // full digits e.g. "919876543210"
   waNumberLast10: string; // last 10 digits
   role: UserRole;

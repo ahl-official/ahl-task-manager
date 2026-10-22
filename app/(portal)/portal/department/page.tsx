@@ -12,7 +12,7 @@ export default async function DepartmentTasksPage() {
 
   const [allTasks, allUsers, taskCounts, timelyTasks] = await Promise.all([
     session.role === 'leader'
-      ? adminGetAllTasks({ department: session.department, limit: 1000 })
+      ? adminGetAllTasks({ department: session.department, limit: 100 })
       : adminGetTasksByAssignee(session.uid),
     adminGetAllUsers(),
     session.role === 'leader' ? adminGetTaskCounts(session.department) : adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true, includeChecklist: true }),

@@ -14,8 +14,8 @@ import { cfTask, cfTimestampFields } from '@/lib/cloudflare/models';
 
 const COL      = 'tasks';
 const COUNTERS = 'counters';
-const DEFAULT_TASK_READ_LIMIT = 1000;
-const MAX_TASK_READ_LIMIT = 1000;
+const DEFAULT_TASK_READ_LIMIT = 100;
+const MAX_TASK_READ_LIMIT = 100;
 const REMINDER_TASK_READ_LIMIT = 500;
 const ACTIVE_TASK_STATUSES: TaskStatus[] = ['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue'];
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -414,6 +414,23 @@ export async function adminGetTask(taskId: string): Promise<Task | null> {
   return snap.exists ? normalizeTaskDoc(snap.id, snap.data() as Record<string, any>) : null;
 }
 
+export async function adminGetTasksByIds(taskIds: string[]): Promise<Task[]> {
+  const ids = Array.from(new Set(taskIds.filter(Boolean)));
+  if (!ids.length) return [];
+  if (hasCloudflareApi()) {
+    const batches: Task[][] = [];
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      const params = new URLSearchParams();
+      ids.slice(offset, offset + 100).forEach(id => params.append('id', id));
+      const rows = await cfApi<any[]>(`/tasks/by-ids?${params}`);
+      batches.push(rows.map(cfTask).filter(Boolean) as Task[]);
+    }
+    return batches.flat();
+  }
+  const rows = await Promise.all(ids.map(id => adminDb.collection(COL).doc(id).get()));
+  return rows.filter(row => row.exists).map(row => normalizeTaskDoc(row.id, row.data()!));
+}
+
 export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
   if (hasCloudflareApi()) {
     const key = `tasks:assignee:${uid}`;
@@ -561,7 +578,8 @@ export interface TaskAggregateCounts {
 export interface TaskReadScope {
   scope?: 'all' | 'mine' | 'handoff' | 'visible'; uid?: string; status?: string;
   assignedTo?: string; category?: string; priority?: string;
-  excludeRecurring?: boolean; includeChecklist?: boolean;
+  excludeRecurring?: boolean; includeChecklist?: boolean; verificationPending?: boolean;
+  weekStart?: string; weekEnd?: string;
 }
 
 function taskScopeParams(department?: string, options: TaskReadScope = {}) {
@@ -590,6 +608,23 @@ export async function adminSearchTasks(queryText: string, options: TaskReadScope
     const rows = await cfApi<any[]>('/tasks/search?' + params);
     return rows.map(cfTask).filter(Boolean) as Task[];
   });
+}
+
+export async function adminGetReminderTasks(mode: 'due' | 'recent' | 'high' | 'priority' | 'open', day: string, uid?: string): Promise<Task[]> {
+  if (!hasCloudflareApi()) throw new Error('Filtered reminder task reads require Cloudflare');
+  const tasks: Task[] = [];
+  let after = '';
+  for (;;) {
+    const params = new URLSearchParams({ mode, day });
+    if (uid) params.set('uid', uid);
+    if (after) params.set('after', after);
+    const page = await cfApi<any[]>(`/tasks/reminders?${params}`);
+    tasks.push(...page.map(cfTask).filter(Boolean) as Task[]);
+    if (page.length < 100) return tasks;
+    const next = String(page[page.length - 1]?.taskId || '');
+    if (!next || next === after) throw new Error('Reminder task pagination did not advance');
+    after = next;
+  }
 }
 
 export async function adminGetOverdueTasks(): Promise<Task[]> {
@@ -648,7 +683,8 @@ export async function adminGetTasksDueWithinHours(hours: number): Promise<Task[]
 
 export async function adminGetActiveTasks(limitCount = DEFAULT_TASK_READ_LIMIT): Promise<Task[]> {
   if (hasCloudflareApi()) {
-    const tasks = await cfApi<any[]>(`/tasks/active?limit=${encodeURIComponent(String(limitCount))}`);
+    const readLimit = Math.min(Math.max(limitCount, 1), MAX_TASK_READ_LIMIT);
+    const tasks = await cfApi<any[]>(`/tasks/active?limit=${readLimit}`);
     return tasks.map(cfTask).filter(Boolean) as Task[];
   }
 

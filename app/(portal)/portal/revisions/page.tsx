@@ -1,6 +1,6 @@
 import { getSession } from '@/lib/utils/auth';
 import { adminGetAllRevisions, adminGetRevisionsForUser } from '@/lib/firebase/revisions';
-import { adminGetAllTasks, adminGetTasksByAssignee, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetTasksByIds, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import RevisionsClient from '@/components/shared/RevisionsClient';
 import { filterTasksForSession, filterUsersForSession } from '@/lib/utils/access';
@@ -10,13 +10,11 @@ export default async function PortalRevisionsPage() {
   const session = await getSession();
   if (!session) return null;
 
-  const [revisions, allTasks, allUsers] = await Promise.all([
+  const [revisions, allUsers] = await Promise.all([
     session.role === 'leader' ? adminGetAllRevisions() : adminGetRevisionsForUser(session.uid),
-    session.role === 'leader'
-      ? adminGetAllTasks({ department: session.department, limit: 1000 })
-      : adminGetTasksByAssignee(session.uid),
     adminGetAllUsers(),
   ]);
+  const allTasks = await adminGetTasksByIds(revisions.map(revision => revision.taskId));
   const visibleUsers = filterUsersForSession(session, allUsers);
   const tasks = filterTasksForSession(session, hydrateTasksWithUsers(allTasks, visibleUsers));
   const visibleTaskIds = new Set(tasks.map(task => task.taskId));

@@ -9,7 +9,7 @@ export const revalidate = 0;
 export default async function AdminTasksPage() {
   const [session, tasks, counts, users] = await Promise.all([
     getSession(),
-    adminGetAllTasks({ limit: 1000 }),
+    adminGetAllTasks({ limit: 100 }),
     adminGetTaskCounts(),
     adminGetAllUsers(),
   ]);

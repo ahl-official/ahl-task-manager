@@ -1,6 +1,6 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
-import { adminGetActiveTasks, adminGetTasksByAssignee } from './tasks';
+import { adminGetTasksByAssignee } from './tasks';
 import type { Task, TaskCategory } from '@/types';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { timestamp } from '@/lib/cloudflare/timestamp';
@@ -65,33 +65,6 @@ export async function adminGetChecklistTasksForUser(uid: string, category?: Task
   );
 
   return hydrateChecklistTasks(uid, recurring);
-}
-
-export async function adminGetChecklistTasksForCategory(category: TaskCategory) {
-  const tasks = await adminGetActiveTasks(1000);
-  const recurring = tasks.filter(task =>
-    task.category === category &&
-    OPEN_STATUSES.has(task.status)
-  );
-
-  return adminGetChecklistRowsForTasks(recurring);
-}
-
-export async function adminGetChecklistRowsForTasks(tasks: Task[]) {
-  const byUid = new Map<string, Task[]>();
-  tasks
-    .filter(task => isRecurringCategory(task.category) && OPEN_STATUSES.has(task.status))
-    .forEach(task => {
-      const existing = byUid.get(task.assignedTo) ?? [];
-      existing.push(task);
-      byUid.set(task.assignedTo, existing);
-    });
-
-  const results = [];
-  for (const [uid, userTasks] of Array.from(byUid.entries())) {
-    results.push({ uid, tasks: await hydrateChecklistTasks(uid, userTasks) });
-  }
-  return results;
 }
 
 async function hydrateChecklistTasks(uid: string, tasks: Task[]) {

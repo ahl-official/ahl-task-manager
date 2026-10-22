@@ -84,6 +84,7 @@ tools/mis-audit/
 # Local audit, handover, and one-off Worker generation helpers.
 # The deployed Worker source lives in cloudflare/worker/reconciled/.
 tools/*.cjs
+tools/.checklist_*.json
 tools/build*.py
 tools/create*.py
 cloudflare/tools/mis-audit/

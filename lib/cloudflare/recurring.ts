@@ -1,6 +1,5 @@
 import { cfApi, hasCloudflareApi, CloudflareApiError } from '@/lib/cloudflare/api';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
-import type { Task } from '@/types';
 
 export interface RecurringTemplate {
   id: string;
@@ -207,173 +206,13 @@ export async function getRecurringChecklist(params: {
   }
 
   if (hasCloudflareApi()) {
-    try {
-      const search = new URLSearchParams();
-      if (params.category) search.set('category', params.category);
-      if (params.date) search.set('date', params.date);
-      if (params.userName) search.set('userName', params.userName);
-      if (params.uid) search.set('uid', params.uid);
-      const qs = search.toString();
-      return await cfApi<RecurringChecklistItem[]>(`/recurring/checklist${qs ? `?${qs}` : ''}`);
-    } catch (err: any) {
-      if (!(err instanceof CloudflareApiError && err.status === 404)) {
-        console.warn('Cloudflare getRecurringChecklist error, using tasks fallback', err.message);
-      }
-      try {
-        const tasksRes = await cfApi<Task[]>('/tasks?limit=all');
-        const tasksList = Array.isArray(tasksRes) ? tasksRes : (tasksRes as any)?.data || (tasksRes as any)?.tasks || [];
-        const targetDate = params.date || indiaTodayKey();
-
-        // 1. Group tasks by recurring definition key: description + assignee + category
-        const normalizeKey = (t: any) =>
-          `${(t.description || '').trim().toLowerCase()}::${(t.assignedToName || t.assignedTo || '').trim().toLowerCase()}::${(t.category || '').trim().toLowerCase()}`;
-
-        const distinctMap = new Map<string, { definition: any; history: any[] }>();
-
-        for (const t of tasksList) {
-          const cat = (t.category || '').toLowerCase();
-          if (!['daily', 'weekly', 'monthly'].includes(cat)) continue;
-          if (params.category && params.category.toLowerCase() !== 'all' && cat !== params.category.toLowerCase()) continue;
-          if (params.userName && (t.assignedToName || '').toLowerCase() !== params.userName.toLowerCase()) continue;
-          if (params.uid && t.assignedTo !== params.uid) continue;
-
-          const key = normalizeKey(t);
-          if (!distinctMap.has(key)) {
-            distinctMap.set(key, { definition: t, history: [t] });
-          } else {
-            const entry = distinctMap.get(key)!;
-            entry.history.push(t);
-            // Keep the one with latest ID or richest metadata as the definition
-            if (t.taskId > entry.definition.taskId) {
-              entry.definition = t;
-            }
-          }
-        }
-
-        const distinctEntries = Array.from(distinctMap.values());
-
-        if (distinctEntries.length > 0) {
-          const [y, m, d] = targetDate.split('-').map(Number);
-          const dt = new Date(Date.UTC(y, m - 1, d, 6, 0, 0));
-          const dow = dt.getUTCDay();
-          const dowIso = dow === 0 ? 7 : dow; // 1 = Mon .. 7 = Sun
-          const mondayDate = new Date(Date.UTC(y, m - 1, d - (dowIso - 1), 6, 0, 0));
-          const sundayDate = new Date(Date.UTC(y, m - 1, d + (7 - dowIso), 6, 0, 0));
-
-          const weekStartStr = mondayDate.toISOString().slice(0, 10);
-          const weekEndStr = sundayDate.toISOString().slice(0, 10);
-
-          const monthKey = `${y}-${String(m).padStart(2, '0')}`;
-          const lastDayOfMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
-          const endOfMonthDate = `${y}-${String(m).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
-
-          return distinctEntries.map(({ definition: t, history }) => {
-            const cat = (t.category || 'Daily').toLowerCase();
-            const isMonthly = cat === 'monthly';
-            const isWeekly = cat === 'weekly';
-
-            let dueDate = targetDate;
-            let periodStart: string | null = targetDate;
-            let periodEnd: string | null = targetDate;
-            let periodKey = targetDate;
-
-            if (isMonthly) {
-              periodKey = monthKey;
-              dueDate = endOfMonthDate;
-              periodStart = `${y}-${String(m).padStart(2, '0')}-01`;
-              periodEnd = endOfMonthDate;
-            } else if (isWeekly) {
-              // Determine day of week (1=Mon..7=Sun) from task or its date
-              let taskDow = t.dayOfWeek;
-              if (!taskDow && t.endDate) {
-                const parts = t.endDate.split('-');
-                if (parts.length === 3) {
-                  const tdt = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 6, 0, 0));
-                  const tdow = tdt.getUTCDay();
-                  taskDow = tdow === 0 ? 7 : tdow;
-                }
-              }
-              taskDow = taskDow || 5; // default Friday
-
-              // Calculate date for this week's occurrence
-              const weekOccurDate = new Date(mondayDate.getTime() + (taskDow - 1) * 86400000);
-              const wy = weekOccurDate.getUTCFullYear();
-              const wm = String(weekOccurDate.getUTCMonth() + 1).padStart(2, '0');
-              const wd = String(weekOccurDate.getUTCDate()).padStart(2, '0');
-              const calculatedWeekDate = `${wy}-${wm}-${wd}`;
-
-              dueDate = calculatedWeekDate;
-              periodStart = weekStartStr;
-              periodEnd = weekEndStr;
-              periodKey = weekStartStr;
-            }
-
-            const comp = localCompletions.get(`${t.taskId}:${periodKey}`);
-            let isCompleted = Boolean(comp && (comp.status === 'Completed' || comp.status === 'Verified'));
-            let completedAt = comp?.completedAt || null;
-            let itemStatus: 'Completed' | 'Verified' | 'Pending' | 'Dead' = comp ? (comp.status as any) : 'Pending';
-
-            // Check if any task in history was completed/verified for this period
-            if (!isCompleted) {
-              for (const hist of history) {
-                if ((hist.status === 'Completed' || hist.status === 'Verified') && hist.completedAt) {
-                  const compDate = String(hist.completedAt).slice(0, 10);
-                  let matched = false;
-                  if (isMonthly) {
-                    matched = compDate.startsWith(monthKey);
-                  } else if (isWeekly) {
-                    matched = Boolean(periodStart && periodEnd && compDate >= periodStart && compDate <= periodEnd);
-                  } else {
-                    matched = compDate === targetDate;
-                  }
-
-                  if (matched) {
-                    isCompleted = true;
-                    completedAt = String(hist.completedAt);
-                    itemStatus = hist.status === 'Verified' ? 'Verified' : 'Completed';
-                    break;
-                  }
-                }
-              }
-            }
-
-            return {
-              id: `${t.taskId}:${periodKey}`,
-              taskId: t.taskId,
-              templateId: t.taskId,
-              userId: t.assignedTo,
-              userName: t.assignedToName,
-              department: t.department || '',
-              description: t.description,
-              title: t.description.split('\n')[0].slice(0, 100),
-              notes: t.notes || '',
-              category: (t.category ? t.category.charAt(0).toUpperCase() + t.category.slice(1).toLowerCase() : 'Daily') as any,
-              frequency: t.category || 'Daily',
-              dayOfWeek: t.dayOfWeek || null,
-              dayOfMonth: t.dayOfMonth || null,
-              timeOfDay: t.timeOfDay || '10:00',
-              periodKey,
-              periodStart,
-              periodEnd,
-              dueDate,
-              completed: isCompleted,
-              completedAt: isCompleted ? completedAt : null,
-              isOnTime: true,
-              status: itemStatus,
-              dead: itemStatus === 'Dead',
-              deadAt: null,
-              remark: t.notes || '',
-              remarkBy: '',
-              label: `${t.category || 'Recurring'} Task`,
-              canComplete: true,
-              canManage: true,
-            };
-          });
-        }
-      } catch (tasksErr) {
-        console.warn('Failed to fetch recurring tasks fallback', tasksErr);
-      }
-    }
+    const search = new URLSearchParams();
+    if (params.category) search.set('category', params.category);
+    if (params.date) search.set('date', params.date);
+    if (params.userName) search.set('userName', params.userName);
+    if (params.uid) search.set('uid', params.uid);
+    const qs = search.toString();
+    return cfApi<RecurringChecklistItem[]>(`/recurring/checklist${qs ? `?${qs}` : ''}`);
   }
 
   // Local calculation
@@ -511,6 +350,37 @@ export async function getRecurringChecklist(params: {
   });
 
   return resultItems;
+}
+
+export async function getRecurringChecklistPage(params: {
+  category: string;
+  date?: string;
+  cursor?: string;
+  search?: string;
+  uid: string;
+  userName: string;
+  department?: string;
+  isAdmin: boolean;
+}): Promise<{ items: RecurringChecklistItem[]; nextCursor: string | null; hasMore: boolean }> {
+  const query = new URLSearchParams({ category: params.category, limit: '100' });
+  if (params.date) query.set('date', params.date);
+  if (params.cursor) query.set('cursor', params.cursor);
+  if (params.search) query.set('search', params.search);
+  if (!params.isAdmin) {
+    query.set('scopeUid', params.uid);
+    query.set('scopeName', params.userName);
+    if (params.department) query.set('scopeDepartment', params.department);
+  }
+  const response = await cfApi<{ items: RecurringChecklistItem[]; nextCursor: string | null; hasMore: boolean } | RecurringChecklistItem[]>(`/recurring/checklist?${query.toString()}`);
+  if (Array.isArray(response)) {
+    // Older Workers return an array until the paged endpoint is deployed.
+    const term = params.search?.toLowerCase();
+    const items = term ? response.filter(row => [row.taskId, row.title, row.description, row.userName, row.department, row.periodKey, row.status, row.remark]
+      .some(value => String(value || '').toLowerCase().includes(term))) : response;
+    return { items, nextCursor: null, hasMore: false };
+  }
+  if (!response || !Array.isArray(response.items)) throw new Error('Invalid checklist response from Cloudflare Worker');
+  return response;
 }
 
 export async function getRecurringPeriod(templateId: string, periodKey: string): Promise<RecurringChecklistItem> {

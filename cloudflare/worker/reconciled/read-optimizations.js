@@ -28,6 +28,12 @@ function scopeFilters(url) {
   const department=url.searchParams.get('department');if(department){clauses.push('department=?');binds.push(department);}
   if(url.searchParams.get('excludeRecurring')==='true')clauses.push("LOWER(COALESCE(category,'')) NOT IN ('daily','weekly','monthly')");
   for(const [param,col] of [['assignedTo','assigned_to'],['category','category'],['priority','priority']]){const value=url.searchParams.get(param);if(value){clauses.push(col+'=?');binds.push(value);}}
+  const weekStart=url.searchParams.get('weekStart'),weekEnd=url.searchParams.get('weekEnd');
+  if(weekStart||weekEnd){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(weekStart||'')||!/^\d{4}-\d{2}-\d{2}$/.test(weekEnd||'')||weekStart>weekEnd)throw new Error('Invalid task date range');
+    clauses.push("date(COALESCE(NULLIF(delayed_date,''),NULLIF(end_date,''),NULLIF(start_date,''),NULLIF(completed_at,'')),'+5 hours','+30 minutes') BETWEEN ? AND ?");
+    binds.push(weekStart,weekEnd);
+  }
   return {clauses,binds};
 }
 const empty=()=>({total:0,pending:0,inProgress:0,delayRequested:0,overdue:0,completed:0,verified:0,dead:0,active:0});
@@ -47,6 +53,26 @@ function statusFilter(clauses,binds,status){
 }
 export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
   if(req.method!=='GET')return null;
+  if(url.pathname==='/tasks/reminders'){
+    const mode=url.searchParams.get('mode'),day=url.searchParams.get('day'),uid=url.searchParams.get('uid');
+    const cursor=url.searchParams.get('after')||'';
+    if(!['due','recent','high','priority','open'].includes(mode)||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(day||'')||(mode==='open'&&!uid))throw new Error('Invalid reminder filter');
+    const shift=(n)=>{const d=new Date(`${day}T00:00:00.000Z`);d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);};
+    const clauses=["status IN ('Pending Accept','In Progress','Delay Requested','Overdue')"],binds=[];
+    if(mode!=='high')clauses.push("LOWER(COALESCE(NULLIF(category,''),'One Time')) IN ('one time','one-time')");
+    if(uid){clauses.push('assigned_to=?');binds.push(uid);}
+    if(mode==='due'||mode==='recent'){
+      clauses.push('end_date>=? AND end_date<?');
+      binds.push(mode==='due'?day:shift(-2),mode==='due'?shift(1):day);
+    }
+    if(mode==='high')clauses.push("(LOWER(priority) IN ('high','urgent') OR priority LIKE '%🔴%' OR LOWER(priority) LIKE '%red%')");
+    const where=clauses.join(' AND ');
+    const sql=mode==='priority'
+      ? `WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY assigned_to ORDER BY CASE WHEN status='Overdue' THEN 0 ELSE 1 END,CASE WHEN LOWER(priority)='high' THEN 0 WHEN LOWER(priority)='medium' THEN 1 ELSE 2 END,CASE WHEN end_date IS NULL THEN 1 ELSE 0 END,end_date,created_at) AS rank_in_user FROM tasks_current WHERE ${where}) SELECT * FROM ranked WHERE rank_in_user<=5 AND task_id>? ORDER BY task_id LIMIT 100`
+      : `SELECT * FROM tasks_current WHERE ${where} AND task_id>? ORDER BY task_id LIMIT 100`;
+    const rows=await env.DB.prepare(sql).bind(...binds,cursor).all();
+    return json((rows.results||[]).map(mapTask));
+  }
   if(url.pathname==='/tasks/counts'){
     const {clauses,binds}=scopeFilters(url);
     statusFilter(clauses,binds,url.searchParams.get('status'));
@@ -66,14 +92,15 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     const {clauses,binds}=scopeFilters(url),q=(url.searchParams.get('q')||'').trim();
     const limit=Math.min(Math.max(Number(url.searchParams.get('limit'))||100,1),100);
     const status=url.searchParams.get('status');
-    statusFilter(clauses,binds,status);
+    if(url.searchParams.get('verificationPending')==='true')clauses.push("status='Completed' AND COALESCE(verified_at,'')=''");
+    else statusFilter(clauses,binds,status);
     const id=q.match(/^T-?(\d+)$/i);
     if(id){clauses.push('task_id=?');binds.push('T-'+id[1].padStart(4,'0'));}
     else if(q){
       if(q.length<3)return json([]);
       const pattern='%'+q.replace(/[\\%_]/g,'\\$&')+'%';
       clauses.push("(task_id LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')");binds.push(pattern,pattern);
-    }else if(!status&&!url.searchParams.get('assignedTo')&&!url.searchParams.get('category')&&!url.searchParams.get('priority')&&!url.searchParams.get('department')&&(url.searchParams.get('scope')||'all')==='all')return json([]);
+    }else if(!status&&url.searchParams.get('verificationPending')!=='true'&&!url.searchParams.get('assignedTo')&&!url.searchParams.get('category')&&!url.searchParams.get('priority')&&!url.searchParams.get('department')&&(url.searchParams.get('scope')||'all')==='all')return json([]);
     const result=await env.DB.prepare(`SELECT * FROM tasks_current WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC,task_id DESC LIMIT ?`).bind(...binds,limit).all();
     return json((result.results||[]).map(mapTask));
   }

@@ -452,9 +452,7 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     const status = url.searchParams.get('status');
     const department = url.searchParams.get('department');
     const limitParam = url.searchParams.get('limit');
-    const limit = limitParam === 'all'
-      ? null
-      : Math.min(Math.max(Number(limitParam || 1000), 1), 1000);
+    const limit = Math.min(Math.max(Number(limitParam) || 100, 1), 100);
     const clauses: string[] = [];
     const binds: unknown[] = [];
     if (scope === 'mine' && uid) { clauses.push('assigned_to = ?'); binds.push(uid); }
@@ -465,18 +463,18 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     }
     if (department) { clauses.push('department = ?'); binds.push(department); }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const limitClause = limit ? 'LIMIT ?' : '';
+    const limitClause = 'LIMIT ?';
     const orderClause = status === 'Completed'
       ? 'ORDER BY COALESCE(completed_at, updated_at, created_at) DESC, created_at DESC, task_id DESC'
       : 'ORDER BY created_at DESC, task_id DESC';
     const rows = await env.DB.prepare(`SELECT * FROM tasks_current ${where} ${orderClause} ${limitClause}`)
-      .bind(...binds, ...(limit ? [limit] : []))
+      .bind(...binds, limit)
       .all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
 
   if (url.pathname === '/tasks/active' && req.method === 'GET') {
-    const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 1000), 1), 1000);
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 100, 1), 100);
     const placeholders = ACTIVE_STATUSES.map(() => '?').join(',');
     const rows = await env.DB.prepare(`SELECT * FROM tasks_current WHERE status IN (${placeholders}) ORDER BY created_at DESC, task_id DESC LIMIT ?`).bind(...ACTIVE_STATUSES, limit).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });

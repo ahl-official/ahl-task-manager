@@ -2,7 +2,7 @@ import { isCronOrAdmin } from "@/lib/utils/cronAuth";
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from 'next/server';
-import { adminGetActiveTasks } from '@/lib/firebase/tasks';
+import { adminGetReminderTasks } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminLog } from '@/lib/firebase/scores';
 import { isOpenOneTimeTask, taskEndDateKey } from '@/lib/reminders/oneTime';
@@ -31,10 +31,7 @@ export async function GET(req: NextRequest) {
   const errors: string[] = [];
 
   try {
-    const [users, tasks] = await Promise.all([
-      adminGetAllUsers(),
-      adminGetActiveTasks(1000),
-    ]);
+    const users = await adminGetAllUsers();
 
     const todayKey = indiaTodayKey();
     const activeUsers = users.filter(user => user.isActive !== false && user.waNumber);
@@ -45,6 +42,7 @@ export async function GET(req: NextRequest) {
     for (const user of targetUsers) {
       try {
         // Include ALL open (not marked done) pending tasks for the user
+        const tasks = await adminGetReminderTasks('open', todayKey, user.uid);
         const userPendingTasks = tasks.filter(
           task => task.assignedTo === user.uid && isOpenOneTimeTask(task)
         );

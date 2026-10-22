@@ -1,6 +1,6 @@
 import { adminGetAllRevisions } from '@/lib/firebase/revisions';
 import { getSession } from '@/lib/utils/auth';
-import { adminGetAllTasks, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetTasksByIds, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import RevisionsClient from '@/components/shared/RevisionsClient';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
@@ -9,11 +9,11 @@ export default async function AdminRevisionsPage() {
   const session = await getSession();
   if (!session) return null;
 
-  const [tasks, allRevisions, users] = await Promise.all([
-    adminGetAllTasks({ limit: 1000 }),
+  const [allRevisions, users] = await Promise.all([
     adminGetAllRevisions(),
     adminGetAllUsers(),
   ]);
+  const tasks = await adminGetTasksByIds(allRevisions.map(revision => revision.taskId));
 
   const revisions = allRevisions.map(r => ({
     ...r,

@@ -3,7 +3,7 @@ import { getSession } from '@/lib/utils/auth';
 import { hasCloudflareApi } from '@/lib/cloudflare/api';
 import {
   completeRecurringTask,
-  getRecurringChecklist,
+  getRecurringChecklistPage,
   getRecurringPeriod,
 } from '@/lib/cloudflare/recurring';
 import { checklistPermissions } from '@/lib/utils/checklistPermissions';
@@ -24,6 +24,8 @@ export async function GET(req: NextRequest) {
   const isAdmin = session.role === 'admin';
   const elevated = session.role === 'admin' || session.role === 'leader';
   const dateParam = searchParams.get('date') || undefined;
+  const cursor = searchParams.get('cursor') || undefined;
+  const search = (searchParams.get('search') || '').trim().slice(0, 100);
 
   const today = indiaTodayKey();
   if (dateParam && dateParam > today) {
@@ -48,13 +50,18 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const d1Items = await getRecurringChecklist({
+    const page = await getRecurringChecklistPage({
       category,
       date: dateParam,
-      userName: elevated ? undefined : session.name,
+      cursor,
+      search: search.length >= 2 ? search : undefined,
+      uid: session.uid,
+      userName: session.name,
+      department: session.role === 'leader' ? session.department : undefined,
+      isAdmin,
     });
 
-    const rows = (d1Items || []).filter(row => checklistPermissions(session, row).canView).map(row => {
+    const rows = page.items.filter(row => checklistPermissions(session, row).canView).map(row => {
       const permissions = checklistPermissions(session, row);
       return { ...row, mine: permissions.mine, isPast: permissions.isPast,
         canComplete: !row.completed && !row.dead && permissions.canChange,
@@ -70,6 +77,8 @@ export async function GET(req: NextRequest) {
         elevated,
         isAdmin,
         source: 'cloudflare_d1',
+        hasMore: page.hasMore,
+        nextCursor: page.nextCursor,
       },
       data: rows,
     }, { headers: { 'Cache-Control': 'private, no-store' } });

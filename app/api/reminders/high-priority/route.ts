@@ -1,7 +1,7 @@
 import { isCronOrAdmin } from "@/lib/utils/cronAuth";
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from 'next/server';
-import { adminGetActiveTasks } from '@/lib/firebase/tasks';
+import { adminGetReminderTasks } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminLog } from '@/lib/firebase/scores';
 import {
@@ -10,6 +10,7 @@ import {
   oneTimeHighPriority,
 } from '@/lib/reminders/oneTime';
 import { sendWhatsApp, msgHighPriorityRedBall } from '@/lib/waha';
+import { indiaTodayKey } from '@/lib/utils/indiaDate';
 
 /**
  * GET /api/reminders/high-priority
@@ -37,7 +38,7 @@ export async function GET(req: NextRequest) {
   try {
     const [users, tasks] = await Promise.all([
       adminGetAllUsers(),
-      adminGetActiveTasks(1000),
+      adminGetReminderTasks('high', indiaTodayKey()),
     ]);
 
     const high = oneTimeHighPriority(tasks);

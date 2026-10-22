@@ -26,6 +26,7 @@ import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils
 import { hasCloudflareApi } from '@/lib/cloudflare/api';
 import { createRecurringTemplate } from '@/lib/cloudflare/recurring';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
+import { normalizePersonName } from '@/lib/utils/names';
 
 
 export const dynamic = 'force-dynamic';
@@ -62,10 +63,10 @@ export async function GET(req: NextRequest) {
   const wantCounts = searchParams.get('counts') === 'true';
   const isFresh    = searchParams.get('fresh') === 'true' || searchParams.get('sync') === 'true';
   const requestedLimit = searchParams.get('limit');
-  const limitParam = Number(requestedLimit) || 1000;
+  const limitParam = Number(requestedLimit) || 100;
   const maxResults = typeof limitParam === 'number' && Number.isFinite(limitParam)
-    ? Math.min(Math.max(limitParam, 1), 1000)
-    : (limitParam === null ? null : 1000);
+    ? Math.min(Math.max(limitParam, 1), 100)
+    : 100;
 
   if (isFresh) {
     clearFirestoreReadCache('tasks:');
@@ -99,6 +100,10 @@ export async function GET(req: NextRequest) {
         scope: isAdmin || isLeader ? (scope === 'mine' ? 'mine' : scope === 'handoff' ? 'handoff' : 'all') : (scope === 'handoff' ? 'handoff' : 'visible'),
         uid: session.uid, assignedTo: searchParams.get('assignedTo') || undefined,
         category: searchParams.get('category') || undefined, priority: searchParams.get('priority') || undefined,
+        excludeRecurring: searchParams.get('excludeRecurring') === 'true',
+        verificationPending: searchParams.get('verificationPending') === 'true',
+        weekStart: searchParams.get('weekStart') || undefined,
+        weekEnd: searchParams.get('weekEnd') || undefined,
       });
       tasks = filterTasksForSession(session, tasks);
     } else if (scope === 'all' && (isAdmin || isLeader)) {
@@ -114,7 +119,7 @@ export async function GET(req: NextRequest) {
       tasks = mergePersonalDashboardTasks(databaseTasks, timelyTasks);
     }
 
-    return NextResponse.json({ success: true, data: tasks.slice(0, 1000).map(serializeTask) }, { headers: responseHeaders });
+    return NextResponse.json({ success: true, data: tasks.slice(0, maxResults).map(serializeTask) }, { headers: responseHeaders });
   } catch (err) {
     console.error('GET /api/tasks error', err);
     return NextResponse.json({ success: false, error: 'Failed to fetch tasks' }, { status: 500, headers: NO_CACHE_HEADERS });
@@ -124,27 +129,64 @@ export async function GET(req: NextRequest) {
 // POST /api/tasks — create task (admin only)
 export async function POST(req: NextRequest) {
   const apiSecret = process.env.API_SHARED_SECRET;
+  const taskCreationSecret = process.env.TASK_CREATION_SECRET;
   const authHeader = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || req.headers.get('x-api-secret');
-  let session = await getSession();
-
-  if (!session && apiSecret && authHeader === apiSecret) {
-    session = {
+  const isAutomation = Boolean(
+    (apiSecret && authHeader === apiSecret) ||
+    (taskCreationSecret && authHeader === taskCreationSecret)
+  );
+  // A valid server credential takes precedence over browser cookies.
+  let session = isAutomation
+    ? {
       uid: 'automation-system',
       name: 'Consultation Automation',
       waNumber: '',
-      role: 'admin',
+      role: 'admin' as const,
       department: 'Management',
-    };
-  }
+    }
+    : await getSession();
 
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   try {
     const body = await req.json();
 
     const [creator, allUsers] = await Promise.all([
-      adminGetUserByUid(session.uid),
+      isAutomation ? Promise.resolve(null) : adminGetUserByUid(session.uid),
       adminGetAllUsers(),
     ]);
+
+    // Names from automated callers must resolve to one active user. Never guess a UID.
+    const resolveActiveName = (value: unknown, field: string) => {
+      const normalized = normalizePersonName(value);
+      if (!normalized) return { error: `${field} is required`, status: 400 } as const;
+      const matches = allUsers.filter((user: AHLUser) => {
+        if (user.isActive === false) return false;
+        const names = [user.name, user.rawName];
+        // Legacy user IDs/display names may be stored as "user-shreeya".
+        if (/^user[-_]/i.test(user.uid)) names.push(user.uid.replace(/^user[-_]/i, ''));
+        if (/^user[-_]/i.test(user.name)) names.push(user.name.replace(/^user[-_]/i, ''));
+        return names.some(name => name && normalizePersonName(name) === normalized);
+      });
+      if (matches.length === 0) return { error: `${field} was not found among active users`, status: 400 } as const;
+      if (matches.length > 1) return { error: `${field} matches multiple active users`, status: 409 } as const;
+      return { user: matches[0] } as const;
+    };
+
+    let resolvedAssignee = allUsers.find((user: AHLUser) =>
+      user.isActive !== false && user.uid === String(body.assignedTo || '').trim()
+    );
+    if (!resolvedAssignee) {
+      const match = resolveActiveName(body.assignedToName || body.assignedTo, 'assignedTo');
+      if ('error' in match) return NextResponse.json({ success: false, error: match.error }, { status: match.status });
+      body.assignedTo = match.user.uid;
+      resolvedAssignee = match.user;
+    }
+
+    if (body.handoffName || body.handoff) {
+      const match = resolveActiveName(body.handoffName || body.handoff, 'handoff');
+      if ('error' in match) return NextResponse.json({ success: false, error: match.error }, { status: match.status });
+      body.handoffUid = match.user.uid;
+    }
 
     // ONLY for automated tasks, set default checker to Tejal
     if (session.uid === 'automation-system') {
@@ -154,13 +196,7 @@ export async function POST(req: NextRequest) {
       body.handoffUid = body.handoffUid || session.uid;
     }
 
-    const targetAssignee = String(body.assignedTo || body.assignedToName || '').trim().toLowerCase();
-    const assignee = allUsers.find((u: AHLUser) => {
-      const uName = (u.name || '').trim().toLowerCase();
-      const uUid = (u.uid || '').trim().toLowerCase();
-      const uRaw = ((u as any).rawName || '').trim().toLowerCase();
-      return uUid === targetAssignee || uName === targetAssignee || (uRaw && uRaw === targetAssignee);
-    }) || (await adminGetUserByUid(body.assignedTo));
+    const assignee = resolvedAssignee;
 
     if (!assignee) {
       throw new Error(`Selected assignee was not found: ${body.assignedTo || body.assignedToName}`);
@@ -287,7 +323,9 @@ export async function POST(req: NextRequest) {
     });
 
     // Score: tasks assigned
-    await adminIncrementScore(task.assignedTo, 'tasksAssigned');
+    await adminIncrementScore(task.assignedTo, 'tasksAssigned').catch(err => {
+      console.error('[Tasks API] Task was created but score update failed', err);
+    });
 
     // WA notifications safely handling string or Timestamp endDate
     const endDateIso = !task.endDate
@@ -314,7 +352,7 @@ export async function POST(req: NextRequest) {
         datesRequired: skipAcceptance && !task.endDate,
       }),
       task.taskId,
-    );
+    ).catch(err => console.error('[Tasks API] Assignee notification failed', err));
 
     await sendWhatsApp(
       task.handoffWa,
@@ -325,7 +363,7 @@ export async function POST(req: NextRequest) {
         priority:       task.priority,
       }),
       task.taskId,
-    );
+    ).catch(err => console.error('[Tasks API] Handoff notification failed', err));
 
     // Notify coordinator WA if configured
     const coordinatorWa = process.env.COORDINATOR_WA || '';
@@ -339,13 +377,14 @@ export async function POST(req: NextRequest) {
           priority:       task.priority,
         }),
         task.taskId,
-      );
+      ).catch(err => console.error('[Tasks API] Coordinator notification failed', err));
     }
 
-    await adminLog('TASK_CREATED', `Task ${task.taskId} created`, {
+    // The Cloudflare create route already records TASK_CREATED.
+    if (!hasCloudflareApi()) await adminLog('TASK_CREATED', `Task ${task.taskId} created`, {
       taskId: task.taskId,
-      uid:    session.uid,
-    });
+      uid: session.uid,
+    }).catch(err => console.error('[Tasks API] Task was created but audit log failed', err));
 
     return NextResponse.json({ success: true, data: serializeTask(task) }, { status: 201 });
   } catch (err: any) {

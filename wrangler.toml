@@ -1,4 +1,5 @@
 name = "ahl-task-manager-api"
+account_id = "b20892b35b7ece3670ecaf46e879d5c7"
 main = "cloudflare/worker/reconciled/index.js"
 compatibility_date = "2026-06-16"
 keep_vars = true
@@ -8,9 +9,7 @@ binding = "DB"
 database_name = "ahl_task_manager"
 database_id = "412c329f-70cb-4224-8e4b-35bdbf155fbc"
 
-[[r2_buckets]]
-binding = "ARCHIVE"
-bucket_name = "ahl-task-manager"
-
 [vars]
 APP_ORIGIN = "https://ahl-task-manager.vercel.app"
+WAHA_URL = "https://waha.hairscalptradingco.com"
+WAHA_SESSION = "processC"

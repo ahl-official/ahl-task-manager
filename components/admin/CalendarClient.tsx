@@ -23,6 +23,17 @@ export default function CalendarClient({ tasks, users }: Props) {
   const [userFilter, setUserFilter]     = useState('all');
 
   useEffect(() => {
+    if (!departmentFilter) { setTaskItems([]); return; }
+    const controller = new AbortController();
+    const month = format(currentDate, 'yyyy-MM');
+    fetch(`/api/tasks/calendar?${new URLSearchParams({ department: departmentFilter, month })}`, { signal: controller.signal })
+      .then(response => response.json())
+      .then(result => { if (!controller.signal.aborted && result.success) setTaskItems(result.data); })
+      .catch(() => { if (!controller.signal.aborted) setTaskItems([]); });
+    return () => controller.abort();
+  }, [departmentFilter, currentDate]);
+
+  useEffect(() => {
     setTaskItems(tasks);
   }, [tasks]);
 

@@ -1,7 +1,7 @@
 import { isCronOrAdmin } from "@/lib/utils/cronAuth";
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from 'next/server';
-import { adminGetActiveTasks } from '@/lib/firebase/tasks';
+import { adminGetReminderTasks } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminLog } from '@/lib/firebase/scores';
 import {
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
   try {
     const [users, tasks] = await Promise.all([
       adminGetAllUsers(),
-      adminGetActiveTasks(1000),
+      adminGetReminderTasks(mode === 'priority' ? 'priority' : 'due', indiaTodayKey()),
     ]);
 
     const todayKey = indiaTodayKey();

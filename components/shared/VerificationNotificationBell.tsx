@@ -6,7 +6,7 @@ import { cn, formatDateTime } from '@/lib/utils';
 import TaskModal from '@/components/shared/TaskModal';
 import type { TaskSerialized } from '@/types';
 
-const POLL_MS = 45_000;
+const POLL_MS = 5 * 60_000;
 
 function isPortalTask(task: TaskSerialized) {
   return task.createdBy !== 'timely-sheet' && !/^(office|salon|weekly)-/i.test(task.taskId);
@@ -24,25 +24,28 @@ export default function VerificationNotificationBell({
   const [items, setItems] = useState<TaskSerialized[]>([]);
   const [selected, setSelected] = useState<TaskSerialized | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const lastLoadedAt = useRef(0);
   const isAdmin = role === 'admin';
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
       const url = isAdmin
-        ? '/api/tasks?scope=all&status=Completed&limit=100'
-        : '/api/tasks?scope=handoff&status=Completed&limit=100';
+        ? '/api/tasks?scope=all&filter=true&verificationPending=true&excludeRecurring=true&limit=50'
+        : '/api/tasks?scope=handoff&filter=true&verificationPending=true&excludeRecurring=true&limit=50';
       const res = await fetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to load notifications');
       const pending = (data.data as TaskSerialized[])
         .filter(task =>
           task.status === 'Completed'
+          && !task.verifiedAt
           && isPortalTask(task)
           && (isAdmin || task.handoffUid === currentUid)
         )
         .sort((a, b) => new Date(b.completedAt || b.updatedAt).getTime() - new Date(a.completedAt || a.updatedAt).getTime());
       setItems(pending);
+      lastLoadedAt.current = Date.now();
     } catch {
       // Keep last good list; avoid toast spam on background polls.
     } finally {
@@ -52,8 +55,15 @@ export default function VerificationNotificationBell({
 
   useEffect(() => {
     load();
-    const timer = window.setInterval(() => load(true), POLL_MS);
-    return () => window.clearInterval(timer);
+    const refreshIfStale = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastLoadedAt.current >= POLL_MS) load(true);
+    };
+    const timer = window.setInterval(refreshIfStale, POLL_MS);
+    document.addEventListener('visibilitychange', refreshIfStale);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshIfStale);
+    };
   }, [load]);
 
   useEffect(() => {
@@ -64,12 +74,26 @@ export default function VerificationNotificationBell({
     return () => document.removeEventListener('mousedown', onPointerDown);
   }, []);
 
+  useEffect(() => {
+    function onTaskStatusUpdated(event: Event) {
+      const task = (event as CustomEvent<TaskSerialized>).detail;
+      if (!task?.taskId) return;
+      setItems(current => {
+        const other = current.filter(item => item.taskId !== task.taskId);
+        if (task.status !== 'Completed' || task.verifiedAt || !isPortalTask(task) || (!isAdmin && task.handoffUid !== currentUid)) return other;
+        return [task, ...other].slice(0, 50);
+      });
+    }
+    window.addEventListener('task-status-updated', onTaskStatusUpdated);
+    return () => window.removeEventListener('task-status-updated', onTaskStatusUpdated);
+  }, [currentUid, isAdmin]);
+
   function updateTask(updated?: TaskSerialized) {
     if (!updated) {
       setSelected(null);
       return;
     }
-    if (updated.status !== 'Completed') {
+    if (updated.status !== 'Completed' || updated.verifiedAt) {
       setItems(current => current.filter(task => task.taskId !== updated.taskId));
       setSelected(null);
       return;
@@ -93,7 +117,7 @@ export default function VerificationNotificationBell({
           onClick={() => {
             const nextOpen = !open;
             setOpen(nextOpen);
-            if (nextOpen) load(items.length > 0);
+            if (nextOpen && Date.now() - lastLoadedAt.current >= 60_000) load(items.length > 0);
           }}
           className={cn(
             'relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-900',

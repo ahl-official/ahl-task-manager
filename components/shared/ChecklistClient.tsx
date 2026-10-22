@@ -18,6 +18,7 @@ interface ChecklistRow {
   userName: string;
   department: string;
   description: string;
+  title?: string;
   category: ChecklistCategory;
   periodKey: string;
   periodStart: string | null;
@@ -44,6 +45,9 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   const [category, setCategory] = useState<ChecklistCategory>(initialCategory);
   const [rows, setRows] = useState<ChecklistRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
   const [ticking, setTicking] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [department, setDepartment] = useState('');
@@ -57,8 +61,15 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   const [deleteTarget, setDeleteTarget] = useState<ChecklistRow | null>(null);
   const [deleteConfirmMode, setDeleteConfirmMode] = useState<'day' | 'whole' | null>(null);
 
-  const categoryCache = useRef<Record<string, { rows: ChecklistRow[]; elevated: boolean; currentUserName: string }>>({});
+  const categoryCache = useRef<Record<string, { rows: ChecklistRow[]; elevated: boolean; currentUserName: string; nextCursor: string | null }>>({});
+  const pageSentinel = useRef<HTMLDivElement | null>(null);
+  const requestKey = useRef('');
+  const pageInFlight = useRef(false);
+  const searchedKeys = useRef(new Set<string>());
   const viewingMonday = Boolean(date && isoWeekday(date) === 1);
+  const deleteDayLabel = deleteTarget?.category === 'Daily' && deleteTarget.periodKey === indiaTodayKey()
+    ? "Delete today's task"
+    : deleteTarget?.category === 'Daily' ? "Delete this day's task" : 'Delete this occurrence';
 
 
 
@@ -92,6 +103,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       const matchesSearch = !q ||
         (row.taskId && row.taskId.toLowerCase().includes(q)) ||
         (row.description && row.description.toLowerCase().includes(q)) ||
+        (row.title && row.title.toLowerCase().includes(q)) ||
         (row.userName && row.userName.toLowerCase().includes(q)) ||
         (row.department && row.department.toLowerCase().includes(q)) ||
         (row.label && row.label.toLowerCase().includes(q)) ||
@@ -106,15 +118,20 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
 
   async function loadRows(nextCategory = category, nextDate = date, forceRefresh = false) {
     const cacheKey = `${nextCategory}:${nextDate || 'today'}`;
+    requestKey.current = cacheKey;
+    if (forceRefresh) searchedKeys.current.clear();
     const cached = categoryCache.current[cacheKey];
     if (cached && !forceRefresh) {
       setRows(cached.rows);
       setElevated(cached.elevated);
       setCurrentUserName(cached.currentUserName);
+      setNextCursor(cached.nextCursor);
       setLoading(false);
-    } else {
-      setLoading(true);
+      return;
     }
+    setLoading(true);
+    setRows([]);
+    setNextCursor(null);
 
     try {
       const qs = new URLSearchParams({ category: nextCategory });
@@ -124,18 +141,50 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       if (!data.success) throw new Error(data.error);
       const elevatedVal = Boolean(data.meta?.elevated);
       const userNameVal = String(data.meta?.currentUserName ?? '');
+      if (requestKey.current !== cacheKey) return;
       categoryCache.current[cacheKey] = {
         rows: data.data,
         elevated: elevatedVal,
         currentUserName: userNameVal,
+        nextCursor: data.meta?.nextCursor || null,
       };
       setRows(data.data);
+      setNextCursor(data.meta?.nextCursor || null);
       setElevated(elevatedVal);
       setCurrentUserName(userNameVal);
     } catch (err: any) {
       if (!cached) toast.error(err.message ?? 'Failed to load checklist');
     } finally {
-      setLoading(false);
+      if (requestKey.current === cacheKey) setLoading(false);
+    }
+  }
+
+  async function loadMore() {
+    if (!nextCursor || pageInFlight.current || loading || search.trim()) return;
+    const cacheKey = `${category}:${date || 'today'}`;
+    const cursor = nextCursor;
+    pageInFlight.current = true;
+    setLoadingMore(true);
+    try {
+      const qs = new URLSearchParams({ category, cursor });
+      if (date) qs.set('date', date);
+      const res = await fetch(`/api/checklist?${qs}`);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      if (requestKey.current !== cacheKey) return;
+      const next = data.meta?.nextCursor || null;
+      setNextCursor(next);
+      setRows(current => {
+        const ids = new Set(current.map(row => row.id));
+        const merged = [...current, ...data.data.filter((row: ChecklistRow) => !ids.has(row.id))];
+        categoryCache.current[cacheKey] = { rows: merged, elevated, currentUserName, nextCursor: next };
+        return merged;
+      });
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to load more checklist tasks');
+    } finally {
+      pageInFlight.current = false;
+      setLoadingMore(false);
     }
   }
 
@@ -315,7 +364,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       if (categoryCache.current[cacheKey]) {
         categoryCache.current[cacheKey].rows = categoryCache.current[cacheKey].rows.filter(r => r.id !== row.id);
       }
-      toast.success(`Deleted ${row.periodKey} row — other days kept`);
+      toast.success('Task removed for this period');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to remove this day');
     } finally {
@@ -340,7 +389,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       for (const key of Object.keys(categoryCache.current)) {
         categoryCache.current[key].rows = categoryCache.current[key].rows.filter(r => r.taskId !== templateId);
       }
-      toast.success('Whole task deleted — today/future rows removed, past rows kept');
+      toast.success('Recurring task deleted');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to delete task');
     } finally {
@@ -354,6 +403,53 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
     loadRows(category, date);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category, date]);
+
+  useEffect(() => {
+    if (!nextCursor || loading || loadingMore || search.trim() || !pageSentinel.current) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries[0]?.isIntersecting) void loadMore();
+    }, { rootMargin: '250px' });
+    observer.observe(pageSentinel.current);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nextCursor, loading, loadingMore, search, category, date]);
+
+  useEffect(() => {
+    const query = search.trim();
+    if (loading || query.length < 2 || visibleRows.length > 0) {
+      setSearching(false);
+      return;
+    }
+    const lookupKey = `${category}:${date || 'today'}:${query.toLowerCase()}`;
+    if (searchedKeys.current.has(lookupKey)) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      searchedKeys.current.add(lookupKey);
+      setSearching(true);
+      try {
+        const qs = new URLSearchParams({ category, search: query });
+        if (date) qs.set('date', date);
+        const res = await fetch(`/api/checklist?${qs}`, { signal: controller.signal });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        if (controller.signal.aborted) return;
+        if (requestKey.current !== `${category}:${date || 'today'}`) return;
+        setRows(current => {
+          const ids = new Set(current.map(row => row.id));
+          return [...current, ...data.data.filter((row: ChecklistRow) => !ids.has(row.id))];
+        });
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          searchedKeys.current.delete(lookupKey);
+          toast.error(err.message ?? 'Checklist search failed');
+        } else searchedKeys.current.delete(lookupKey);
+      } finally {
+        if (!controller.signal.aborted) setSearching(false);
+      }
+    }, 350);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, category, date, loading, visibleRows.length]);
 
   return (
     <div className="space-y-4">
@@ -497,15 +593,15 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       <div className="grid gap-3 md:grid-cols-3">
         <div className="card border-0 bg-brand-50 p-4">
           <p className="text-2xl font-bold text-brand-700">{completedCount}</p>
-          <p className="text-xs font-medium text-brand-700">Completed</p>
+          <p className="text-xs font-medium text-brand-700">Completed in loaded tasks</p>
         </div>
         <div className="card border-0 bg-gray-50 p-4">
           <p className="text-2xl font-bold text-gray-800">{visibleRows.length}</p>
-          <p className="text-xs font-medium text-gray-500">Assigned recurring tasks</p>
+          <p className="text-xs font-medium text-gray-500">Loaded recurring tasks</p>
         </div>
         <div className="card border-0 bg-white p-4">
           <p className="text-2xl font-bold text-gray-800">{visibleRows.length ? Math.round((completedCount / visibleRows.length) * 100) : 0}%</p>
-          <p className="text-xs font-medium text-gray-500">Current period progress</p>
+          <p className="text-xs font-medium text-gray-500">Loaded task progress</p>
         </div>
       </div>
 
@@ -528,7 +624,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
 
         {!loading && visibleRows.length === 0 && (
           <div className="px-4 py-12 text-center text-sm text-gray-400">
-            No {category.toLowerCase()} checklist tasks match these filters.
+            {searching ? 'Searching checklist...' : `No ${category.toLowerCase()} checklist tasks match these filters.`}
           </div>
         )}
 
@@ -657,6 +753,14 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
             ))}
           </div>
         )}
+        {!loading && nextCursor && !search.trim() && (
+          <div ref={pageSentinel} className="flex justify-center px-4 py-4">
+            <button type="button" onClick={() => void loadMore()} disabled={loadingMore} className="btn-secondary py-2">
+              {loadingMore ? <Loader2 size={14} className="animate-spin" /> : null}
+              {loadingMore ? 'Loading more...' : 'Load more tasks'}
+            </button>
+          </div>
+        )}
       </div>
 
       {deleteTarget && (
@@ -665,7 +769,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-gray-900">
-                  {deleteConfirmMode ? 'Confirm delete' : 'Remove checklist task'}
+                  {deleteConfirmMode ? 'Confirm deletion' : 'Delete checklist task'}
                 </h2>
                 <p className="mt-1 text-sm text-gray-500 line-clamp-2">{deleteTarget.description}</p>
                 <p className="mt-1 text-xs text-gray-400">
@@ -692,9 +796,9 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
                   onClick={() => setDeleteConfirmMode('day')}
                   className="flex w-full flex-col items-start gap-0.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-left hover:bg-amber-100 disabled:opacity-50"
                 >
-                  <span className="text-sm font-semibold text-amber-900">Delete for this day only</span>
+                  <span className="text-sm font-semibold text-amber-900">{deleteDayLabel}</span>
                   <span className="text-xs text-amber-800">
-                    Hard-deletes the {deleteTarget.periodKey} row from the database. Other days stay.
+                    Only this occurrence is removed.
                   </span>
                 </button>
                 {elevated && (
@@ -704,9 +808,9 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
                     onClick={() => setDeleteConfirmMode('whole')}
                     className="flex w-full flex-col items-start gap-0.5 rounded-md border border-red-200 bg-red-50 px-3 py-3 text-left hover:bg-red-100 disabled:opacity-50"
                   >
-                    <span className="text-sm font-semibold text-red-800">Delete whole recurring task</span>
+                    <span className="text-sm font-semibold text-red-800">Delete whole task</span>
                     <span className="text-xs text-red-700">
-                      Removes the template and hard-deletes today + future period rows. Past rows stay.
+                      Stops future repeats. Past history stays.
                     </span>
                   </button>
                 )}
@@ -725,8 +829,8 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
               <div className="space-y-3">
                 <p className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
                   {deleteConfirmMode === 'day'
-                    ? `Are you sure? This permanently deletes the ${deleteTarget.periodKey} row from the database. Other days stay.`
-                    : 'Are you sure? This permanently deletes today and future rows for this task. Past rows stay in the database.'}
+                    ? `Remove this task for ${deleteTarget.periodKey}? Other dates stay.`
+                    : 'Delete this recurring task? Today and future dates are removed; past history stays.'}
                 </p>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <button
@@ -750,7 +854,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
                     )}
                   >
                     {ticking === deleteTarget.id ? <Loader2 size={15} className="animate-spin" /> : null}
-                    {deleteConfirmMode === 'day' ? 'Yes, delete this day' : 'Yes, delete whole task'}
+                    {deleteConfirmMode === 'day' ? 'Delete this occurrence' : 'Delete whole task'}
                   </button>
                 </div>
               </div>

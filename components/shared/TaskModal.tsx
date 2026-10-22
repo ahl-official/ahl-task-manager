@@ -109,6 +109,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
       toast.success('Checker updated successfully');
       setIsEditingChecker(false);
       onUpdate(data.data);
+      window.dispatchEvent(new CustomEvent('task-status-updated', { detail: data.data }));
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to update checker');
     } finally {
@@ -140,6 +141,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
       toast.success(successMessage[action] ?? 'Task updated successfully');
       if (['dead', 'remark', 'revive'].includes(action)) setRemark('');
       onUpdate(data.data);
+      window.dispatchEvent(new CustomEvent('task-status-updated', { detail: data.data }));
     } catch (err: any) {
       toast.error(err.message ?? 'Action failed');
     } finally {

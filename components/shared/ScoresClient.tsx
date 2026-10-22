@@ -177,6 +177,20 @@ export default function ScoresClient({
   }, [tasks]);
 
   useEffect(() => {
+    if (!selectedUser) return;
+    const controller = new AbortController();
+    const params = new URLSearchParams({ scope: 'all', filter: 'true', assignedTo: selectedUser, weekStart: selectedWeekMeta.weekStart, weekEnd: selectedWeekMeta.weekEnd, excludeRecurring: 'true', limit: '100' });
+    fetch(`/api/tasks?${params}`, { signal: controller.signal })
+      .then(response => response.json())
+      .then(result => {
+        if (!controller.signal.aborted && result.success && Array.isArray(result.data))
+          setTaskItems(result.data);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [selectedUser, selectedWeekMeta.weekStart, selectedWeekMeta.weekEnd]);
+
+  useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!nameBoxRef.current?.contains(e.target as Node)) setNameMenuOpen(false);
     }
@@ -268,24 +282,10 @@ export default function ScoresClient({
 
   function scoreForIdentity(identity: { uid: string; name: string; department: string }) {
     const existing = scoreMap[identity.uid];
-    const rows = filteredTaskItems.filter(task => task.assignedTo === identity.uid);
-    const completedRows = rows.filter(task => ['Completed', 'Verified'].includes(task.status));
-    const onTimeRows = completedRows.filter(task => {
-      if (!task.completedAt) return false;
-      const due = task.delayedDate ?? task.endDate;
-      return due ? new Date(task.completedAt).getTime() <= new Date(due).getTime() : true;
-    });
-    const lateRows = rows.filter(task => {
-      if (task.status === 'Overdue') return true;
-      const todayKey = indiaTodayKey();
-      const dueKey = task.endDate ? indiaDateKey(task.endDate) : '';
-      if (dueKey && indiaDayOffset(todayKey, dueKey) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(task.status)) return true;
-      if (!task.completedAt) return false;
-      const due = task.delayedDate ?? task.endDate;
-      return due ? new Date(task.completedAt).getTime() > new Date(due).getTime() : false;
-    });
-    const assigned = rows.length;
-    const onTime = onTimeRows.length;
+    const delegation = lookupMis(pdfByKey, identity.uid, identity.name)?.delegation;
+    const assigned = delegation?.planned ?? 0;
+    const done = delegation?.done ?? 0;
+    const onTime = delegation?.onTime ?? 0;
     const monthlyScore = assigned > 0
       ? Math.min(100, Math.max(0, Math.round((onTime / assigned) * 100)))
       : (isCurrentWeek ? Math.min(100, Math.max(0, existing?.monthlyScore ?? 0)) : 0);
@@ -296,9 +296,9 @@ export default function ScoresClient({
       department: identity.department || existing?.department || '',
       waNumber: existing?.waNumber ?? '',
       tasksAssigned: assigned,
-      tasksCompleted: completedRows.length,
+      tasksCompleted: done,
       onTimeCount: onTime,
-      lateCount: lateRows.length,
+      lateCount: Math.max(0, done - onTime),
       monthlyScore,
       lastUpdated: existing?.lastUpdated ?? null,
     };
@@ -317,7 +317,7 @@ export default function ScoresClient({
     });
 
     return rows;
-  }, [activeUsers, scoreMap, scores, filteredTaskItems, isCurrentWeek]);
+  }, [activeUsers, scoreMap, scores, pdfByKey, isCurrentWeek]);
 
   const departments = useMemo(() => {
     const fromUsers = activeUsers.map(user => user.department).filter(Boolean);
@@ -349,11 +349,13 @@ export default function ScoresClient({
 
   function countsForUser(uid: string) {
     const rows = filteredTaskItems.filter(task => task.assignedTo === uid);
+    const identity = users.find(user => user.uid === uid) ?? scores.find(score => score.uid === uid);
+    const delegation = lookupMis(pdfByKey, uid, identity?.name ?? '')?.delegation;
     return {
-      total: rows.length,
+      total: delegation?.planned ?? 0,
       pending: rows.filter(task => ['Pending Accept', 'Shifted (Pending Accept)'].includes(task.status)).length,
       active: rows.filter(task => ['In Progress', 'Shifted (In Progress)'].includes(task.status)).length,
-      completed: rows.filter(task => ['Completed', 'Verified', 'Shifted (Completed)', 'Shifted (Verified)'].includes(task.status)).length,
+      completed: delegation?.done ?? 0,
       overdue: rows.filter(isTaskOverdue).length,
     };
   }
@@ -972,10 +974,7 @@ function ScoreList({
                   <div className="mb-3 flex flex-wrap gap-2">
                     {[
                       { label: 'All', value: 'all' as TaskFilter, count: counts.total },
-                      { label: 'Pending', value: 'Pending Accept' as TaskFilter, count: counts.pending },
-                      { label: 'Active', value: 'In Progress' as TaskFilter, count: counts.active },
                       { label: 'Done', value: 'Completed' as TaskFilter, count: counts.completed },
-                      { label: 'Late', value: 'Overdue' as TaskFilter, count: counts.overdue },
                     ].map(item => (
                       <button
                         key={item.value}
@@ -990,6 +989,7 @@ function ScoreList({
                       </button>
                     ))}
                   </div>
+                  {counts.total > visibleTasks.length && <p className="mb-2 text-xs text-gray-400">Showing up to 100 matching tasks. Search in Tasks for older items.</p>}
 
                   {visibleTasks.length === 0 && (
                     <div className="rounded-lg bg-gray-50 px-4 py-6 text-center text-sm text-gray-400">

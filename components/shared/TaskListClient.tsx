@@ -125,7 +125,7 @@ export default function TaskListClient({
       setSyncStatus(null);
       const scope = role === 'admin' ? 'all' : (mineOnly ? 'mine' : 'all');
       const deptParam = departmentFilter !== 'all' ? `&department=${encodeURIComponent(departmentFilter)}` : '';
-      const res = await fetch(`/api/tasks?scope=${scope}${deptParam}&limit=1000&fresh=true&_t=${Date.now()}`);
+      const res = await fetch(`/api/tasks?scope=${scope}${deptParam}&limit=100&fresh=true`);
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
         setTaskItems(json.data);
@@ -158,7 +158,7 @@ export default function TaskListClient({
       (priorityFilter === 'all' || t.priority === priorityFilter) &&
       (!mineOnly || t.assignedTo === currentUid) &&
       (statusFilter === 'all' || (statusFilter === 'Completed' ? ['Completed','Verified'].includes(t.status) : statusFilter === 'Overdue' ? t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(indiaTodayKey(),indiaDateKey(t.endDate!)) < 0 && ['Pending Accept','In Progress','Delay Requested'].includes(t.status)) : normalizeBaseStatus(t.status) === statusFilter)));
-    if (local) return;
+    if (local && !filteredRequest) return;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       setIsSearchingServer(true);

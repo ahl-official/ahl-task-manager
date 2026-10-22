@@ -1,9 +1,7 @@
 import { adminGetAllScores } from '@/lib/firebase/scores';
-import { adminGetAllTasks, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminGetDepartments, serializeDepartment } from '@/lib/firebase/departments';
 import ScoresClient from '@/components/shared/ScoresClient';
-import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 
 function scoreLastUpdatedIso(value: unknown): string {
   if (!value) return new Date().toISOString();
@@ -19,9 +17,8 @@ function scoreLastUpdatedIso(value: unknown): string {
 }
 
 export default async function AdminScoresPage() {
-  const [scores, tasks, users, departments] = await Promise.all([
+  const [scores, users, departments] = await Promise.all([
     adminGetAllScores(),
-    adminGetAllTasks({ limit: 1000 }),
     adminGetAllUsers(),
     adminGetDepartments(),
   ]);
@@ -29,9 +26,6 @@ export default async function AdminScoresPage() {
     ...s,
     lastUpdated: scoreLastUpdatedIso(s.lastUpdated),
   }));
-  const hydratedTasks = hydrateTasksWithUsers(tasks, users);
-
-  const serializedTasks = hydratedTasks.map(serializeTask);
   const serializedUsers = users.map(user => ({
     uid: user.uid,
     name: user.name,
@@ -51,7 +45,7 @@ export default async function AdminScoresPage() {
       <ScoresClient
         scores={serialized}
         users={serializedUsers}
-        tasks={serializedTasks}
+        tasks={[]}
         departments={departments.map(serializeDepartment)}
         viewerRole="admin"
         showDepartments

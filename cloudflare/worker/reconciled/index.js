@@ -542,15 +542,14 @@ __name(routeDepartments, "routeDepartments");
 async function nextTaskId(env) {
   try {
     await env.DB.prepare("INSERT OR IGNORE INTO task_counters (id, current_value) VALUES ('tasks', 0)").run();
-    await env.DB.prepare(
+    const row2 = await env.DB.prepare(
       `UPDATE task_counters
        SET current_value = MAX(
          current_value,
          COALESCE((SELECT MAX(CAST(SUBSTR(task_id, 3) AS INTEGER)) FROM tasks_current WHERE task_id LIKE 'T-%'), 0)
-       )
-       WHERE id = 'tasks'`
-    ).run();
-    const row2 = await env.DB.prepare("UPDATE task_counters SET current_value = current_value + 1 WHERE id = 'tasks' RETURNING current_value").first();
+       ) + 1
+       WHERE id = 'tasks' RETURNING current_value`
+    ).first();
     if (row2?.current_value) {
       return `T-${String(row2.current_value).padStart(4, "0")}`;
     }
@@ -586,7 +585,7 @@ async function routeTasks(req, env, url) {
     const status = url.searchParams.get("status");
     const department = url.searchParams.get("department");
     const limitParam = url.searchParams.get("limit");
-    const limit = Math.min(Math.max(Number(limitParam) || 1000, 1), 1000);
+    const limit = Math.min(Math.max(Number(limitParam) || 100, 1), 100);
     const clauses = [];
     const binds = [];
     if (scope === "mine" && uid) {
@@ -606,13 +605,13 @@ async function routeTasks(req, env, url) {
       binds.push(department);
     }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    const limitClause = limit ? "LIMIT ?" : "";
+    const limitClause = "LIMIT ?";
     const orderClause = status === "Completed" ? "ORDER BY COALESCE(completed_at, updated_at, created_at) DESC, created_at DESC, task_id DESC" : "ORDER BY created_at DESC, task_id DESC";
-    const rows = await env.DB.prepare(`SELECT * FROM tasks_current ${where} ${orderClause} ${limitClause}`).bind(...binds, ...limit ? [limit] : []).all();
+    const rows = await env.DB.prepare(`SELECT * FROM tasks_current ${where} ${orderClause} ${limitClause}`).bind(...binds, limit).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
   if (url.pathname === "/tasks/active" && req.method === "GET") {
-    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 1e3), 1), 1e3);
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 100);
     const placeholders = ACTIVE_STATUSES.map(() => "?").join(",");
     const rows = await env.DB.prepare(`SELECT * FROM tasks_current WHERE status IN (${placeholders}) ORDER BY created_at DESC, task_id DESC LIMIT ?`).bind(...ACTIVE_STATUSES, limit).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
@@ -627,6 +626,23 @@ async function routeTasks(req, env, url) {
     const from = nowIso();
     const to = new Date(Date.now() + hours * 60 * 60 * 1e3).toISOString();
     const rows = await env.DB.prepare("SELECT * FROM tasks_current WHERE status IN ('Pending Accept', 'In Progress') AND end_date IS NOT NULL AND end_date >= ? AND end_date <= ? ORDER BY end_date ASC LIMIT 1000").bind(from, to).all();
+    return json({ success: true, data: rows.results.map(taskFromRow) });
+  }
+  if (url.pathname === "/tasks/by-ids" && req.method === "GET") {
+    const ids = [...new Set(url.searchParams.getAll("id").filter(Boolean))].slice(0, 100);
+    if (!ids.length) return json({ success: true, data: [] });
+    const rows = await env.DB.prepare(`SELECT * FROM tasks_current WHERE task_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all();
+    return json({ success: true, data: rows.results.map(taskFromRow) });
+  }
+  if (url.pathname === "/tasks/calendar" && req.method === "GET") {
+    const department = url.searchParams.get("department") || "";
+    const month = url.searchParams.get("month") || "";
+    if (!department || !/^\d{4}-\d{2}$/.test(month)) return json({ success: false, error: "Department and month are required" }, { status: 400 });
+    const start = `${month}-01`;
+    const next = new Date(`${start}T00:00:00.000Z`);
+    next.setUTCMonth(next.getUTCMonth() + 1);
+    const end = next.toISOString().slice(0, 10);
+    const rows = await env.DB.prepare("SELECT * FROM tasks_current WHERE department=? AND ((delayed_date>=? AND delayed_date<?) OR ((delayed_date IS NULL OR delayed_date='') AND end_date>=? AND end_date<?)) ORDER BY COALESCE(delayed_date,end_date),task_id LIMIT 500").bind(department,start,end,start,end).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
   if (url.pathname.startsWith("/tasks/") && req.method === "GET") {
@@ -968,22 +984,12 @@ function misArchiveFromRow(row) {
   };
 }
 __name(misArchiveFromRow, "misArchiveFromRow");
-async function hydrateReconciledScores(env,records){
-    const weeks=new Map(),out=[];
-    const gap=(d,p)=>{if(!p)return null;const x=d/p*100-100;return Math.sign(x)*Math.round((Math.abs(x)+Number.EPSILON*Math.max(1,Math.abs(x)))*100)/100;};
-    for(const record of records){const row=JSON.parse(record.score_json),week=row.weekStart+':'+row.weekEnd;
-      if(!weeks.has(week)){const people=new Map();for(const item of await aggregatePeriods(env,row.weekStart,row.weekEnd)){const key=normalizePersonName(item.name),p=people.get(key)||{office:{planned:0,done:0,onTime:0},salon:{planned:0,done:0,onTime:0},weekly:{planned:0,done:0,onTime:0}};const b=p[item.source_kind||misCategoryKey(String(item.category||''),String(item.department||''),item.name)];for(const metric of ['planned','done','onTime'])b[metric]+=Number(item[metric]||0);people.set(key,p);}weeks.set(week,people);}
-      const categories=weeks.get(week).get(normalizePersonName(row.name))||{office:{planned:0,done:0,onTime:0},salon:{planned:0,done:0,onTime:0},weekly:{planned:0,done:0,onTime:0}};
-      const add=(a,b)=>({planned:a.planned+b.planned,done:a.done+b.done,onTime:a.onTime+b.onTime});
-      const checklist=Object.values(categories).reduce(add,{planned:0,done:0,onTime:0}),total=[checklist,row.delegation,row.fms].reduce(add,{planned:0,done:0,onTime:0});
-      out.push({...row,checklist,...total,gapPercent:gap(total.done,total.planned),gapDecimal:total.planned?gap(total.done,total.planned)/100:null,onTimeGapPercent:gap(total.onTime,total.done),parameters:(row.parameters||[]).map(p=>p.group==='checklist'?{...p,...categories[p.id],gapPercent:gap(categories[p.id].done,categories[p.id].planned)}:p)});
-    }return out;
-  }
 async function mergeReconciledWeekly(env, rows, url) {
   const records=await env.DB.prepare('SELECT score_json, updated_at FROM mis_reconciled_people WHERE verified=1').all();
   const merged=new Map(rows.map(row=>[row.weekKey+':'+normalizePersonName(row.name),row]));
   const selected=(records.results||[]).filter(record=>{const row=JSON.parse(record.score_json);return ['weekKey','name','year','monthName'].every(field=>{const value=url.searchParams.get(field);if(!value)return true;if(field==='name')return normalizePersonName(row.name)===normalizePersonName(value);if(field==='year')return row.weekEnd.slice(0,4)===value;if(field==='monthName')return new Intl.DateTimeFormat('en-US',{month:'long',timeZone:'Asia/Kolkata'}).format(new Date(row.weekEnd+'T12:00:00Z'))===value;return String(row[field])===value;});});
-  for(const row of await hydrateReconciledScores(env,selected)) {
+  for(const record of selected) {
+    const row=JSON.parse(record.score_json);
     merged.set(row.weekKey+':'+normalizePersonName(row.name),{...row,id:row.weekKey+'_'+normalizePersonName(row.name).replace(/\s+/g,'-'),weekNumber:Number(row.weekKey.split('W')[1]),monthName:new Intl.DateTimeFormat('en-US',{month:'long',timeZone:'Asia/Kolkata'}).format(new Date(row.weekEnd+'T12:00:00Z')),year:Number(row.weekEnd.slice(0,4)),combinedWeek:row.weekStart+' - '+row.weekEnd,createdAt:'',updatedAt:''});
   }
   let result=Array.from(merged.values());
@@ -998,7 +1004,7 @@ async function routeMis(req, env, url) {
     const weekStart=url.searchParams.get('weekStart'),weekEnd=url.searchParams.get('weekEnd');
     if(!weekStart || !weekEnd) return json({success:false,error:'weekStart and weekEnd required'},{status:400});
     const result=await env.DB.prepare('SELECT score_json FROM mis_reconciled_people WHERE week_start = ? AND week_end = ? AND verified = 1').bind(weekStart,weekEnd).all();
-    return json({success:true,data:await hydrateReconciledScores(env,result.results)});
+    return json({success:true,data:(result.results||[]).map(record=>JSON.parse(record.score_json))});
   }
 
   if (url.pathname === "/mis/weekly" && req.method === "GET") {
@@ -1491,7 +1497,7 @@ __name(recurringTitleKey, "recurringTitleKey");
 async function loadOpenRecurringTasks(env, category, userName) {
   let query = `SELECT * FROM tasks_current
     WHERE LOWER(category) IN ('daily', 'weekly', 'monthly')
-    AND LOWER(status) != 'dead'`;
+    AND LOWER(status) IN ('in progress','pending','pending accept','delay requested','overdue')`;
   const binds = [];
   if (category && category.toLowerCase() !== "all") {
     query += " AND LOWER(category) = LOWER(?)";
@@ -1822,10 +1828,15 @@ async function routeRecurring(req, env, url) {
         }
         const status = String(c.status || "Completed");
         const rowId = periodRowId(primaryId, periodKey);
+        const existing = await env.DB.prepare(
+          "SELECT id FROM recurring_period_rows WHERE template_id = ? AND period_key = ? LIMIT 1"
+        ).bind(primaryId, periodKey).first();
+        // Legacy completions are migration input only; never overwrite a period row.
+        if (existing) {
+          skipped += 1;
+          continue;
+        }
         if (status === "Dead") {
-          if (!dryRun) {
-            await env.DB.prepare("DELETE FROM recurring_period_rows WHERE id = ? OR (template_id = ? AND period_key = ?)").bind(rowId, primaryId, periodKey).run().catch(() => null);
-          }
           deletedDays += 1;
           if (c.id) deleteIds.push(String(c.id));
           continue;
@@ -1834,14 +1845,10 @@ async function routeRecurring(req, env, url) {
           skipped += 1;
           continue;
         }
-        const existing = await env.DB.prepare(
-          "SELECT id FROM recurring_period_rows WHERE template_id = ? AND period_key = ? LIMIT 1"
-        ).bind(primaryId, periodKey).first();
-        if (!existing) {
-          const monthKey = periodKey.length === 7 ? periodKey : periodKey.slice(0, 7);
-          if (!dryRun) {
-            await env.DB.prepare(
-              `INSERT OR REPLACE INTO recurring_period_rows (
+        const monthKey = periodKey.length === 7 ? periodKey : periodKey.slice(0, 7);
+        if (!dryRun) {
+          await env.DB.prepare(
+              `INSERT OR IGNORE INTO recurring_period_rows (
                 id, template_id, period_key, month_key, category, title, description,
                 assigned_to, assigned_to_name, department, due_date, period_start, period_end,
                 status, completed_at, is_on_time, remark, remark_by, is_deleted, created_at, updated_at
@@ -1867,26 +1874,9 @@ async function routeRecurring(req, env, url) {
               c.remark_by || null,
               now,
               now
-            ).run().catch(() => null);
-          }
-          insertedMissing += 1;
-        } else if (!dryRun) {
-          await env.DB.prepare(
-            `UPDATE recurring_period_rows
-             SET status = ?, completed_at = ?, is_on_time = ?, remark = COALESCE(?, remark),
-                 remark_by = COALESCE(?, remark_by), is_deleted = 0, deleted_at = NULL, updated_at = ?
-             WHERE template_id = ? AND period_key = ?`
-          ).bind(
-            status,
-            c.completed_at || now,
-            c.is_on_time === 0 ? 0 : 1,
-            c.remark || null,
-            c.remark_by || null,
-            now,
-            primaryId,
-            periodKey
           ).run().catch(() => null);
         }
+        insertedMissing += 1;
         markedDone += 1;
         if (c.id) deleteIds.push(String(c.id));
       }
@@ -1974,11 +1964,46 @@ async function routeRecurring(req, env, url) {
     if(date>getIstDateParts().dateStr)return json({success:true,data:[]});
     const due="COALESCE(NULLIF(due_date,''),SUBSTR(period_key,1,10))";
     const clauses=["is_deleted=0","status!='Deleted'"],binds=[];
-    if(category.toLowerCase()!=='all'){clauses.push('LOWER(category)=LOWER(?)');binds.push(category);}
+    const paged=url.searchParams.has('limit');
+    if(paged){
+      const months=[date.slice(0,7)];
+      if(category==='Weekly'){
+        const from=weekStartMonday(date),end=new Date(from+'T12:00:00Z');end.setUTCDate(end.getUTCDate()+6);
+        months.splice(0,months.length,from.slice(0,7));
+        const endMonth=end.toISOString().slice(0,7);if(endMonth!==months[0])months.push(endMonth);
+      }
+      clauses.push('month_key IN ('+months.map(()=>'?').join(',')+')');binds.push(...months);
+    }
+    if(category.toLowerCase()!=='all'){clauses.push(paged?'category=?':'LOWER(category)=LOWER(?)');binds.push(category);}
+    if(paged){
+      const scopeUid=url.searchParams.get('scopeUid'),scopeName=url.searchParams.get('scopeName'),scopeDepartment=url.searchParams.get('scopeDepartment');
+      if(scopeUid||scopeName||scopeDepartment){
+        const scope=[];
+        if(scopeUid){scope.push('assigned_to=?');binds.push(scopeUid);}
+        if(scopeName){scope.push('LOWER(TRIM(assigned_to_name))=LOWER(TRIM(?))');binds.push(scopeName);}
+        if(scopeDepartment){scope.push('LOWER(TRIM(department))=LOWER(TRIM(?))');binds.push(scopeDepartment);}
+        clauses.push('('+scope.join(' OR ')+')');
+      }
+    }
     const name=url.searchParams.get('userName');if(name){clauses.push('LOWER(TRIM(assigned_to_name))=LOWER(TRIM(?))');binds.push(name);}
     if(category==='Daily'){clauses.push(due+'=?');binds.push(date);}
     else if(category==='Weekly'){const from=weekStartMonday(date),to=new Date(from+'T12:00:00Z');to.setUTCDate(to.getUTCDate()+6);clauses.push(due+'>=? AND '+due+'<=?');binds.push(from,to.toISOString().slice(0,10));}
     else {clauses.push('SUBSTR('+due+',1,7)=?');binds.push(date.slice(0,7));}
+    if(paged){
+      const cursor=url.searchParams.get('cursor');
+      if(cursor){clauses.push('id>?');binds.push(cursor);}
+      const search=String(url.searchParams.get('search')||'').trim().slice(0,100).toLowerCase();
+      if(search.length>=2){
+        const pattern='%'+search.replace(/[\\%_]/g,'\\$&')+'%';
+        clauses.push("(LOWER(template_id) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(title,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(description,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(assigned_to_name,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(department,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(period_key,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(status,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(remark,'')) LIKE ? ESCAPE '\\')");
+        binds.push(...Array(8).fill(pattern));
+      }
+      const limit=Math.min(100,Math.max(1,Number(url.searchParams.get('limit'))||100));
+      const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY id LIMIT ?').bind(...binds,limit+1).all();
+      const found=result.results||[],hasMore=found.length>limit,selected=found.slice(0,limit);
+      const items=selected.map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
+      return json({success:true,data:{items,hasMore,nextCursor:hasMore?selected[selected.length-1].id:null}});
+    }
     const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY due_date,id LIMIT 1001').bind(...binds).all();
     const data=(result.results||[]).slice(0,1000).map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
     return json({success:true,data,meta:{istDate:date,count:data.length,hasMore:(result.results||[]).length>1000,readOnly:true}});
@@ -1996,12 +2021,16 @@ async function routeRecurring(req, env, url) {
     const completedAt=action==='remark'?row.completed_at:completed?(row.completed_at||now):null;
     const onTime=completed?(row.completed_at?row.is_on_time:(due>=getIstDateParts().dateStr?1:0)):row.is_on_time;
     const remark=data.remark===undefined?row.remark:String(data.remark).trim(),remarkBy=data.remarkBy?String(data.remarkBy):row.remark_by;
-    const statements=[env.DB.prepare('UPDATE recurring_period_rows SET status=?,completed_at=?,is_on_time=?,is_deleted=?,deleted_at=?,remark=?,remark_by=?,updated_at=? WHERE template_id=? AND period_key=?').bind(status,completedAt,onTime??1,deleted?1:action==='remark'?Number(row.is_deleted):0,deleted?now:action==='remark'?row.deleted_at:null,remark,remarkBy,now,templateId,periodKey)];
-    if(action!=='remark') {
-      statements.push(env.DB.prepare('DELETE FROM recurring_completions WHERE template_id=? AND period_key=?').bind(templateId,periodKey));
-      if(completed)statements.push(env.DB.prepare('INSERT INTO recurring_completions (id,template_id,title,description,department,uid,user_name,category,period_key,completed_at,is_on_time,status,remark,remark_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(randomId('comp_'),templateId,row.title,row.description,row.department,row.assigned_to,row.assigned_to_name,row.category,periodKey,completedAt,onTime??1,status,remark,remarkBy,now));
-    }
-    await env.DB.batch(statements);
+    // Period rows own checklist state; ordinary status changes leave the indexed
+    // is_deleted column untouched and do not duplicate data in recurring_completions.
+    const changeDeletion=deleted||action==='revive';
+    const sql=changeDeletion
+      ? 'UPDATE recurring_period_rows SET status=?,completed_at=?,is_on_time=?,is_deleted=?,deleted_at=?,remark=?,remark_by=?,updated_at=? WHERE template_id=? AND period_key=?'
+      : 'UPDATE recurring_period_rows SET status=?,completed_at=?,is_on_time=?,remark=?,remark_by=?,updated_at=? WHERE template_id=? AND period_key=?';
+    const values=changeDeletion
+      ? [status,completedAt,onTime??1,deleted?1:0,deleted?now:null,remark,remarkBy,now,templateId,periodKey]
+      : [status,completedAt,onTime??1,remark,remarkBy,now,templateId,periodKey];
+    await env.DB.prepare(sql).bind(...values).run();
     return json({success:true,data:{templateId,periodKey,status,completed,completedAt,remark,remarkBy,dead:deleted,deadAt:deleted?now:null,deletedScope:deleted?'day':undefined,uncompleted:action==='uncomplete'}});
   }
   if (path === "/recurring/mis-counts" && req.method === 'GET') {

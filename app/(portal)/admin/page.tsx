@@ -10,7 +10,7 @@ export default async function AdminDashboardPage() {
   const session = await getSession();
   const [users, tasks, scores, departments, taskCounts] = await Promise.all([
     adminGetAllUsers(),
-    adminGetAllTasks({ limit: 1000 }),
+    adminGetAllTasks({ limit: 100 }),
     adminGetAllScores(),
     adminGetDepartments(),
     adminGetTaskCounts(),

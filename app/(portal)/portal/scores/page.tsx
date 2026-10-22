@@ -1,12 +1,11 @@
 import { getSession } from '@/lib/utils/auth';
 import { adminGetAllScores, adminGetScore } from '@/lib/firebase/scores';
-import { adminGetAllTasks, adminGetTasksByAssignee, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetTaskCounts } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { Trophy, TrendingUp, CheckCircle2, Clock, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { filterScoresForSession, filterTasksForSession, filterUsersForSession } from '@/lib/utils/access';
+import { filterScoresForSession, filterUsersForSession } from '@/lib/utils/access';
 import ScoresClient from '@/components/shared/ScoresClient';
-import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 import { getMisWeekPeriod, getPreviousMisWeekPeriod } from '@/lib/mis/week';
 import { adminGetMisWeeklySnapshots } from '@/lib/mis/weeklySnapshot';
 import { formatGapPercent } from '@/lib/mis/sheetFormula';
@@ -19,14 +18,12 @@ export default async function PortalScorePage() {
   if (!session) return null;
 
   if (session.role === 'leader') {
-    const [scores, tasks, users] = await Promise.all([
+    const [scores, users] = await Promise.all([
       adminGetAllScores(),
-      adminGetAllTasks({ department: session.department, limit: 1000 }),
       adminGetAllUsers(),
     ]);
     const visibleScores = filterScoresForSession(session, scores);
     const visibleUsers = filterUsersForSession(session, users);
-    const visibleTasks = filterTasksForSession(session, hydrateTasksWithUsers(tasks, visibleUsers));
     const toIso = (value: unknown) => {
       if (!value) return new Date().toISOString();
       if (typeof value === 'string') return value;
@@ -43,7 +40,6 @@ export default async function PortalScorePage() {
       ...score,
       lastUpdated: toIso(score.lastUpdated),
     }));
-    const serializedTasks = visibleTasks.map(serializeTask);
     const serializedUsers = visibleUsers.map(user => ({
       uid: user.uid,
       name: user.name,
@@ -61,7 +57,7 @@ export default async function PortalScorePage() {
         <ScoresClient
           scores={serializedScores}
           users={serializedUsers}
-          tasks={serializedTasks}
+          tasks={[]}
           departments={[{ name: session.department }]}
           currentUid={session.uid}
           viewerRole="leader"
@@ -71,9 +67,9 @@ export default async function PortalScorePage() {
     );
   }
 
-  const [score, tasks] = await Promise.all([
+  const [score, taskCounts] = await Promise.all([
     adminGetScore(session.uid),
-    adminGetTasksByAssignee(session.uid),
+    adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true }),
   ]);
 
   const week = getMisWeekPeriod();
@@ -175,10 +171,10 @@ export default async function PortalScorePage() {
     // optional PDF MIS
   }
 
-  const verified  = tasks.filter(t => t.status === 'Verified').length;
-  const completed = tasks.filter(t => t.status === 'Completed').length;
-  const overdue   = tasks.filter(t => t.status === 'Overdue').length;
-  const pending   = tasks.filter(t => t.status === 'Pending Accept').length;
+  const verified  = taskCounts.verified;
+  const completed = taskCounts.completed;
+  const overdue   = taskCounts.overdue;
+  const pending   = taskCounts.pending;
 
   const mis = score?.monthlyScore ?? 0;
 

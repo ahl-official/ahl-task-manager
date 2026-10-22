@@ -7,6 +7,7 @@ export function cfUser(row: any): AHLUser | null {
   return {
     uid: row.uid,
     name: row.name,
+    rawName: row.rawName ?? row.raw_name ?? undefined,
     waNumber: row.waNumber,
     waNumberLast10: row.waNumberLast10,
     role: row.role,
