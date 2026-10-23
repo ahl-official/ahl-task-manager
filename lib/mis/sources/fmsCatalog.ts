@@ -40,9 +40,6 @@ export const FMS_STEP_CATALOG: FmsStepDef[] = [
   step("alchemane-crm-web-app-0", "step 1", "step 1", "Alchemane CRM Web app", 0),
   step("alchemane-crm-web-app-7", "step 2", "step 2", "Alchemane CRM Web app", 7),
   step("alchemane-crm-web-app-14", "step 3", "step 3", "Alchemane CRM Web app", 14),
-  step("enquiry-to-consutation-data-0", "Step1 (E)", "Step1 (E)", "Enquiry To Consutation Data", 0),
-  step("enquiry-to-consutation-data-7", "Step2 (E)", "Step2 (E)", "Enquiry To Consutation Data", 7),
-  step("enquiry-to-consutation-data-21", "Step 4 (R)", "Step 4 (R)", "Enquiry To Consutation Data", 21),
   step("alchemane-o2d-7", "Step 2", "Step 2", "Alchemane O2D", 7),
   step("alchemane-o2d-14", "Step 3", "Step 3", "Alchemane O2D", 14),
   step("cons2order-data-0", "Step 1", "Step 1", "Cons2Order Data", 0),
@@ -210,4 +207,17 @@ export const FMS_STEP_CATALOG: FmsStepDef[] = [
   step("new-product-launch-7", "Step 2", "Step 2", "New Product/Service Launch FMS", 7, { doneStatuses: ["Approved"] }),
   step("new-product-launch-14", "Step 3", "Step 3", "New Product/Service Launch FMS", 14, { doneStatuses: ["Done"] }),
   step("new-product-launch-21", "Step 4", "Step 4", "New Product/Service Launch FMS", 21, { doneStatuses: ["Done"] }),
+
+  // Previously unconnected tabs (never referenced by any catalog entry, so their
+  // work was never counted for anyone) — same 5-block Planned/Actual/Status/Delay/
+  // On-Time/Name layout as the v1 "New Hair Refilling FMS" tab above.
+  step("new-hair-refilling-fms-v2-0", "Step 1", "Step 1", "New Hair Refilling FMS v2.0", 0),
+  step("new-hair-refilling-fms-v2-7", "Step 2", "Step 2", "New Hair Refilling FMS v2.0", 7),
+  step("new-hair-refilling-fms-v2-14", "Step 3", "Step 3", "New Hair Refilling FMS v2.0", 14, { doneStatuses: ["Done", "Yes"] }),
+  step("new-hair-refilling-fms-v2-21", "Step 4", "Step 4", "New Hair Refilling FMS v2.0", 21),
+  step("new-hair-refilling-fms-v2-28", "Step 5", "Step 5", "New Hair Refilling FMS v2.0", 28),
+
+  // 2-block layout; status values are "Completed"/"Delayed", not "Done".
+  step("customer-support-automation-system-0", "Step 1", "Step 1", "Customer Support Automation System", 0, { doneStatuses: ["Completed"] }),
+  step("customer-support-automation-system-7", "Step 2", "Step 2", "Customer Support Automation System", 7, { doneStatuses: ["Completed"] }),
 ];
