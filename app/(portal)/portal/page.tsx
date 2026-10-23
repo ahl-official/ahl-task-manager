@@ -1,16 +1,14 @@
 import { getSession } from '@/lib/utils/auth';
 import { adminGetTasksByAssignee, adminGetTaskCounts, serializeTask } from '@/lib/firebase/tasks';
-import { adminGetScore } from '@/lib/firebase/scores';
 import TaskListClient from '@/components/shared/TaskListClient';
 import { Trophy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils/timelyDashboard';
-import { getMisWeekPeriod, getPreviousMisWeekPeriod } from '@/lib/mis/week';
+import { getPreviousMisWeekPeriod } from '@/lib/mis/week';
 import { adminGetMisWeeklySnapshots } from '@/lib/mis/weeklySnapshot';
 import { formatGapPercent } from '@/lib/mis/sheetFormula';
 import { normalizePersonName } from '@/lib/utils/names';
-import { computeMisScoresForWeek } from '@/lib/mis/compute';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -28,14 +26,12 @@ export default async function PortalPage() {
   const session = await getSession();
   if (!session) return null;
 
-  const currentWeek = getMisWeekPeriod();
   const prevWeek = getPreviousMisWeekPeriod();
 
-  const [databaseTasks, score, timelyTasks, storedSnapshots, taskCounts] = await Promise.all([
+  const [databaseTasks, timelyTasks, prevSnaps, taskCounts] = await Promise.all([
     adminGetTasksByAssignee(session.uid),
-    adminGetScore(session.uid),
     getPersonalTimelyTasks(session),
-    adminGetMisWeeklySnapshots({ year: currentWeek.year, monthName: currentWeek.monthName }).catch(() => []),
+    adminGetMisWeeklySnapshots({ weekKey: prevWeek.weekKey }).catch(() => []),
     adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true, includeChecklist: true }),
   ]);
   const tasks = mergePersonalDashboardTasks(databaseTasks, timelyTasks);
@@ -53,39 +49,11 @@ export default async function PortalPage() {
   const overdue    = hydratedTasks.filter(t => t.status === 'Overdue').length;
   const completed  = hydratedTasks.filter(t => ['Completed', 'Verified'].includes(t.status)).length;
 
-  // Current Week MIS
-  let currentSnap = storedSnapshots.find(row =>
-    row.weekKey === currentWeek.weekKey && (row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name))
+  // MIS Score badge shows the last COMPLETED week only — the current week isn't
+  // reconciled yet, so no current-week score is calculated or shown anywhere.
+  const prevSnap = prevSnaps.find(row =>
+    row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name)
   );
-  let currentGapPercent: number | null = currentSnap?.gapPercent ?? null;
-  let currentGapLabel = currentSnap ? formatGapPercent(currentGapPercent) : '';
-
-  if (!currentSnap) {
-    try {
-      const liveRows = await computeMisScoresForWeek(currentWeek.weekStart, currentWeek.weekEnd);
-      const mine = liveRows.find(row =>
-        row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name)
-      );
-      if (mine) {
-        currentGapPercent = mine.gapPercent ?? null;
-        currentGapLabel = formatGapPercent(currentGapPercent);
-      }
-    } catch {
-      // fallback
-    }
-  }
-  if (!currentGapLabel) {
-    currentGapLabel = score ? `${score.monthlyScore}%` : '—';
-  }
-
-  // Last Week MIS
-  let prevSnap = storedSnapshots.find(row =>
-    row.weekKey === prevWeek.weekKey && (row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name))
-  );
-  if (!prevSnap) {
-    const prevSnaps = await adminGetMisWeeklySnapshots({ weekKey: prevWeek.weekKey }).catch(() => []);
-    prevSnap = prevSnaps.find(row => row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name));
-  }
   const lastWeekGapPercent: number | null = prevSnap?.gapPercent ?? null;
   const lastWeekGapLabel = prevSnap ? formatGapPercent(lastWeekGapPercent) : '—';
 
@@ -98,16 +66,16 @@ export default async function PortalPage() {
           <p className="mt-0.5 text-sm text-gray-500">Welcome back, {session.name}</p>
         </div>
 
-        {/* MIS Score badge (Current Week) */}
+        {/* MIS Score badge — last completed week only */}
         <div className="card px-4 py-2.5 flex items-center gap-3 shadow-sm border border-gray-100">
           <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center shrink-0 shadow-sm">
             <Trophy size={18} className="text-white" />
           </div>
           <div>
-            <p className={cn('text-xl font-bold leading-tight', getScoreColor(currentGapPercent))}>
-              {currentGapLabel}
+            <p className={cn('text-xl font-bold leading-tight', getScoreColor(lastWeekGapPercent))}>
+              {lastWeekGapLabel}
             </p>
-            <p className="text-[11px] font-medium text-gray-400">MIS Score</p>
+            <p className="text-[11px] font-medium text-gray-400">MIS Score (Last Week)</p>
           </div>
         </div>
       </div>

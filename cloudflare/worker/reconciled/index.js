@@ -578,6 +578,102 @@ function periodFields(dateValue) {
   return { dayKey, monthKey };
 }
 __name(periodFields, "periodFields");
+
+// --- Backend MIS auto-recompute (delegation bucket) -------------------------------
+// Keeps mis_weekly's CURRENT week row for one assignee fresh the moment a One Time
+// task write changes their completion state, so the frontend only ever reads the DB
+// (cheap) instead of recomputing scores on every page view. Scoped by assigned_to
+// (indexed: idx_tasks_assignee_created), so this is an index seek, not a table scan.
+// Checklist/FMS buckets are preserved from the last stored snapshot — this task write
+// can only have changed the delegation bucket, and FMS comes from an external sheet
+// that isn't re-read on every task write.
+function addDaysKeyUtc(dateKey, days) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  date.setUTCDate(date.getUTCDate() + days);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+}
+__name(addDaysKeyUtc, "addDaysKeyUtc");
+function currentMisWeekPeriod() {
+  const todayKey = new Date(Date.now() + 19800000).toISOString().slice(0, 10);
+  const [y, m, d] = todayKey.split("-").map(Number);
+  const day = new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).getUTCDay();
+  const daysSinceWednesday = (day - 3 + 7) % 7;
+  const weekStart = addDaysKeyUtc(todayKey, -daysSinceWednesday);
+  const weekEnd = addDaysKeyUtc(weekStart, 6);
+  const year = Number(weekStart.slice(0, 4));
+  const jan1 = `${year}-01-01`;
+  const jan1Dow = new Date(Date.UTC(year, 0, 1, 12, 0, 0)).getUTCDay();
+  const firstWeekStart = addDaysKeyUtc(jan1, -((jan1Dow - 3 + 7) % 7));
+  const weekNumber = Math.floor((Date.UTC(...weekStart.split("-").map(Number).map((v, i) => i === 1 ? v - 1 : v)) - Date.UTC(...firstWeekStart.split("-").map(Number).map((v, i) => i === 1 ? v - 1 : v))) / (7 * 86400000)) + 1;
+  const weekEndDate = new Date(Date.UTC(...weekEnd.split("-").map(Number).map((v, i) => i === 1 ? v - 1 : v), 12));
+  const monthName = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", month: "long" }).format(weekEndDate);
+  return { weekKey: `${year}-W${String(weekNumber).padStart(2, "0")}`, weekStart, weekEnd, weekNumber, monthName, year: Number(weekEnd.slice(0, 4)) };
+}
+__name(currentMisWeekPeriod, "currentMisWeekPeriod");
+function gapPercentCalc(done, planned) {
+  if (!Number.isFinite(done) || !Number.isFinite(planned) || planned <= 0) return null;
+  const value = done / planned * 100 - 100;
+  return Math.round(value * 100) / 100;
+}
+__name(gapPercentCalc, "gapPercentCalc");
+async function refreshDelegationMisSnapshot(env, uid) {
+  if (!uid) return;
+  try {
+    const week = currentMisWeekPeriod();
+    const final = "date(COALESCE(NULLIF(t.delayed_date,''),NULLIF(t.end_date,''),NULLIF(t.start_date,''),NULLIF(t.completed_at,'')),'+5 hours','+30 minutes')";
+    const first = "date(t.start_date,'+5 hours','+30 minutes')";
+    const revised = "date(COALESCE(NULLIF(t.delayed_date,''),NULLIF(t.end_date,'')),'+5 hours','+30 minutes')";
+    const done = "t.status NOT IN ('Pending','Shifted')";
+    const row = await env.DB.prepare(
+      `SELECT COALESCE(NULLIF(u.name,''),t.assigned_to_name) AS name,COALESCE(NULLIF(u.department,''),t.department) AS department,u.wa_number AS waNumber,
+        COUNT(*) AS planned,SUM(CASE WHEN ${done} THEN 1 ELSE 0 END) AS done,
+        SUM(CASE WHEN ${done} AND NOT (t.status IN ('Completed','Verified') AND COALESCE(${first}<${revised},0)) THEN 1 ELSE 0 END) AS onTime
+       FROM tasks_current t LEFT JOIN users u ON u.uid=t.assigned_to
+       WHERE t.assigned_to=? AND LOWER(COALESCE(t.category,'')) NOT IN ('daily','weekly','monthly') AND ${final}>=? AND ${final}<=?
+       GROUP BY t.assigned_to`
+    ).bind(uid, week.weekStart, week.weekEnd).first();
+    const name = row?.name || (await env.DB.prepare("SELECT name FROM users WHERE uid=?").bind(uid).first())?.name || uid;
+    const delegation = { planned: Number(row?.planned || 0), done: Number(row?.done || 0), onTime: Number(row?.onTime || 0) };
+    const id = `${week.weekKey}_${normalizePersonName(name).replace(/\s+/g, "-") || "unknown"}`;
+    const existing = await env.DB.prepare("SELECT checklist_json, fms_json FROM mis_weekly WHERE id=?").bind(id).first();
+    const emptyBucket = { planned: 0, done: 0, onTime: 0 };
+    const checklist = existing?.checklist_json ? JSON.parse(existing.checklist_json) : emptyBucket;
+    const fms = existing?.fms_json ? JSON.parse(existing.fms_json) : emptyBucket;
+    const totalPlanned = checklist.planned + delegation.planned + fms.planned;
+    const totalDone = checklist.done + delegation.done + fms.done;
+    const totalOnTime = checklist.onTime + delegation.onTime + fms.onTime;
+    const gapPercent = gapPercentCalc(totalDone, totalPlanned);
+    const onTimeGapPercent = gapPercentCalc(totalOnTime, totalDone);
+    const now = nowIso();
+    await env.DB.prepare(
+      `INSERT INTO mis_weekly (
+        id, uid, name, department, wa_number,
+        checklist_json, delegation_json, fms_json,
+        planned, done, on_time, gap_percent, gap_decimal, on_time_gap_percent,
+        week_key, week_start, week_end, week_number, month_name, year, combined_week,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        uid = excluded.uid, name = excluded.name, department = excluded.department, wa_number = excluded.wa_number,
+        delegation_json = excluded.delegation_json,
+        planned = excluded.planned, done = excluded.done, on_time = excluded.on_time,
+        gap_percent = excluded.gap_percent, gap_decimal = excluded.gap_decimal, on_time_gap_percent = excluded.on_time_gap_percent,
+        updated_at = excluded.updated_at`
+    ).bind(
+      id, uid, name, row?.department || "", row?.waNumber || "",
+      JSON.stringify(checklist), JSON.stringify(delegation), JSON.stringify(fms),
+      totalPlanned, totalDone, totalOnTime,
+      gapPercent, gapPercent == null ? null : gapPercent / 100, onTimeGapPercent,
+      week.weekKey, week.weekStart, week.weekEnd, week.weekNumber, week.monthName, week.year,
+      `${week.weekStart} - ${week.weekEnd}`,
+      now, now
+    ).run();
+  } catch (err) {
+    console.error("refreshDelegationMisSnapshot failed:", err?.message || err);
+  }
+}
+__name(refreshDelegationMisSnapshot, "refreshDelegationMisSnapshot");
 async function routeTasks(req, env, url) {
   if (url.pathname === "/tasks" && req.method === "GET") {
     const scope = url.searchParams.get("scope") || "all";
@@ -669,6 +765,9 @@ async function routeTasks(req, env, url) {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'none', ?, ?, NULL, NULL, ?, ?, ?, ?)`
       ).bind(taskId, data.description || "", assignee.uid, assignee.name, assignee.waNumber, creator?.uid || data.creatorUid || "admin", creator?.name || "Admin", handoff?.uid || data.handoffUid || creator?.uid || "admin", handoff?.name || creator?.name || "Admin", handoff?.waNumber || creator?.waNumber || "", data.category || "One Time", data.priority || "Medium", status, assignee.department || data.department || "", startDateVal, endDateVal, data.notes || null, data.skipAcceptance ? now : null, createdAt, now, pf.dayKey, pf.monthKey).run();
       await log(env, "TASK_CREATED", `Task ${taskId} created`, { taskId, uid: creator?.uid });
+      if (!["daily", "weekly", "monthly"].includes(String(data.category || "One Time").toLowerCase())) {
+        await refreshDelegationMisSnapshot(env, assignee.uid);
+      }
       return json({ success: true, data: taskFromRow(await env.DB.prepare("SELECT * FROM tasks_current WHERE task_id = ?").bind(taskId).first()) }, { status: 201 });
     } catch (err) {
       console.error("POST /tasks worker error:", err);
@@ -679,7 +778,7 @@ async function routeTasks(req, env, url) {
     try {
       const id = decodeURIComponent(url.pathname.slice("/tasks/".length));
       const data = await body(req);
-      const existing = await env.DB.prepare("SELECT category FROM tasks_current WHERE task_id = ?").bind(id).first();
+      const existing = await env.DB.prepare("SELECT category, assigned_to FROM tasks_current WHERE task_id = ?").bind(id).first();
       const recurring = ["daily", "weekly", "monthly"].includes(String(existing?.category || "").toLowerCase());
       const closing = ["completed", "verified"].includes(String(data.status || "").toLowerCase());
       if (recurring && closing) {
@@ -720,6 +819,9 @@ async function routeTasks(req, env, url) {
         const col = data.scoreIncrement.field === "tasksCompleted" ? "tasks_completed" : data.scoreIncrement.field === "onTimeCount" ? "on_time_count" : data.scoreIncrement.field === "lateCount" ? "late_count" : "tasks_assigned";
         await env.DB.prepare(`UPDATE scores SET ${col} = ${col} + 1, last_updated = ? WHERE uid = ?`).bind(nowIso(), data.scoreIncrement.uid).run();
       }
+      if (!recurring && existing?.assigned_to) {
+        await refreshDelegationMisSnapshot(env, existing.assigned_to);
+      }
       return json({ success: true, data: taskFromRow(await env.DB.prepare("SELECT * FROM tasks_current WHERE task_id = ?").bind(id).first()) });
     } catch (err) {
       return json({ success: false, error: err.stack || err.message || String(err) }, { status: 500 });
@@ -728,7 +830,7 @@ async function routeTasks(req, env, url) {
   if (url.pathname.startsWith("/tasks/") && req.method === "DELETE") {
     try {
       const id = decodeURIComponent(url.pathname.slice("/tasks/".length));
-      const existing = await env.DB.prepare("SELECT task_id FROM tasks_current WHERE task_id = ? LIMIT 1").bind(id).first();
+      const existing = await env.DB.prepare("SELECT task_id, category, assigned_to FROM tasks_current WHERE task_id = ? LIMIT 1").bind(id).first();
       if (!existing) return json({ success: false, error: "Not found" }, { status: 404 });
       await env.DB.batch([
         env.DB.prepare("DELETE FROM revisions WHERE task_id = ?").bind(id),
@@ -737,6 +839,9 @@ async function routeTasks(req, env, url) {
       try {
         await log(env, "TASK_DELETED", `Task ${id} deleted`, { taskId: id });
       } catch {
+      }
+      if (!["daily", "weekly", "monthly"].includes(String(existing.category || "").toLowerCase()) && existing.assigned_to) {
+        await refreshDelegationMisSnapshot(env, existing.assigned_to);
       }
       return json({ success: true, data: { taskId: id, deleted: true } });
     } catch (err) {

@@ -10,7 +10,6 @@ import { getMisWeekPeriod, getPreviousMisWeekPeriod } from '@/lib/mis/week';
 import { adminGetMisWeeklySnapshots } from '@/lib/mis/weeklySnapshot';
 import { formatGapPercent } from '@/lib/mis/sheetFormula';
 import { normalizePersonName } from '@/lib/utils/names';
-import { computeMisScoresForWeek } from '@/lib/mis/compute';
 import type { MisWeeklySnapshot } from '@/lib/mis/types';
 
 export default async function PortalScorePage() {
@@ -75,20 +74,11 @@ export default async function PortalScorePage() {
   const week = getMisWeekPeriod();
   const prevWeek = getPreviousMisWeekPeriod();
 
-  let pdfGapLabel = '—';
-  let pdfGapPercent: number | null = null;
+  // Score is last-completed-week only — the current week isn't reconciled yet, so no
+  // score is calculated or shown for it anywhere. The current week's card below shows
+  // live task counts only (backend-synced by the Worker on every task write), no score.
   let lastWeekSnapshot: MisWeeklySnapshot | undefined = undefined;
-  let liveMis: {
-    planned: number;
-    done: number;
-    onTime: number;
-    checklist: { planned: number; done: number; onTime: number };
-    delegation: { planned: number; done: number; onTime: number };
-    fms: { planned: number; done: number; onTime: number };
-    weekStart: string;
-    weekEnd: string;
-    weekKey: string;
-  } | null = null;
+  let currentWeekCounts: { planned: number; done: number; onTime: number } | null = null;
   let weeklyRows: Array<{
     weekKey: string;
     weekStart: string;
@@ -100,62 +90,24 @@ export default async function PortalScorePage() {
   }> = [];
 
   try {
-    const stored = await adminGetMisWeeklySnapshots({ year: week.year, monthName: week.monthName }).catch(() => []);
+    const [stored, currentStored] = await Promise.all([
+      adminGetMisWeeklySnapshots({ weekKey: prevWeek.weekKey }).catch(() => []),
+      adminGetMisWeeklySnapshots({ weekKey: week.weekKey }).catch(() => []),
+    ]);
 
-    // Check if current week snapshot is already present in DB
-    const currentWeekSnapshot = stored.find(row =>
-      row.weekKey === week.weekKey && (row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name))
-    );
+    lastWeekSnapshot = stored.find(row => row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name));
 
-    if (currentWeekSnapshot) {
-      pdfGapPercent = currentWeekSnapshot.gapPercent ?? null;
-      pdfGapLabel = formatGapPercent(pdfGapPercent);
-      liveMis = {
-        planned: currentWeekSnapshot.planned,
-        done: currentWeekSnapshot.done,
-        onTime: currentWeekSnapshot.onTime,
-        checklist: currentWeekSnapshot.checklist,
-        delegation: currentWeekSnapshot.delegation,
-        fms: currentWeekSnapshot.fms,
-        weekStart: currentWeekSnapshot.weekStart,
-        weekEnd: currentWeekSnapshot.weekEnd,
-        weekKey: currentWeekSnapshot.weekKey,
-      };
-    } else {
-      // Calculate only if not stored in DB
-      const liveRows = await computeMisScoresForWeek(week.weekStart, week.weekEnd);
-      const mine = liveRows.find(row =>
-        row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name),
-      );
-      pdfGapPercent = mine?.gapPercent ?? null;
-      pdfGapLabel = formatGapPercent(pdfGapPercent);
-      if (mine) {
-        liveMis = {
-          planned: mine.planned,
-          done: mine.done,
-          onTime: mine.onTime,
-          checklist: mine.checklist,
-          delegation: mine.delegation,
-          fms: mine.fms,
-          weekStart: mine.weekStart,
-          weekEnd: mine.weekEnd,
-          weekKey: mine.weekKey,
-        };
-      }
+    const currentSnap = currentStored.find(row => row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name));
+    if (currentSnap) {
+      currentWeekCounts = { planned: currentSnap.planned, done: currentSnap.done, onTime: currentSnap.onTime };
     }
 
-    // Last Week Snapshot
-    lastWeekSnapshot = stored.find(row =>
-      row.weekKey === prevWeek.weekKey && (row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name))
-    );
-    if (!lastWeekSnapshot) {
-      const prevSnaps = await adminGetMisWeeklySnapshots({ weekKey: prevWeek.weekKey }).catch(() => []);
-      lastWeekSnapshot = prevSnaps.find(row => row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name));
-    }
-
-    weeklyRows = stored
+    // Weekly history: completed weeks only (never the current, still-open week).
+    const history = await adminGetMisWeeklySnapshots({ year: week.year, monthName: week.monthName }).catch(() => []);
+    weeklyRows = history
       .filter(row =>
-        row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name),
+        (row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name))
+        && row.weekKey !== week.weekKey,
       )
       .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
       .map(row => ({
@@ -196,7 +148,6 @@ export default async function PortalScorePage() {
     return { text: 'Needs Improvement', bg: 'bg-red-100 text-red-800' };
   }
 
-  const badge = gapStatusBadge(pdfGapPercent);
   const lastWeekGapPercent = lastWeekSnapshot?.gapPercent ?? null;
   const lastWeekGapLabel = lastWeekSnapshot ? formatGapPercent(lastWeekGapPercent) : '—';
   const lastWeekBadge = gapStatusBadge(lastWeekGapPercent);
@@ -208,47 +159,44 @@ export default async function PortalScorePage() {
         <p className="mt-0.5 text-sm text-gray-500">Your weekly performance metrics</p>
       </div>
 
-      {/* Hero Score cards: Current Week & Last Week */}
+      {/* Current Week: live counts only — no score. Scores only exist for completed weeks. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {/* Current Week Card */}
+        {/* Current Week Card (counts only) */}
         <div className="card p-5 text-center bg-gradient-to-br from-brand-50/50 via-white to-gray-50 border border-gray-100 shadow-sm flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
               <span className="font-semibold text-gray-700">Current Week</span>
               <span className="text-[10px] font-mono text-gray-400">{week.weekKey}</span>
             </div>
-            <p className={cn('text-3xl sm:text-4xl font-extrabold tracking-tight mb-1', gapColor(pdfGapPercent))}>
-              {pdfGapLabel}
-            </p>
-            <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-semibold mb-1">
-              <span className={cn('px-2 py-0.5 rounded-full font-medium text-[11px]', badge.bg)}>
-                {badge.text}
-              </span>
-            </div>
+            <p className="text-xs text-gray-400 mb-3">Score shown after this week closes</p>
             <p className="text-[10px] text-gray-400 mb-3">{week.weekStart} → {week.weekEnd}</p>
           </div>
 
-          {liveMis && (
+          {currentWeekCounts ? (
             <div className="rounded-xl bg-white border border-gray-100 px-3 py-2 text-left">
               <div className="grid grid-cols-3 gap-1 text-center text-xs">
                 <div className="bg-gray-50 rounded-lg py-1 px-1">
                   <span className="text-gray-400 block text-[9px]">Planned</span>
-                  <span className="font-bold text-gray-800 text-xs">{liveMis.planned}</span>
+                  <span className="font-bold text-gray-800 text-xs">{currentWeekCounts.planned}</span>
                 </div>
                 <div className="bg-green-50/70 rounded-lg py-1 px-1">
                   <span className="text-green-600 block text-[9px]">Done</span>
-                  <span className="font-bold text-green-800 text-xs">{liveMis.done}</span>
+                  <span className="font-bold text-green-800 text-xs">{currentWeekCounts.done}</span>
                 </div>
                 <div className="bg-blue-50/70 rounded-lg py-1 px-1">
                   <span className="text-blue-600 block text-[9px]">On-Time</span>
-                  <span className="font-bold text-blue-800 text-xs">{liveMis.onTime}</span>
+                  <span className="font-bold text-blue-800 text-xs">{currentWeekCounts.onTime}</span>
                 </div>
               </div>
+            </div>
+          ) : (
+            <div className="rounded-xl bg-gray-50/60 border border-gray-100 px-3 py-2.5 text-center text-[11px] text-gray-400">
+              No task activity yet this week
             </div>
           )}
         </div>
 
-        {/* Last Week Card */}
+        {/* Last Week Card (score) */}
         <div className="card p-5 text-center bg-gradient-to-br from-purple-50/40 via-white to-gray-50 border border-gray-100 shadow-sm flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
@@ -266,7 +214,7 @@ export default async function PortalScorePage() {
             <p className="text-[10px] text-gray-400 mb-3">{prevWeek.weekStart} → {prevWeek.weekEnd}</p>
           </div>
 
-          {typeof lastWeekSnapshot !== 'undefined' && lastWeekSnapshot ? (
+          {lastWeekSnapshot ? (
             <div className="rounded-xl bg-white border border-gray-100 px-3 py-2 text-left">
               <div className="grid grid-cols-3 gap-1 text-center text-xs">
                 <div className="bg-gray-50 rounded-lg py-1 px-1">
@@ -319,26 +267,6 @@ export default async function PortalScorePage() {
           </div>
         )}
       </div>
-
-      {liveMis && (
-        <div className="card p-4">
-          <p className="text-sm font-semibold text-gray-700 mb-3">Current Week Execution</p>
-          <div className="space-y-2 text-sm">
-            {[
-              { label: 'Checklist', bucket: liveMis.checklist },
-              { label: 'One Time', bucket: liveMis.delegation },
-              { label: 'FMS', bucket: liveMis.fms },
-            ].map(row => (
-              <div key={row.label} className="flex items-center justify-between gap-3 border-b border-gray-50 pb-2 last:border-b-0 last:pb-0">
-                <span className="font-medium text-gray-700">{row.label}</span>
-                <span className="text-xs text-gray-500">
-                  Planned: <strong className="text-gray-800">{row.bucket.planned}</strong> · Done: <strong className="text-gray-800">{row.bucket.done}</strong> · On-Time: <strong className="text-gray-800">{row.bucket.onTime}</strong>
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Task summary */}
       <div className="card p-4">

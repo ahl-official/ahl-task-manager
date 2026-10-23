@@ -62,6 +62,7 @@ export async function GET(req: NextRequest) {
 
     for (const [uid, items] of Array.from(recentOverdueByUid.entries())) {
       const user = usersByUid.get(uid);
+      if (user?.isActive === false) continue;
       const phone = user?.waNumber || items[0].task.assignedToWa;
       const name = user?.name || items[0].task.assignedToName || 'there';
       if (!phone) {
