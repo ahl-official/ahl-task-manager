@@ -25,6 +25,7 @@ const ADMIN_NAV = [
   { href: '/admin/revisions',   icon: RefreshCw,       label: 'Revisions'  },
   { href: '/admin/scores',      icon: BarChart2,       label: 'Scores'     },
   { href: '/admin/users',       icon: Users,           label: 'Team'       },
+  { href: '/admin/help',        icon: HelpCircle,      label: 'Help'       },
 ];
 
 const USER_NAV = [

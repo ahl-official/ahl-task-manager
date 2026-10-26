@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
       return { ...row, mine: permissions.mine, isPast: permissions.isPast,
         canComplete: !row.completed && !row.dead && permissions.canChange,
         canUncomplete: row.completed && !row.dead && permissions.canChange,
-        canManage: permissions.canChange };
+        canManage: isAdmin };
     });
 
     return NextResponse.json({
@@ -123,6 +123,9 @@ export async function POST(req: NextRequest) {
     const permissions = checklistPermissions(session, row);
     if (row.category !== category || !permissions.canChange || (action === 'verify' && !permissions.canVerify)) {
       return NextResponse.json({ success: false, error: 'Forbidden for this checklist period' }, { status: 403 });
+    }
+    if (action === 'skip_day' && session.role !== 'admin') {
+      return NextResponse.json({ success: false, error: 'Forbidden: Only admin can delete checklist tasks' }, { status: 403 });
     }
     const result = await completeRecurringTask({
       templateId: row.templateId, periodKey: row.periodKey,

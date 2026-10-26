@@ -46,6 +46,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   let updatedTask: Awaited<ReturnType<typeof adminUpdateTaskStatus>> = null;
 
   try {
+    if (action === 'uncomplete' && (task.category === 'One Time' || !task.category)) {
+      return NextResponse.json({ success: false, error: 'Undo completion is only allowed for recurring tasks, not one-time tasks' }, { status: 400 });
+    }
     if (['complete','verify','uncomplete'].includes(action) && hasCloudflareApi()) {
       const result=cfTask(await cfApi('/tasks/'+encodeURIComponent(params.id)+'/lifecycle',{
         method:'POST',body:JSON.stringify({action,actorUid:session.uid,actorRole:session.role})

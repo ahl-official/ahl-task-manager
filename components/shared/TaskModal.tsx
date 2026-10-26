@@ -546,7 +546,8 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
               </div>
             )}
 
-            {isDone && !task.childTaskId && !isTimelySheet && (isAssignee || isAdmin) && (
+            {/* Undo completion is only allowed for recurring tasks, not one-time tasks */}
+            {isDone && ['Daily', 'Weekly', 'Monthly'].includes(task.category) && !task.childTaskId && !isTimelySheet && (isAssignee || isAdmin) && (
               <ActionButton label="Undo completion" onClick={()=>doAction('uncomplete')} loading={loading==='uncomplete'} color="blue" />
             )}
             {/* Assignee / Admin actions */}

@@ -30,13 +30,11 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  if (session.role !== 'admin' && session.role !== 'leader') {
-    return NextResponse.json({ success: false, error: 'Forbidden: Admin or leader access required' }, { status: 403 });
+  if (session.role !== 'admin') {
+    return NextResponse.json({ success: false, error: 'Forbidden: Only admin can delete recurring task templates' }, { status: 403 });
   }
 
   try {
-    const existing=await getRecurringTemplate(params.id);
-    if(session.role==='leader' && (!session.department || existing.department!==session.department))return NextResponse.json({success:false,error:'Forbidden for this department'},{status:403});
     const result = await deleteRecurringTemplate(params.id);
     return NextResponse.json({ success: true, data: result });
   } catch (err: any) {

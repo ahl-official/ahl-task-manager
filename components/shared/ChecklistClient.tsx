@@ -54,6 +54,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   const [individual, setIndividual] = useState('');
   const [mineOnly, setMineOnly] = useState(false);
   const [elevated, setElevated] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [currentUserName, setCurrentUserName] = useState('');
   const [date, setDate] = useState('');
   const [activeRemarkRow, setActiveRemarkRow] = useState<string | null>(null);
@@ -61,7 +62,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   const [deleteTarget, setDeleteTarget] = useState<ChecklistRow | null>(null);
   const [deleteConfirmMode, setDeleteConfirmMode] = useState<'day' | 'whole' | null>(null);
 
-  const categoryCache = useRef<Record<string, { rows: ChecklistRow[]; elevated: boolean; currentUserName: string; nextCursor: string | null }>>({});
+  const categoryCache = useRef<Record<string, { rows: ChecklistRow[]; elevated: boolean; isAdmin: boolean; currentUserName: string; nextCursor: string | null }>>({});
   const pageSentinel = useRef<HTMLDivElement | null>(null);
   const requestKey = useRef('');
   const pageInFlight = useRef(false);
@@ -124,6 +125,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
     if (cached && !forceRefresh) {
       setRows(cached.rows);
       setElevated(cached.elevated);
+      setIsAdmin(cached.isAdmin);
       setCurrentUserName(cached.currentUserName);
       setNextCursor(cached.nextCursor);
       setLoading(false);
@@ -140,17 +142,20 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       const elevatedVal = Boolean(data.meta?.elevated);
+      const isAdminVal = Boolean(data.meta?.isAdmin);
       const userNameVal = String(data.meta?.currentUserName ?? '');
       if (requestKey.current !== cacheKey) return;
       categoryCache.current[cacheKey] = {
         rows: data.data,
         elevated: elevatedVal,
+        isAdmin: isAdminVal,
         currentUserName: userNameVal,
         nextCursor: data.meta?.nextCursor || null,
       };
       setRows(data.data);
       setNextCursor(data.meta?.nextCursor || null);
       setElevated(elevatedVal);
+      setIsAdmin(isAdminVal);
       setCurrentUserName(userNameVal);
     } catch (err: any) {
       if (!cached) toast.error(err.message ?? 'Failed to load checklist');
@@ -177,7 +182,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
       setRows(current => {
         const ids = new Set(current.map(row => row.id));
         const merged = [...current, ...data.data.filter((row: ChecklistRow) => !ids.has(row.id))];
-        categoryCache.current[cacheKey] = { rows: merged, elevated, currentUserName, nextCursor: next };
+        categoryCache.current[cacheKey] = { rows: merged, elevated, isAdmin, currentUserName, nextCursor: next };
         return merged;
       });
     } catch (err: any) {
@@ -705,7 +710,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
                         Remark
                       </button>
                     )}
-                    {row.canManage && (
+                    {isAdmin && row.canManage && (
                       <button
                         type="button"
                         onClick={() => {
@@ -763,7 +768,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
         )}
       </div>
 
-      {deleteTarget && (
+      {isAdmin && deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center" role="dialog" aria-modal="true">
           <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
             <div className="mb-3 flex items-start justify-between gap-3">
