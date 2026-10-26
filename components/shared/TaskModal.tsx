@@ -554,41 +554,14 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             {(isAssignee || isAdmin) && (
               <div className="flex gap-2 flex-wrap w-full">
                 {task.status === 'Pending Accept' && !isDone && (
-                  <div className="w-full rounded-xl bg-blue-50 p-3.5 space-y-2.5">
-                    <p className="text-xs font-semibold text-blue-800">Accept and set timeline</p>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <div>
-                        <label className="label text-blue-700">Start Date</label>
-                        <input
-                          type="date"
-                          value={acceptStartDate}
-                          onChange={e => setAcceptStartDate(e.target.value)}
-                          className="input"
-                          min={new Date().toISOString().split('T')[0]}
-                        />
-                      </div>
-                      <div>
-                        <label className="label text-blue-700">Due Date</label>
-                        <input
-                          type="date"
-                          value={acceptEndDate}
-                          onChange={e => setAcceptEndDate(e.target.value)}
-                          className="input"
-                          min={acceptStartDate || new Date().toISOString().split('T')[0]}
-                        />
-                      </div>
-                    </div>
-                    <div className="pt-1">
-                      <ActionButton
-                        label="Accept Task"
-                        onClick={() => {
-                          doAction('accept', { startDate: acceptStartDate, endDate: acceptEndDate });
-                        }}
-                        loading={loading === 'accept'}
-                        color="blue"
-                      />
-                    </div>
-                  </div>
+                  <ActionButton
+                    label="Accept Task"
+                    onClick={() => {
+                      doAction('accept', { startDate: acceptStartDate, endDate: acceptEndDate });
+                    }}
+                    loading={loading === 'accept'}
+                    color="blue"
+                  />
                 )}
 
 
