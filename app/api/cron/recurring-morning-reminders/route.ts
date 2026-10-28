@@ -26,12 +26,24 @@ export async function GET(req: NextRequest) {
   const errors: Array<{ name: string; error: string }> = [];
 
   try {
-    const [users, checklistItems] = await Promise.all([
-      adminGetAllUsers(),
-      getRecurringChecklist({ date: todayKey }),
-    ]);
+    const users = await adminGetAllUsers();
+    const activeUsers = users.filter(u => {
+      if (u.isActive === false) return false;
+      const digits = String(u.waNumber || '').replace(/\D/g, '');
+      return digits.length >= 10;
+    });
 
-    const activeUsers = users.filter(u => u.isActive !== false && u.waNumber);
+    if (activeUsers.length === 0) {
+      return NextResponse.json({
+        success: true,
+        sentCount: 0,
+        skippedCount: 0,
+        errorCount: 0,
+        message: 'No active users with valid WhatsApp numbers found',
+      });
+    }
+
+    const checklistItems = await getRecurringChecklist({ date: todayKey });
 
     for (const user of activeUsers) {
       try {

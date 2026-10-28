@@ -533,6 +533,17 @@ export default function FmsClient({ currentUser, role }: FmsClientProps) {
     fetchTasks(activeWorkflow, true);
   }, [activeWorkflow]);
 
+  useEffect(() => {
+    const handleGlobalRefresh = (e: any) => {
+      const scope = e?.detail?.scope;
+      if (!scope || scope === 'fms' || scope === 'all') {
+        fetchTasks(activeWorkflow, false);
+      }
+    };
+    window.addEventListener('app-global-refresh', handleGlobalRefresh);
+    return () => window.removeEventListener('app-global-refresh', handleGlobalRefresh);
+  }, [activeWorkflow]);
+
   // Distinct users for admin filter
   const distinctUsers = useMemo(() => {
     const users = new Set<string>();
@@ -1316,16 +1327,6 @@ export default function FmsClient({ currentUser, role }: FmsClientProps) {
               </select>
             )}
           </div>
-
-          <button
-            onClick={() => fetchTasks(activeWorkflow, false)}
-            disabled={refreshing || loading}
-            className="flex items-center justify-center gap-2 px-3.5 py-2 sm:px-4 sm:py-2.5 text-xs font-semibold text-gray-700 bg-white border border-gray-200 rounded-xl sm:rounded-2xl hover:bg-gray-50 shadow-xs transition-all disabled:opacity-50 shrink-0"
-            title="Refresh live data from Google Sheet"
-          >
-            <RefreshCw size={14} className={cn(refreshing && 'animate-spin text-brand-600')} />
-            <span>{refreshing ? 'Syncing...' : 'Sync Sheet'}</span>
-          </button>
         </div>
       </div>
 

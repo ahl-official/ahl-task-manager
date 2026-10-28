@@ -22,14 +22,14 @@ interface Props {
 export default function TaskModal({ task, onClose, role, currentUid, onUpdate, onDelete, users, currentUser }: Props) {
   const userRole = (currentUser?.role || (role === 'admin' ? 'admin' : 'member')) as UserRole;
   const isAssignee = task.assignedTo === currentUid;
-  const isHandoff  = task.handoffUid === currentUid;
+  const isHandoff = task.handoffUid === currentUid;
   const isDelegator = task.shiftedByUid === currentUid;
-  const isAdmin    = role === 'admin' || userRole === 'admin';
+  const isAdmin = role === 'admin' || userRole === 'admin';
   const isTimelySheet = task.createdBy === 'timely-sheet' || /^(office|salon|weekly)-/i.test(task.taskId);
   const isDone = task.status === 'Completed' || task.status === 'Verified' || task.status === 'Shifted (Completed)' || task.status === 'Shifted (Verified)';
-  const canDelete  = isAdmin && !isTimelySheet && !isDone && task.category==='One Time' && !task.parentTaskId && !task.childTaskId;
+  const canDelete = isAdmin && !isTimelySheet && !isDone && task.category === 'One Time' && !task.parentTaskId && !task.childTaskId;
   const displayStatus = task.status;
-  const due        = getDueBadge(task.endDate, displayStatus);
+  const due = getDueBadge(task.endDate, displayStatus);
   const needsDates = !isDone && isAssignee && (task.status === 'In Progress' || task.status === 'Pending Accept') && (!task.startDate || !task.endDate);
   const canChangeDead = !isTimelySheet && (isAssignee || isHandoff || isAdmin);
   const canShift = !isTimelySheet && canUserShiftTask(currentUser ?? { uid: currentUid, role: userRole }, task);
@@ -79,7 +79,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             setUserList(d.data);
           }
         })
-        .catch(() => {});
+        .catch(() => { });
     }
   }, [users]);
 
@@ -121,9 +121,9 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
     setLoading(action);
     try {
       const res = await fetch(`/api/tasks/${task.taskId}`, {
-        method:  'PATCH',
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ action, ...extra }),
+        body: JSON.stringify({ action, ...extra }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -174,18 +174,27 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
     setLoading('revision');
     try {
       const res = await fetch('/api/revisions', {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          taskId:        task.taskId,
+        body: JSON.stringify({
+          taskId: task.taskId,
           requestedDate: revisionDate,
-          reason:        revisionReason,
+          reason: revisionReason,
         }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       toast.success('Revision request submitted');
-      onUpdate();
+      const updatedTask: TaskSerialized = data.task || {
+        ...task,
+        revisionStatus: 'requested',
+        delayedDate: revisionDate,
+        delayReason: revisionReason,
+        status: task.status === 'In Progress' ? 'Delay Requested' : task.status,
+      };
+      setShowRevision(false);
+      onUpdate(updatedTask);
+      window.dispatchEvent(new CustomEvent('task-status-updated', { detail: updatedTask }));
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to submit revision');
     } finally {
@@ -197,22 +206,31 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
     setLoading(`revision-${decision}`);
     try {
       if (revisionId === task.taskId) {
-        const lookup=await fetch('/api/revisions?taskId='+encodeURIComponent(task.taskId));
-        const result=await lookup.json();
-        if(!result.success)throw new Error(result.error);
-        const pending=result.data.find((row:any)=>row.status==='pending');
-        if(!pending)throw new Error('No pending revision; refresh the task');
-        revisionId=pending.id;
+        const lookup = await fetch('/api/revisions?taskId=' + encodeURIComponent(task.taskId));
+        const result = await lookup.json();
+        if (!result.success) throw new Error(result.error);
+        const pending = result.data.find((row: any) => row.status === 'pending');
+        if (!pending) throw new Error('No pending revision; refresh the task');
+        revisionId = pending.id;
       }
       const res = await fetch('/api/revisions', {
-        method:  'PATCH',
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ revisionId, decision, taskId: task.taskId }),
+        body: JSON.stringify({ revisionId, decision, taskId: task.taskId }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       toast.success(`Revision ${decision}`);
-      onUpdate();
+      const updatedTask: TaskSerialized = data.task || {
+        ...task,
+        revisionStatus: decision === 'approved' ? 'accepted' : 'rejected',
+        endDate: decision === 'approved' && task.delayedDate ? task.delayedDate : task.endDate,
+        delayedDate: null,
+        delayReason: null,
+        status: task.status === 'Delay Requested' ? 'In Progress' : task.status,
+      };
+      onUpdate(updatedTask);
+      window.dispatchEvent(new CustomEvent('task-status-updated', { detail: updatedTask }));
     } catch (err: any) {
       toast.error(err.message ?? 'Failed');
     } finally {
@@ -300,8 +318,8 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                   <div className="flex items-center justify-between gap-1">
                     <span className="truncate">
                       {!task.handoffName ||
-                      task.handoffName.toLowerCase().includes('newdelegation') ||
-                      task.handoffName.toLowerCase().includes('import')
+                        task.handoffName.toLowerCase().includes('newdelegation') ||
+                        task.handoffName.toLowerCase().includes('import')
                         ? 'Admin'
                         : task.handoffName}
                     </span>
@@ -470,62 +488,62 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
 
           {/* Timeline */}
           <div className="space-y-1.5">
-            {task.acceptedAt  && <TimelineItem icon={CheckCircle2} color="text-blue-500"  label="Accepted"  date={task.acceptedAt} />}
+            {task.acceptedAt && <TimelineItem icon={CheckCircle2} color="text-blue-500" label="Accepted" date={task.acceptedAt} />}
             {task.completedAt && <TimelineItem icon={CheckCircle2} color="text-green-500" label="Completed" date={task.completedAt} />}
-            {task.verifiedAt  && <TimelineItem icon={CheckCircle2} color="text-brand-500" label="Verified"  date={task.verifiedAt} />}
+            {task.verifiedAt && <TimelineItem icon={CheckCircle2} color="text-brand-500" label="Verified" date={task.verifiedAt} />}
           </div>
 
           {/* ── Actions ── */}
           <div className="border-t border-gray-100 pt-4 space-y-3">
             {!isTimelySheet && (
-            <div className="rounded-md border border-gray-200 bg-white p-3">
-              <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-700">
-                <MessageSquare size={13} /> Add remark
-              </p>
-              <textarea
-                value={remark}
-                onChange={event => setRemark(event.target.value)}
-                placeholder="Add an update, blocker, or comment..."
-                className="input h-20 resize-none"
-                maxLength={1000}
-              />
-              <div className="mt-2 flex flex-wrap gap-2">
-                <ActionButton
-                  label="Add Remark"
-                  onClick={() => {
-                    if (!remark.trim()) return toast.error('Add a remark first');
-                    doAction('remark', { remark });
-                  }}
-                  loading={loading === 'remark'}
-                  color="blue"
+              <div className="rounded-md border border-gray-200 bg-white p-3">
+                <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                  <MessageSquare size={13} /> Add remark
+                </p>
+                <textarea
+                  value={remark}
+                  onChange={event => setRemark(event.target.value)}
+                  placeholder="Add an update, blocker, or comment..."
+                  className="input h-20 resize-none"
+                  maxLength={1000}
                 />
-                {canChangeDead && task.status !== 'Dead' && !isDone && (
+                <div className="mt-2 flex flex-wrap gap-2">
                   <ActionButton
-                    label="Flag Dead"
+                    label="Add Remark"
                     onClick={() => {
-                      if (!remark.trim()) return toast.error('Explain why the task is Dead');
-                      doAction('dead', { remark });
+                      if (!remark.trim()) return toast.error('Add a remark first');
+                      doAction('remark', { remark });
                     }}
-                    loading={loading === 'dead'}
-                    color="red"
+                    loading={loading === 'remark'}
+                    color="blue"
                   />
-                )}
-                {canChangeDead && task.status === 'Dead' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!remark.trim()) return toast.error('Add a revival remark first');
-                      doAction('revive', { remark });
-                    }}
-                    disabled={loading === 'revive'}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-green-600 px-3 py-2 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-60"
-                  >
-                    {loading === 'revive' ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
-                    Revive Task
-                  </button>
-                )}
+                  {canChangeDead && task.status !== 'Dead' && !isDone && (
+                    <ActionButton
+                      label="Flag Dead"
+                      onClick={() => {
+                        if (!remark.trim()) return toast.error('Explain why the task is Dead');
+                        doAction('dead', { remark });
+                      }}
+                      loading={loading === 'dead'}
+                      color="red"
+                    />
+                  )}
+                  {canChangeDead && task.status === 'Dead' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!remark.trim()) return toast.error('Add a revival remark first');
+                        doAction('revive', { remark });
+                      }}
+                      disabled={loading === 'revive'}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-green-600 px-3 py-2 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-60"
+                    >
+                      {loading === 'revive' ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+                      Revive Task
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
             )}
 
             {/* Shift Task Action */}
@@ -548,7 +566,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
 
             {/* Undo completion is only allowed for recurring tasks, not one-time tasks */}
             {isDone && ['Daily', 'Weekly', 'Monthly'].includes(task.category) && !task.childTaskId && !isTimelySheet && (isAssignee || isAdmin) && (
-              <ActionButton label="Undo completion" onClick={()=>doAction('uncomplete')} loading={loading==='uncomplete'} color="blue" />
+              <ActionButton label="Undo completion" onClick={() => doAction('uncomplete')} loading={loading === 'uncomplete'} color="blue" />
             )}
             {/* Assignee / Admin actions */}
             {(isAssignee || isAdmin) && (
@@ -625,8 +643,8 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             )}
 
             {/* ── Date Management ── */}
-            {!isTimelySheet && isAssignee && task.status === 'In Progress' && task.endDate && !isDone && (
-              <div className="bg-orange-50 rounded-xl p-3">
+            {!isTimelySheet && (isAssignee || isHandoff || isAdmin) && (task.status === 'In Progress' || task.status === 'Delay Requested' || task.status === 'Overdue') && task.endDate && !isDone && (
+              <div className="bg-orange-50 rounded-xl p-3 border border-orange-100">
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-xs font-semibold text-orange-800 flex items-center gap-1.5">
                     <Calendar size={13} /> Date Management
@@ -634,16 +652,37 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                   <RevisionBadge status={task.revisionStatus} />
                 </div>
 
-                {task.revisionStatus !== 'requested' && (
+                {task.revisionStatus === 'requested' ? (
+                  <div className="mt-2 text-xs space-y-1.5 bg-white/90 rounded-lg p-2.5 border border-orange-200">
+                    <p className="font-semibold text-orange-900 flex items-center gap-1.5">
+                      <Clock size={12} className="text-orange-600 animate-pulse" /> Revision Requested (Pending Approval)
+                    </p>
+                    {task.delayedDate && (
+                      <p className="text-gray-700">
+                        <span className="font-medium text-gray-500">Requested New Date:</span>{' '}
+                        <span className="font-semibold text-gray-900">{formatDate(task.delayedDate)}</span>
+                      </p>
+                    )}
+                    {task.delayReason && (
+                      <p className="text-gray-700">
+                        <span className="font-medium text-gray-500">Reason:</span>{' '}
+                        <span className="italic text-gray-800">{task.delayReason}</span>
+                      </p>
+                    )}
+                    <p className="text-[11px] text-gray-500 pt-0.5">
+                      Waiting for checker ({task.handoffName || 'Checker'}) to review.
+                    </p>
+                  </div>
+                ) : isAssignee ? (
                   <button
                     onClick={() => setShowRevision(!showRevision)}
                     className="text-xs text-orange-700 font-medium hover:underline"
                   >
                     {showRevision ? 'Cancel' : '+ Request Revised Date'}
                   </button>
-                )}
+                ) : null}
 
-                {showRevision && (
+                {showRevision && task.revisionStatus !== 'requested' && isAssignee && (
                   <div className="mt-3 space-y-2">
                     <div>
                       <label className="label text-orange-700">Requested New Date</label>
@@ -677,12 +716,19 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
 
             {/* Revision decision for handoff */}
             {!isTimelySheet && (isHandoff || isAdmin) && task.revisionStatus === 'requested' && (
-              <div className="bg-yellow-50 rounded-xl p-3">
+              <div className="bg-yellow-50 rounded-xl p-3 border border-yellow-200">
                 <p className="text-xs font-semibold text-yellow-800 mb-2 flex items-center gap-1.5">
-                  <RefreshCw size={13} /> Revision Requested
+                  <RefreshCw size={13} /> Revision Decision Required
                 </p>
+                {task.delayedDate && (
+                  <p className="text-xs text-yellow-900 mb-1">
+                    <span className="font-medium">Requested Date:</span> {formatDate(task.delayedDate)}
+                  </p>
+                )}
                 {task.delayReason && (
-                  <p className="text-xs text-yellow-700 mb-2">Reason: {task.delayReason}</p>
+                  <p className="text-xs text-yellow-800 mb-3">
+                    <span className="font-medium">Reason:</span> {task.delayReason}
+                  </p>
                 )}
                 <div className="flex gap-2">
                   <ActionButton
@@ -751,16 +797,16 @@ function TimelineItem({ icon: Icon, color, label, date }: {
 
 function RevisionBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    none:      'bg-gray-100 text-gray-500',
+    none: 'bg-gray-100 text-gray-500',
     requested: 'bg-yellow-100 text-yellow-700',
-    accepted:  'bg-green-100 text-green-700',
-    rejected:  'bg-red-100 text-red-700',
+    accepted: 'bg-green-100 text-green-700',
+    rejected: 'bg-red-100 text-red-700',
   };
   const labels: Record<string, string> = {
-    none:      'No revision',
+    none: 'No revision',
     requested: 'Revision requested',
-    accepted:  'Revision accepted',
-    rejected:  'Revision rejected',
+    accepted: 'Revision accepted',
+    rejected: 'Revision rejected',
   };
   return (
     <span className={cn('badge text-[10px]', map[status] ?? map.none)}>
@@ -773,11 +819,11 @@ function ActionButton({ label, onClick, loading: isLoading, color }: {
   label: string; onClick: () => void; loading: boolean; color: string;
 }) {
   const colors: Record<string, string> = {
-    blue:   'bg-blue-600 hover:bg-blue-700 text-white',
-    green:  'bg-green-600 hover:bg-green-700 text-white',
-    brand:  'bg-brand-600 hover:bg-brand-700 text-white',
+    blue: 'bg-blue-600 hover:bg-blue-700 text-white',
+    green: 'bg-green-600 hover:bg-green-700 text-white',
+    brand: 'bg-brand-600 hover:bg-brand-700 text-white',
     orange: 'bg-orange-600 hover:bg-orange-700 text-white',
-    red:    'bg-red-600 hover:bg-red-700 text-white',
+    red: 'bg-red-600 hover:bg-red-700 text-white',
   };
   return (
     <button

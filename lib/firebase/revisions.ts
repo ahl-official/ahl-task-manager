@@ -1,7 +1,7 @@
 import { adminDb } from './admin';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { RevisionLog, RevisionDecision } from '@/types';
-import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
+import { cachedFirestoreRead, clearFirestoreReadCache, LONG_READ_CACHE_TTL_MS } from './readCache';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { cfRevision } from '@/lib/cloudflare/models';
 
@@ -85,7 +85,7 @@ export async function adminGetRevisionsByTask(taskId: string, limitCount = DEFAU
   }
 
   const readLimit = clampRevisionLimit(limitCount);
-  return cachedFirestoreRead(`revisions:task:${taskId}:${readLimit}`, 2 * 60 * 1000, async () => {
+  return cachedFirestoreRead(`revisions:task:${taskId}:${readLimit}`, LONG_READ_CACHE_TTL_MS, async () => {
     const snap = await adminDb
       .collection(COL)
       .where('taskId', '==', taskId)
@@ -114,7 +114,7 @@ export async function adminGetAllRevisions(options?: {
   const readLimit = options?.limit === null ? null : clampRevisionLimit(options?.limit);
   const key = `revisions:all:${options?.status ?? 'any'}:${readLimit ?? 'all'}`;
 
-  return cachedFirestoreRead(key, 2 * 60 * 1000, async () => {
+  return cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
     let ref = options?.status
       ? adminDb.collection(COL).where('status', '==', options.status).orderBy('createdAt', 'desc')
       : adminDb.collection(COL).orderBy('createdAt', 'desc');

@@ -6,13 +6,15 @@ import {
   adminGetPendingRevisionsByHandoff,
   serializeRevision,
 } from '@/lib/firebase/revisions';
-import { adminGetTask } from '@/lib/firebase/tasks';
+import { adminGetTask, serializeTask } from '@/lib/firebase/tasks';
+import { adminDb } from '@/lib/firebase/admin';
 import { adminLog } from '@/lib/firebase/scores';
 import { sendWhatsApp, msgRevisionRequested, msgRevisionApproved, msgRevisionRejected } from '@/lib/waha';
 import { formatDate } from '@/lib/utils';
 import { canViewTask } from '@/lib/utils/access';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { cfRevision } from '@/lib/cloudflare/models';
+import { updateTaskInReadCache } from '@/lib/firebase/readCache';
 
 // GET /api/revisions — get pending revisions for handoff user
 export async function GET(req: NextRequest) {
@@ -56,6 +58,37 @@ export async function POST(req: NextRequest) {
     if (!hasCloudflareApi()) throw new Error('Cloudflare is required for atomic revision requests');
     const revision=cfRevision(await cfApi('/revisions',{method:'POST',body:JSON.stringify({taskId,requestedBy:session.uid,requestedByName:session.name,requestedDate,reason})}))!;
 
+    const requestedDateStr = String(requestedDate).slice(0, 10);
+    const newStatus = task.status === 'In Progress' ? 'Delay Requested' : task.status;
+
+    // Persist revision status and requested date directly to Cloudflare D1
+    await cfApi(`/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        revisionStatus: 'requested',
+        delayedDate: requestedDateStr,
+        delayReason: reason,
+        status: newStatus,
+      }),
+    }).catch(err => console.error('Failed to update task revision in D1:', err));
+    updateTaskInReadCache(taskId, {
+      revisionStatus: 'requested',
+      delayedDate: requestedDateStr,
+      delayReason: reason,
+      status: newStatus,
+    });
+
+    // Also sync Firestore if available
+    try {
+      await adminDb.collection('tasks').doc(taskId).update({
+        revisionStatus: 'requested',
+        delayedDate: new Date(requestedDate),
+        delayReason: reason,
+        status: newStatus,
+        updatedAt: new Date(),
+      });
+    } catch {}
+
     // Notify handoff
     await sendWhatsApp(
       task.handoffWa,
@@ -73,7 +106,13 @@ export async function POST(req: NextRequest) {
       taskId, uid: session.uid,
     }).catch(()=>{});
 
-    return NextResponse.json({ success: true, data: serializeRevision(revision) }, { status: 201 });
+    const updatedTask = await adminGetTask(taskId);
+
+    return NextResponse.json({
+      success: true,
+      data: serializeRevision(revision),
+      task: updatedTask ? serializeTask(updatedTask) : undefined,
+    }, { status: 201 });
   } catch (err: any) {
     console.error('POST /api/revisions error', err);
     return NextResponse.json({ success: false, error: err.message }, { status: err.status || 500 });
@@ -99,7 +138,38 @@ export async function PATCH(req: NextRequest) {
     if (!['approved','rejected'].includes(decision) || !revisionId) return NextResponse.json({success:false,error:'Valid revision ID and decision required'},{status:400});
     if (!hasCloudflareApi()) throw new Error('Cloudflare is required for atomic revision decisions');
     const revision=cfRevision(await cfApi('/revisions',{method:'PATCH',body:JSON.stringify({revisionId,taskId,decision,decidedBy:session.uid,decidedByName:session.name,actorRole:session.role})}))!;
+
     if (decision === 'approved') {
+      const newEndDate = revision.requestedDate?.toDate().toISOString().slice(0, 10) || task.delayedDate?.toDate().toISOString().slice(0, 10);
+      await cfApi(`/tasks/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          endDate: newEndDate,
+          revisionStatus: 'accepted',
+          delayedDate: null,
+          delayReason: null,
+          status: task.status === 'Delay Requested' ? 'In Progress' : task.status,
+        }),
+      }).catch(err => console.error('Failed to apply approved revision in D1:', err));
+      updateTaskInReadCache(taskId, {
+        endDate: newEndDate,
+        revisionStatus: 'accepted',
+        delayedDate: null,
+        delayReason: null,
+        status: task.status === 'Delay Requested' ? 'In Progress' : task.status,
+      });
+
+      try {
+        await adminDb.collection('tasks').doc(taskId).update({
+          endDate: newEndDate ? new Date(newEndDate) : task.endDate?.toDate(),
+          revisionStatus: 'accepted',
+          delayedDate: null,
+          delayReason: null,
+          status: task.status === 'Delay Requested' ? 'In Progress' : task.status,
+          updatedAt: new Date(),
+        });
+      } catch {}
+
       await sendWhatsApp(
         task.assignedToWa,
         msgRevisionApproved({
@@ -109,6 +179,32 @@ export async function PATCH(req: NextRequest) {
         taskId,
       ).catch(()=>{});
     } else {
+      await cfApi(`/tasks/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          revisionStatus: 'rejected',
+          delayedDate: null,
+          delayReason: null,
+          status: task.status === 'Delay Requested' ? 'In Progress' : task.status,
+        }),
+      }).catch(err => console.error('Failed to apply rejected revision in D1:', err));
+      updateTaskInReadCache(taskId, {
+        revisionStatus: 'rejected',
+        delayedDate: null,
+        delayReason: null,
+        status: task.status === 'Delay Requested' ? 'In Progress' : task.status,
+      });
+
+      try {
+        await adminDb.collection('tasks').doc(taskId).update({
+          revisionStatus: 'rejected',
+          delayedDate: null,
+          delayReason: null,
+          status: task.status === 'Delay Requested' ? 'In Progress' : task.status,
+          updatedAt: new Date(),
+        });
+      } catch {}
+
       await sendWhatsApp(
         task.assignedToWa,
         msgRevisionRejected({ taskId: task.taskId }),
@@ -120,9 +216,16 @@ export async function PATCH(req: NextRequest) {
       taskId, uid: session.uid,
     }).catch(()=>{});
 
-    return NextResponse.json({ success: true, data: serializeRevision(revision) });
+    const updatedTask = await adminGetTask(taskId);
+
+    return NextResponse.json({
+      success: true,
+      data: serializeRevision(revision),
+      task: updatedTask ? serializeTask(updatedTask) : undefined,
+    });
   } catch (err: any) {
     console.error('PATCH /api/revisions error', err);
     return NextResponse.json({ success: false, error: err.message }, { status: err.status || 500 });
   }
 }
+

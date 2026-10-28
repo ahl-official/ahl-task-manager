@@ -52,7 +52,8 @@ export async function cfApi<T>(
 
   if (init.method && !['GET', 'HEAD'].includes(init.method.toUpperCase())) {
     clearMisCache();
-    clearFirestoreReadCache('tasks:');
+    clearFirestoreReadCache('scores:');
+    clearFirestoreReadCache('revisions:');
   }
   return payload.data as T;
 }

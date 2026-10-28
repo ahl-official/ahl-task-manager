@@ -85,6 +85,11 @@ tools/mis-audit/
 # The deployed Worker source lives in cloudflare/worker/reconciled/.
 tools/*.cjs
 tools/.checklist_*.json
+tools/.live_checklist_*.json
+tools/.live_delegation_master.json
+tools/.requested_task_*.json
+tools/.requested_sheet_*.json
+tools/.latest_5000_*.json
 tools/build*.py
 tools/create*.py
 cloudflare/tools/mis-audit/

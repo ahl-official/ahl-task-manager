@@ -7,7 +7,7 @@ import { db } from './client';
 import { adminDb } from './admin';
 import type { AHLUser } from '@/types';
 import { handleFirestoreReadError } from './errors';
-import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
+import { cachedFirestoreRead, clearFirestoreReadCache, LONG_READ_CACHE_TTL_MS } from './readCache';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { cfUser } from '@/lib/cloudflare/models';
 
@@ -89,37 +89,54 @@ export async function adminGetUserByWa(waInput: string): Promise<AHLUser | null>
 }
 
 export async function adminGetUserByUid(uid: string): Promise<AHLUser | null> {
-  if (hasCloudflareApi()) {
-    return cfUser(await cfApi(`/users/by-uid?uid=${encodeURIComponent(uid)}`));
-  }
+  return cachedFirestoreRead(`users:by-uid:${uid}`, LONG_READ_CACHE_TTL_MS, async () => {
+    if (hasCloudflareApi()) {
+      try {
+        return cfUser(await cfApi(`/users/by-uid?uid=${encodeURIComponent(uid)}`));
+      } catch (err) {
+        console.warn(`[adminGetUserByUid] Cloudflare read failed for ${uid}:`, err);
+        return null;
+      }
+    }
 
-  const snap = await adminDb.collection(COL).doc(uid).get();
-  if (snap.exists) return snap.data() as AHLUser;
+    try {
+      const snap = await adminDb.collection(COL).doc(uid).get();
+      if (snap.exists) return snap.data() as AHLUser;
 
-  const byField = await adminDb
-    .collection(COL)
-    .where('uid', '==', uid)
-    .limit(1)
-    .get();
+      const byField = await adminDb
+        .collection(COL)
+        .where('uid', '==', uid)
+        .limit(1)
+        .get();
 
-  return byField.empty ? null : byField.docs[0].data() as AHLUser;
+      return byField.empty ? null : byField.docs[0].data() as AHLUser;
+    } catch (err) {
+      handleFirestoreReadError('adminGetUserByUid', err);
+      return null;
+    }
+  });
 }
 
 export async function adminGetAllUsers(): Promise<AHLUser[]> {
-  if (hasCloudflareApi()) {
-    const users = await cfApi<any[]>('/users');
-    return users.map(cfUser).filter(Boolean) as AHLUser[];
-  }
+  return cachedFirestoreRead('users:all', LONG_READ_CACHE_TTL_MS, async () => {
+    if (hasCloudflareApi()) {
+      try {
+        const users = await cfApi<any[]>('/users');
+        return users.map(cfUser).filter(Boolean) as AHLUser[];
+      } catch (err) {
+        console.warn('[adminGetAllUsers] Cloudflare read failed (possibly read limit):', err);
+        return [];
+      }
+    }
 
-  try {
-    return await cachedFirestoreRead('users:all', 5 * 60 * 1000, async () => {
-      const snap = await adminDb.collection(COL).orderBy('name').get();
+    try {
+      const snap = await adminDb.collection(COL).orderBy('name').limit(200).get();
       return snap.docs.map(d => d.data() as AHLUser);
-    });
-  } catch (err) {
-    handleFirestoreReadError('adminGetAllUsers', err);
-    return [];
-  }
+    } catch (err) {
+      handleFirestoreReadError('adminGetAllUsers', err);
+      return [];
+    }
+  });
 }
 
 export async function adminCreateUser(user: Omit<AHLUser, 'createdAt' | 'updatedAt'>): Promise<void> {

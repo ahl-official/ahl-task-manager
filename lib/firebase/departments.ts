@@ -1,7 +1,7 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
 import { handleFirestoreReadError } from './errors';
-import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
+import { cachedFirestoreRead, clearFirestoreReadCache, LONG_READ_CACHE_TTL_MS } from './readCache';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { cfDepartment } from '@/lib/cloudflare/models';
 
@@ -26,24 +26,24 @@ export interface Department {
 }
 
 export async function adminGetDepartments(): Promise<Department[]> {
-  if (hasCloudflareApi()) {
-    const departments = await cfApi<any[]>('/departments');
-    return departments.map(cfDepartment).filter(Boolean) as Department[];
-  }
+  return cachedFirestoreRead('departments:all', LONG_READ_CACHE_TTL_MS, async () => {
+    if (hasCloudflareApi()) {
+      const departments = await cfApi<any[]>('/departments');
+      return departments.map(cfDepartment).filter(Boolean) as Department[];
+    }
 
-  try {
-    return await cachedFirestoreRead('departments:all', 5 * 60 * 1000, async () => {
-      const snap = await adminDb.collection(COL).orderBy('name').get();
+    try {
+      const snap = await adminDb.collection(COL).orderBy('name').limit(100).get();
       const custom = snap.docs.map(d => d.data() as Department);
 
       return custom
         .filter(d => d.isActive)
         .sort((a, b) => a.name.localeCompare(b.name));
-    });
-  } catch (err) {
-    handleFirestoreReadError('adminGetDepartments', err);
-    return [];
-  }
+    } catch (err) {
+      handleFirestoreReadError('adminGetDepartments', err);
+      return [];
+    }
+  });
 }
 
 export async function adminCreateDepartment(name: string): Promise<Department> {

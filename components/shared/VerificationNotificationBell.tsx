@@ -6,7 +6,7 @@ import { cn, formatDateTime } from '@/lib/utils';
 import TaskModal from '@/components/shared/TaskModal';
 import type { TaskSerialized } from '@/types';
 
-const POLL_MS = 5 * 60_000;
+const STALE_THRESHOLD_MS = 5 * 60_000;
 
 function isPortalTask(task: TaskSerialized) {
   return task.createdBy !== 'timely-sheet' && !/^(office|salon|weekly)-/i.test(task.taskId);
@@ -33,7 +33,7 @@ export default function VerificationNotificationBell({
       const url = isAdmin
         ? '/api/tasks?scope=all&filter=true&verificationPending=true&excludeRecurring=true&limit=50'
         : '/api/tasks?scope=handoff&filter=true&verificationPending=true&excludeRecurring=true&limit=50';
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await fetch(url);
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to load notifications');
       const pending = (data.data as TaskSerialized[])
@@ -55,15 +55,6 @@ export default function VerificationNotificationBell({
 
   useEffect(() => {
     load();
-    const refreshIfStale = () => {
-      if (document.visibilityState === 'visible' && Date.now() - lastLoadedAt.current >= POLL_MS) load(true);
-    };
-    const timer = window.setInterval(refreshIfStale, POLL_MS);
-    document.addEventListener('visibilitychange', refreshIfStale);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', refreshIfStale);
-    };
   }, [load]);
 
   useEffect(() => {
@@ -117,7 +108,7 @@ export default function VerificationNotificationBell({
           onClick={() => {
             const nextOpen = !open;
             setOpen(nextOpen);
-            if (nextOpen && Date.now() - lastLoadedAt.current >= 60_000) load(items.length > 0);
+            if (nextOpen && Date.now() - lastLoadedAt.current >= STALE_THRESHOLD_MS) load(items.length > 0);
           }}
           className={cn(
             'relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-900',

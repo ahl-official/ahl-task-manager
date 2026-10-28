@@ -1,8 +1,8 @@
 // Read-only reporting routes. No schema creation, materialization, or database writes.
 const cache = new Map();
 const periodCache = new Map();
-const TTL = 30_000;
-export function invalidateReadCache() { cache.clear(); periodCache.clear(); }
+const TTL = 300_000;
+export function invalidateReadCache() { periodCache.clear(); }
 export function getCachedRead(req, url) {
   if (req.method !== 'GET' || url.searchParams.get('fresh') === 'true') return null;
   const entry = cache.get(url.href);
@@ -10,7 +10,7 @@ export function getCachedRead(req, url) {
   return new Response(entry.body, { status: 200, headers: { 'content-type': 'application/json', 'x-data-as-of': entry.asOf } });
 }
 export async function cacheRead(req, url, response) {
-  if (req.method !== 'GET' || response.status !== 200 || !['/tasks/counts','/tasks/search','/mis/delegation-counts','/recurring/mis-counts','/mis/reconciled','/mis/weekly','/mis/weekly/latest'].includes(url.pathname)) return;
+  if (req.method !== 'GET' || response.status !== 200 || !['/tasks/counts','/tasks/search','/users','/departments','/mis/delegation-counts','/recurring/mis-counts','/mis/reconciled','/mis/weekly','/mis/weekly/latest'].includes(url.pathname)) return;
   const body = await response.clone().text();
   if (body.length > 1_000_000) return;
   if (cache.size >= 128) cache.delete(cache.keys().next().value);
@@ -26,7 +26,7 @@ function scopeFilters(url) {
     else throw new Error('Invalid task scope');
   }
   const department=url.searchParams.get('department');if(department){clauses.push('department=?');binds.push(department);}
-  if(url.searchParams.get('excludeRecurring')==='true')clauses.push("LOWER(COALESCE(category,'')) NOT IN ('daily','weekly','monthly')");
+  if(url.searchParams.get('excludeRecurring')==='true')clauses.push("(category NOT IN ('Daily','Weekly','Monthly') OR category IS NULL)");
   for(const [param,col] of [['assignedTo','assigned_to'],['category','category'],['priority','priority']]){const value=url.searchParams.get(param);if(value){clauses.push(col+'=?');binds.push(value);}}
   const weekStart=url.searchParams.get('weekStart'),weekEnd=url.searchParams.get('weekEnd');
   if(weekStart||weekEnd){
@@ -51,6 +51,60 @@ function statusFilter(clauses,binds,status){
   else if(status==='Overdue'){clauses.push("(status='Overdue' OR (status IN ('Pending Accept','In Progress','Delay Requested') AND date(end_date,'+5 hours','+30 minutes') < ?))");binds.push(today());}
   else if(status){clauses.push('(status=? OR status=?)');binds.push(status,'Shifted ('+status+')');}
 }
+let taskCountsTableReady = false;
+export async function ensureTaskCountsTable(env) {
+  if (taskCountsTableReady) return;
+  try {
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS task_counts_summary (
+        assigned_to TEXT NOT NULL DEFAULT '',
+        department TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT '',
+        count INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (assigned_to, department, status)
+      )
+    `).run();
+
+    taskCountsTableReady = true;
+  } catch (err) {
+    console.error("ensureTaskCountsTable error:", err);
+  }
+}
+
+export async function adjustTaskCount(env, oldTask, newTask) {
+  try {
+    await ensureTaskCountsTable(env);
+    const stmts = [];
+    if (oldTask && oldTask.assigned_to && oldTask.status) {
+      const oldStatus = oldTask.status;
+      const oldDept = oldTask.department || '';
+      const oldUser = oldTask.assigned_to;
+      stmts.push(
+        env.DB.prepare(
+          "UPDATE task_counts_summary SET count = MAX(0, count - 1) WHERE assigned_to = ? AND department = ? AND status = ?"
+        ).bind(oldUser, oldDept, oldStatus)
+      );
+    }
+    if (newTask && newTask.assigned_to && newTask.status) {
+      const newStatus = newTask.status;
+      const newDept = newTask.department || '';
+      const newUser = newTask.assigned_to;
+      stmts.push(
+        env.DB.prepare(
+          `INSERT INTO task_counts_summary (assigned_to, department, status, count)
+           VALUES (?, ?, ?, 1)
+           ON CONFLICT(assigned_to, department, status) DO UPDATE SET count = count + 1`
+        ).bind(newUser, newDept, newStatus)
+      );
+    }
+    if (stmts.length > 0) {
+      await env.DB.batch(stmts);
+    }
+  } catch (err) {
+    console.error('adjustTaskCount error:', err);
+  }
+}
+
 export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
   if(req.method!=='GET')return null;
   if(url.pathname==='/tasks/reminders'){
@@ -74,17 +128,43 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     return json((rows.results||[]).map(mapTask));
   }
   if(url.pathname==='/tasks/counts'){
-    const {clauses,binds}=scopeFilters(url);
-    statusFilter(clauses,binds,url.searchParams.get('status'));
-    const due="(status='Overdue' OR (status IN ('Pending Accept','In Progress','Delay Requested') AND date(end_date,'+5 hours','+30 minutes') < ?))";
-    const result=await env.DB.prepare(`SELECT assigned_to,department,status,${due} AS overdue_flag,COUNT(*) AS n FROM tasks_current ${clauses.length?'WHERE '+clauses.join(' AND '):''} GROUP BY assigned_to,department,status,overdue_flag`).bind(today(),...binds).all();
-    const overall=empty(),byUser=Object.create(null),byDepartment=Object.create(null);
-    for(const row of result.results||[]){const n=Number(row.n),user=row.assigned_to||'',dept=row.department||'Unassigned';add(overall,row.status,n,Boolean(row.overdue_flag));add(byUser[user]??=empty(),row.status,n,Boolean(row.overdue_flag));add(byDepartment[dept]??=empty(),row.status,n,Boolean(row.overdue_flag));}
-    const params=url.searchParams,uid=params.get('uid');
+    await ensureTaskCountsTable(env);
+    const summaryClauses=[],summaryBinds=[];
+    const scope=url.searchParams.get('scope')||'all',uid=url.searchParams.get('uid');
+    if(scope==='mine'&&uid){summaryClauses.push('assigned_to=?');summaryBinds.push(uid);}
+    const dept=url.searchParams.get('department');
+    if(dept){summaryClauses.push('department=?');summaryBinds.push(dept);}
+    const assignedTo=url.searchParams.get('assignedTo');
+    if(assignedTo){summaryClauses.push('assigned_to=?');summaryBinds.push(assignedTo);}
+    const reqStatus=url.searchParams.get('status');
+    if(reqStatus){summaryClauses.push('status=?');summaryBinds.push(reqStatus);}
+
+    const isGlobal = summaryClauses.length === 0;
+    const overall = empty(), byUser = Object.create(null), byDepartment = Object.create(null);
+    if (isGlobal) {
+      // 1 read for global summary: reads ~5 rows instead of full table or user scan
+      const result = await env.DB.prepare("SELECT status, SUM(count) AS n FROM task_counts_summary GROUP BY status").all();
+      for (const row of result.results || []) {
+        const n = Number(row.n || 0);
+        add(overall, row.status, n, row.status === 'Overdue');
+      }
+    } else {
+      const whereSql = 'WHERE ' + summaryClauses.join(' AND ');
+      const result = await env.DB.prepare(`SELECT assigned_to,department,status,count AS n FROM task_counts_summary ${whereSql}`).bind(...summaryBinds).all();
+      for (const row of result.results || []) {
+        const n = Number(row.n || 0), user = row.assigned_to || '', d = row.department || 'Unassigned';
+        add(overall, row.status, n, row.status === 'Overdue');
+        add(byUser[user] ??= empty(), row.status, n, row.status === 'Overdue');
+        add(byDepartment[d] ??= empty(), row.status, n, row.status === 'Overdue');
+      }
+    }
+
+
+    const params=url.searchParams;
     if(params.get('includeChecklist')==='true'&&params.get('scope')==='mine'&&(!params.get('assignedTo')||params.get('assignedTo')===uid)&&(!params.get('category')||params.get('category')==='Daily')&&(!params.get('priority')||params.get('priority')==='Medium')){
       const department=params.get('department');
-      const periods=await env.DB.prepare("SELECT department,status,COUNT(*) AS n FROM recurring_period_rows WHERE assigned_to=? AND category='Daily' AND is_deleted=0 AND status!='Deleted' AND due_date=?"+(department?' AND department=?':'')+" GROUP BY department,status").bind(uid,today(),...(department?[department]:[])).all();
-      for(const row of periods.results||[]){const status=['Completed','Verified'].includes(row.status)?'Completed':'In Progress',requested=params.get('status');if(requested&&requested!==status&&!(requested==='Completed'&&status==='Verified'))continue;const n=Number(row.n),uid=url.searchParams.get('uid'),dept=row.department||'Unassigned';add(overall,status,n,false);add(byUser[uid]??=empty(),status,n,false);add(byDepartment[dept]??=empty(),status,n,false);}
+      const periods=await env.DB.prepare("SELECT department,status,COUNT(*) AS n FROM recurring_period_rows WHERE assigned_to=? AND category='Daily' AND is_deleted=0 AND status!='Deleted' AND due_date=?"+(department?' AND department=?':'')+" GROUP BY department,status LIMIT 50").bind(uid,today(),...(department?[department]:[])).all();
+      for(const row of periods.results||[]){const status=['Completed','Verified'].includes(row.status)?'Completed':'In Progress',requested=params.get('status');if(requested&&requested!==status&&!(requested==='Completed'&&status==='Verified'))continue;const n=Number(row.n),uidVal=url.searchParams.get('uid'),deptVal=row.department||'Unassigned';add(overall,status,n,false);add(byUser[uidVal]??=empty(),status,n,false);add(byDepartment[deptVal]??=empty(),status,n,false);}
     }
     return json({...overall,byUser,byDepartment});
   }
@@ -92,7 +172,7 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     const {clauses,binds}=scopeFilters(url),q=(url.searchParams.get('q')||'').trim();
     const limit=Math.min(Math.max(Number(url.searchParams.get('limit'))||100,1),100);
     const status=url.searchParams.get('status');
-    if(url.searchParams.get('verificationPending')==='true')clauses.push("status='Completed' AND COALESCE(verified_at,'')=''");
+    if(url.searchParams.get('verificationPending')==='true')clauses.push("status='Completed' AND (verified_at IS NULL OR verified_at='')");
     else statusFilter(clauses,binds,status);
     const id=q.match(/^T-?(\d+)$/i);
     if(id){clauses.push('task_id=?');binds.push('T-'+id[1].padStart(4,'0'));}

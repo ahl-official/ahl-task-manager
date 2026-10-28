@@ -76,11 +76,10 @@ interface Props {
   taskCounts: TaskAggregateCounts;
   users: any[];
   tasks: TaskSerialized[];
-  scores: any[];
   departments: { id: string; name: string }[];
 }
 
-export default function AdminDashboardClient({ currentUid, taskCounts, users, tasks, scores, departments: initialDepartments }: Props) {
+export default function AdminDashboardClient({ currentUid, taskCounts, users, tasks, departments: initialDepartments }: Props) {
   const [taskItems, setTaskItems] = useState(tasks);
   const [filter, setFilter]         = useState<TaskFilter>('all');
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
@@ -110,7 +109,7 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
       });
     }).catch(error=>{if(error.name!=='AbortError')console.error('User task lookup failed',error);});
     return ()=>controller.abort();
-  },[selectedUser,filter,taskItems]);
+  },[selectedUser,filter]);
 
   function updateTask(updated?: TaskSerialized) {
     if (!updated) {
@@ -156,15 +155,22 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
       tasksByUser.set(task.assignedTo, userTasks);
     }
 
-    return { overall: taskCounts,
-      byUser: new Map<string, TaskCounts>(Object.entries(taskCounts.byUser || {})),
-      byDepartment: new Map<string, TaskCounts>(Object.entries(taskCounts.byDepartment || {})), tasksByUser };
-  }, [taskItems, taskCounts]);
+    const hasAggregateCounts = Boolean(taskCounts && taskCounts.total > 0);
+    const finalOverall = hasAggregateCounts ? taskCounts : overall;
+    const finalByUser = (hasAggregateCounts && Object.keys(taskCounts.byUser || {}).length > 0)
+      ? new Map<string, TaskCounts>(Object.entries(taskCounts.byUser || {}))
+      : byUser;
+    const finalByDepartment = (hasAggregateCounts && Object.keys(taskCounts.byDepartment || {}).length > 0)
+      ? new Map<string, TaskCounts>(Object.entries(taskCounts.byDepartment || {}))
+      : byDepartment;
 
-  const scoreMap = useMemo(() =>
-    Object.fromEntries(scores.map((s: any) => [s.uid, s])),
-    [scores]
-  );
+    return {
+      overall: finalOverall,
+      byUser: finalByUser,
+      byDepartment: finalByDepartment,
+      tasksByUser,
+    };
+  }, [taskItems, taskCounts]);
 
   const departmentBlocks = useMemo(() => departments
     .filter(department => department !== 'all')
@@ -418,7 +424,6 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
 
               {selectedDepartmentBlock.users.map((user: any) => {
                 const counts = taskMetrics.byUser.get(user.uid) ?? emptyCounts();
-                const score = scoreMap[user.uid];
                 const userTasks = (taskMetrics.tasksByUser.get(user.uid) ?? []).filter(task => matchesFilter(task, filter));
                 const isSelected = selectedUser === user.uid;
 
@@ -438,7 +443,7 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
                         </div>
                         <div>
                           <p className="text-sm font-medium text-gray-900">{user.name}</p>
-                          <p className="text-[11px] text-gray-400">{score ? `${score.monthlyScore}% MIS` : 'No MIS score yet'}</p>
+                          <p className="text-[11px] text-gray-400 capitalize">{user.role || 'Member'}</p>
                         </div>
                       </div>
 

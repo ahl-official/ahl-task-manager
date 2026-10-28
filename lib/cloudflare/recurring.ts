@@ -1,5 +1,6 @@
 import { cfApi, hasCloudflareApi, CloudflareApiError } from '@/lib/cloudflare/api';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
+import { addDaysKey } from '@/lib/mis/week';
 
 export interface RecurringTemplate {
   id: string;
@@ -197,11 +198,14 @@ export async function deleteRecurringTemplate(id: string): Promise<{ deletedId: 
 export async function getRecurringChecklist(params: {
   category?: string;
   date?: string;
+  startDate?: string;
+  endDate?: string;
   userName?: string;
   uid?: string;
 }): Promise<RecurringChecklistItem[]> {
   const today = indiaTodayKey();
-  if (params.date && params.date > today) {
+  const tomorrow = addDaysKey(today, 1);
+  if (params.date && params.date > tomorrow) {
     return [];
   }
 
@@ -209,6 +213,8 @@ export async function getRecurringChecklist(params: {
     const search = new URLSearchParams();
     if (params.category) search.set('category', params.category);
     if (params.date) search.set('date', params.date);
+    if (params.startDate) search.set('startDate', params.startDate);
+    if (params.endDate) search.set('endDate', params.endDate);
     if (params.userName) search.set('userName', params.userName);
     if (params.uid) search.set('uid', params.uid);
     const qs = search.toString();

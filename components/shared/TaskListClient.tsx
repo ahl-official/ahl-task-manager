@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
-import { AlertTriangle, ArrowRight, Calendar, Check, Clock3, Loader2, RotateCw, Search } from 'lucide-react';
+import { useEffect, useState, useMemo, useRef } from 'react';
+import { AlertTriangle, ArrowRight, Calendar, Check, Clock3, Loader2, Search } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS, PRIORITY_DOT, getDueBadge, normalizeBaseStatus } from '@/lib/utils';
 import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import { scheduleByTaskId, scheduleTasks } from '@/lib/utils/scheduling';
@@ -95,9 +95,9 @@ export default function TaskListClient({
   totalCount,
 }: Props) {
   const [taskItems, setTaskItems] = useState(tasks);
-  const [mineOnly, setMineOnly]     = useState(false);
-  const [search, setSearch]         = useState('');
-  const [statusFilter, setStatus]   = useState('all');
+  const [mineOnly, setMineOnly] = useState(false);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatus] = useState('all');
   const [priorityFilter, setPriority] = useState('all');
   const [departmentFilter, setDepartment] = useState('all');
   const [userFilter, setUserFilter] = useState('all');
@@ -106,8 +106,6 @@ export default function TaskListClient({
   const [selectedTask, setSelected] = useState<TaskSerialized | null>(null);
   const [mounted, setMounted] = useState(false);
   const [isSearchingServer, setIsSearchingServer] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -118,69 +116,46 @@ export default function TaskListClient({
     setTaskItems(mergeTasksWithPending(tasks, pending));
   }, [tasks, currentUid]);
 
-
-  const handleSync = async () => {
-    try {
-      setIsSyncing(true);
-      setSyncStatus(null);
-      const scope = role === 'admin' ? 'all' : (mineOnly ? 'mine' : 'all');
-      const deptParam = departmentFilter !== 'all' ? `&department=${encodeURIComponent(departmentFilter)}` : '';
-      const res = await fetch(`/api/tasks?scope=${scope}${deptParam}&limit=100&fresh=true`);
-      const json = await res.json();
-      if (json.success && Array.isArray(json.data)) {
-        setTaskItems(json.data);
-        setSyncStatus(`Synced ${json.data.length} tasks`);
-        setTimeout(() => setSyncStatus(null), 3500);
-      } else {
-        setSyncStatus('Sync failed');
-        setTimeout(() => setSyncStatus(null), 3500);
+  useEffect(() => {
+    const handleGlobalRefresh = (e: any) => {
+      const scope = e?.detail?.scope;
+      if (!scope || scope === 'tasks' || scope === 'all') {
+        countsCache.current = {};
       }
-    } catch (err) {
-      console.error('Task sync failed:', err);
-      setSyncStatus('Sync failed');
-      setTimeout(() => setSyncStatus(null), 3500);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
+    };
+    window.addEventListener('app-global-refresh', handleGlobalRefresh);
+    return () => window.removeEventListener('app-global-refresh', handleGlobalRefresh);
+  }, []);
 
-  // Search locally first; query the server only when the loaded batch has no matching row.
+  // Search locally first; query the server only when the user types a search query >= 3 characters.
   useEffect(() => {
     const q = search.trim().toLowerCase();
-    const filteredRequest = mineOnly || statusFilter !== 'all' || departmentFilter !== 'all' || userFilter !== 'all' || categoryFilter !== 'all' || priorityFilter !== 'all';
-    if (!q && !filteredRequest) return;
-    if (q && q.length < 3) return;
-    const local = taskItems.some(t =>
-      matchesTaskSearch(t, q) &&
-      (departmentFilter === 'all' || t.department === departmentFilter) &&
-      (userFilter === 'all' || t.assignedTo === userFilter) &&
-      (categoryFilter === 'all' || t.category === categoryFilter) &&
-      (priorityFilter === 'all' || t.priority === priorityFilter) &&
-      (!mineOnly || t.assignedTo === currentUid) &&
-      (statusFilter === 'all' || (statusFilter === 'Completed' ? ['Completed','Verified'].includes(t.status) : statusFilter === 'Overdue' ? t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(indiaTodayKey(),indiaDateKey(t.endDate!)) < 0 && ['Pending Accept','In Progress','Delay Requested'].includes(t.status)) : normalizeBaseStatus(t.status) === statusFilter)));
-    if (local && !filteredRequest) return;
+    if (!q || q.length < 3) return;
+
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       setIsSearchingServer(true);
       try {
         const params = new URLSearchParams({ search: q, limit: '100', filter: 'true', scope: mineOnly ? 'mine' : 'all' });
-        for (const [key,value] of [['department',departmentFilter],['status',statusFilter],['assignedTo',userFilter],['category',categoryFilter],['priority',priorityFilter]]) if(value !== 'all') params.set(key,value);
+        for (const [key, value] of [['department', departmentFilter], ['status', statusFilter], ['assignedTo', userFilter], ['category', categoryFilter], ['priority', priorityFilter]]) if (value !== 'all') params.set(key, value);
         const response = await fetch('/api/tasks?' + params, { signal: controller.signal });
         const json = await response.json();
         if (!controller.signal.aborted && json.success && Array.isArray(json.data)) setTaskItems(current => {
-          const byId = new Map(current.map(task => [task.taskId,task]));
+          const byId = new Map(current.map(task => [task.taskId, task]));
           let changed = false;
           for (const task of json.data) {
             const previous = byId.get(task.taskId);
-            if (!previous || previous.updatedAt !== task.updatedAt) { byId.set(task.taskId,task); changed = true; }
+            if (!previous || previous.updatedAt !== task.updatedAt) { byId.set(task.taskId, task); changed = true; }
           }
           return changed ? Array.from(byId.values()) : current;
         });
-      } catch (error: any) { if(error.name !== 'AbortError') console.error('Task search failed',error); }
-      finally { if(!controller.signal.aborted) setIsSearchingServer(false); }
+      } catch (error: any) { if (error.name !== 'AbortError') console.error('Task search failed', error); }
+      finally { if (!controller.signal.aborted) setIsSearchingServer(false); }
     }, 500);
     return () => { clearTimeout(timer); controller.abort(); setIsSearchingServer(false); };
-  }, [search, departmentFilter, statusFilter, userFilter, categoryFilter, priorityFilter, mineOnly, currentUid, taskItems]);
+  }, [search, departmentFilter, statusFilter, userFilter, categoryFilter, priorityFilter, mineOnly, currentUid]);
+
+  const countsCache = useRef<Record<string, Props['initialCounts']>>({});
 
   function updateTask(updated?: TaskSerialized) {
     if (!updated) {
@@ -189,19 +164,115 @@ export default function TaskListClient({
     }
 
     setTaskItems(current => {
-      const exists = current.some(task => task.taskId === updated.taskId);
-      if (exists) {
+      const existing = current.find(task => task.taskId === updated.taskId);
+      if (existing) {
+        // Adjust aggregate counters in-place when a task status changes!
+        if (existing.status !== updated.status) {
+          setAggregateCards(prev => {
+            if (!prev) return prev;
+            const next = { ...prev };
+            const statusMap: Record<string, string> = {
+              'Pending Accept': 'pending',
+              'In Progress': 'inProgress',
+              'Delay Requested': 'delayRequested',
+              'Overdue': 'overdue',
+              'Completed': 'completed',
+              'Verified': 'verified',
+              'Dead': 'dead',
+            };
+            const oldKey = statusMap[existing.status];
+            const newKey = statusMap[updated.status];
+            if (oldKey && typeof (next as any)[oldKey] === 'number') {
+              (next as any)[oldKey] = Math.max(0, (next as any)[oldKey] - 1);
+            }
+            if (newKey && typeof (next as any)[newKey] === 'number') {
+              (next as any)[newKey] = (next as any)[newKey] + 1;
+            }
+            return next;
+          });
+        }
         return current.map(task => task.taskId === updated.taskId ? updated : task);
       }
+      setAggregateCards(prev => {
+        if (!prev) return prev;
+        const next = { ...prev, total: (prev.total || 0) + 1 };
+        const statusMap: Record<string, string> = {
+          'Pending Accept': 'pending',
+          'In Progress': 'inProgress',
+          'Delay Requested': 'delayRequested',
+          'Overdue': 'overdue',
+          'Completed': 'completed',
+          'Verified': 'verified',
+          'Dead': 'dead',
+        };
+        const key = statusMap[updated.status] || 'pending';
+        if (typeof (next as any)[key] === 'number') (next as any)[key] += 1;
+        return next;
+      });
       return [updated, ...current];
     });
     setSelected(updated);
   }
 
   function removeTask(taskId: string) {
-    setTaskItems(current => current.filter(task => task.taskId !== taskId));
+    setTaskItems(current => {
+      const existing = current.find(t => t.taskId === taskId);
+      if (existing) {
+        setAggregateCards(prev => {
+          if (!prev) return prev;
+          const next = { ...prev, total: Math.max(0, (prev.total || 0) - 1) };
+          const statusMap: Record<string, string> = {
+            'Pending Accept': 'pending',
+            'In Progress': 'inProgress',
+            'Delay Requested': 'delayRequested',
+            'Overdue': 'overdue',
+            'Completed': 'completed',
+            'Verified': 'verified',
+            'Dead': 'dead',
+          };
+          const key = statusMap[existing.status] || 'pending';
+          if (typeof (next as any)[key] === 'number') (next as any)[key] = Math.max(0, (next as any)[key] - 1);
+          return next;
+        });
+      }
+      return current.filter(task => task.taskId !== taskId);
+    });
     setSelected(null);
   }
+
+  // Fetch completed tasks on-demand when user explicitly clicks Completed filter tab
+  const completedFetchedRef = useRef(false);
+  useEffect(() => {
+    if (statusFilter === 'Completed' && !completedFetchedRef.current) {
+      completedFetchedRef.current = true;
+      const controller = new AbortController();
+      (async () => {
+        try {
+          const params = new URLSearchParams({ status: 'Completed', limit: '100', scope: mineOnly ? 'mine' : 'all' });
+          if (departmentFilter !== 'all') params.set('department', departmentFilter);
+          if (userFilter !== 'all') params.set('assignedTo', userFilter);
+          const response = await fetch('/api/tasks?' + params, { signal: controller.signal });
+          const json = await response.json();
+          if (!controller.signal.aborted && json.success && Array.isArray(json.data)) {
+            setTaskItems(current => {
+              const byId = new Map(current.map(task => [task.taskId, task]));
+              let changed = false;
+              for (const task of json.data) {
+                if (!byId.has(task.taskId)) {
+                  byId.set(task.taskId, task);
+                  changed = true;
+                }
+              }
+              return changed ? Array.from(byId.values()) : current;
+            });
+          }
+        } catch (err: any) {
+          if (err.name !== 'AbortError') console.error('Failed to load completed tasks', err);
+        }
+      })();
+      return () => controller.abort();
+    }
+  }, [statusFilter, mineOnly, departmentFilter, userFilter]);
 
   const departments = useMemo(() =>
     Array.from(new Set([
@@ -225,8 +296,8 @@ export default function TaskListClient({
     const today = indiaTodayKey();
     const rows = taskItems.filter(t => {
       const isOverdueTask = t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(today, indiaDateKey(t.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status));
-      const matchMine     = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
-      const matchSearch   = matchesTaskSearch(t, search);
+      const matchMine = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
+      const matchSearch = matchesTaskSearch(t, search);
       const matchStatus = statusFilter === 'all'
         || (statusFilter === 'Overdue'
           ? isOverdueTask
@@ -284,27 +355,61 @@ export default function TaskListClient({
   }, [taskItems, mineOnly, currentUid, currentUserName, departmentFilter, userFilter, categoryFilter, search, priorityFilter]);
 
   const [aggregateCards, setAggregateCards] = useState<Props['initialCounts']>(initialCounts);
+
+  // Prime cache with initialCounts on mount
+  useEffect(() => {
+    if (initialCounts) {
+      const defaultKey = [mineOnly ? 'mine' : 'all', 'all', 'all', 'all', 'all'].join('|');
+      countsCache.current[defaultKey] = initialCounts;
+    }
+  }, [initialCounts, mineOnly]);
+
   useEffect(() => {
     if (search.trim()) return;
+
+    const filterKey = [
+      mineOnly ? 'mine' : 'all',
+      departmentFilter,
+      userFilter,
+      categoryFilter,
+      priorityFilter,
+    ].join('|');
+
+    // Return cached counts immediately without hitting server
+    if (countsCache.current[filterKey]) {
+      setAggregateCards(countsCache.current[filterKey]);
+      return;
+    }
+
+    const isDefaultFilter = departmentFilter === 'all' && userFilter === 'all' && categoryFilter === 'all' && priorityFilter === 'all';
+    if (isDefaultFilter && initialCounts) {
+      countsCache.current[filterKey] = initialCounts;
+      setAggregateCards(initialCounts);
+      return;
+    }
+
     const controller = new AbortController();
-    setAggregateCards(undefined);
     const timer = setTimeout(async () => {
       try {
         const params = new URLSearchParams({ counts: 'true', scope: mineOnly ? 'mine' : 'all' });
-        for (const [key,value] of [['department',departmentFilter],['assignedTo',userFilter],['category',categoryFilter],['priority',priorityFilter]]) if(value !== 'all') params.set(key,value);
+        for (const [key, value] of [['department', departmentFilter], ['assignedTo', userFilter], ['category', categoryFilter], ['priority', priorityFilter]]) if (value !== 'all') params.set(key, value);
         const response = await fetch('/api/tasks?' + params, { signal: controller.signal });
         const json = await response.json();
-        if (!controller.signal.aborted && json.success) setAggregateCards(json.data);
-      } catch (error: any) { if (error.name !== 'AbortError') console.error('Task counts unavailable',error); }
-    }, 500);
+        if (!controller.signal.aborted && json.success) {
+          countsCache.current[filterKey] = json.data;
+          setAggregateCards(json.data);
+        }
+      } catch (error: any) { if (error.name !== 'AbortError') console.error('Task counts unavailable', error); }
+    }, 400);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [mineOnly,departmentFilter,userFilter,categoryFilter,priorityFilter,search,taskItems]);
+  }, [mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, initialCounts]);
+
   const cardCounts = search.trim() ? loadedCardCounts : {
-    pending: aggregateCards?.pending ?? '…',
-    inProgress: aggregateCards ? aggregateCards.inProgress + aggregateCards.delayRequested : '…',
-    overdue: aggregateCards?.overdue ?? '…',
-    completed: aggregateCards ? aggregateCards.completed + aggregateCards.verified : '…',
-    total: aggregateCards?.total ?? '…',
+    pending: aggregateCards?.pending ?? loadedCardCounts.pending,
+    inProgress: aggregateCards ? aggregateCards.inProgress + aggregateCards.delayRequested : loadedCardCounts.inProgress,
+    overdue: aggregateCards?.overdue ?? loadedCardCounts.overdue,
+    completed: aggregateCards ? aggregateCards.completed + aggregateCards.verified : loadedCardCounts.completed,
+    total: aggregateCards?.total ?? loadedCardCounts.total,
   };
 
   const justAssignedTasks = useMemo(() =>
@@ -351,7 +456,7 @@ export default function TaskListClient({
   return (
     <>
       {/* Top Header Row (Positioned at the VERY TOP, beside the Bell Icon with pr-14) */}
-      {(headerTitle || role === 'admin' || syncStatus) && (
+      {(headerTitle || role === 'admin') && (
         <div className="surface-enter mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pr-14 sm:pr-16">
           <div>
             {headerTitle ? (
@@ -363,13 +468,6 @@ export default function TaskListClient({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {syncStatus && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 border border-emerald-200">
-                <Check size={12} className="text-emerald-600" />
-                {syncStatus}
-              </span>
-            )}
-
             {role === 'admin' && (
               <button
                 type="button"
@@ -391,20 +489,6 @@ export default function TaskListClient({
                 {mineOnly ? 'Showing my tasks' : 'Show my tasks'}
               </button>
             )}
-
-            <button
-              type="button"
-              onClick={handleSync}
-              disabled={isSyncing}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3.5 py-1.5 text-xs sm:text-sm font-medium text-gray-700 shadow-xs transition hover:bg-gray-50 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 whitespace-nowrap',
-                isSyncing && 'cursor-not-allowed opacity-75'
-              )}
-              title="Fetch most recent 1000 tasks"
-            >
-              <RotateCw size={14} className={cn('text-brand-600', isSyncing && 'animate-spin')} />
-              <span>{isSyncing ? 'Syncing…' : 'Sync Tasks'}</span>
-            </button>
           </div>
         </div>
       )}

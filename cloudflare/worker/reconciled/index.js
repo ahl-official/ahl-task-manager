@@ -1,5 +1,5 @@
 import { routeLifecycle } from './lifecycle.js';
-import { routeReadOptimizations, aggregatePeriods, getCachedRead, cacheRead, invalidateReadCache } from './read-optimizations.js';
+import { routeReadOptimizations, aggregatePeriods, getCachedRead, cacheRead, invalidateReadCache, adjustTaskCount } from './read-optimizations.js';
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
@@ -459,7 +459,7 @@ async function routeAuth(req, env, path) {
 __name(routeAuth, "routeAuth");
 async function routeUsers(req, env, url) {
   if (url.pathname === "/users" && req.method === "GET") {
-    const rows = await env.DB.prepare("SELECT * FROM users ORDER BY name").all();
+    const rows = await env.DB.prepare("SELECT * FROM users ORDER BY name LIMIT 200").all();
     return json({ success: true, data: rows.results.map(userFromRow) });
   }
   if (url.pathname === "/users/by-wa" && req.method === "GET") {
@@ -508,7 +508,7 @@ async function routeUsers(req, env, url) {
 __name(routeUsers, "routeUsers");
 async function routeDepartments(req, env, url) {
   if (url.pathname === "/departments" && req.method === "GET") {
-    const rows = await env.DB.prepare("SELECT * FROM departments WHERE is_active = 1 ORDER BY name").all();
+    const rows = await env.DB.prepare("SELECT * FROM departments WHERE is_active = 1 ORDER BY name LIMIT 100").all();
     return json({ success: true, data: rows.results.map(departmentFromRow) });
   }
   if (url.pathname === "/departments" && req.method === "POST") {
@@ -542,30 +542,32 @@ __name(routeDepartments, "routeDepartments");
 async function nextTaskId(env) {
   try {
     await env.DB.prepare("INSERT OR IGNORE INTO task_counters (id, current_value) VALUES ('tasks', 0)").run();
+    // Fast path: if task_counters has an established sequence (> 0), atomically increment by 1 (1 row read, 1 row written, 0 table scans)
     const row2 = await env.DB.prepare(
       `UPDATE task_counters
-       SET current_value = MAX(
-         current_value,
-         COALESCE((SELECT MAX(CAST(SUBSTR(task_id, 3) AS INTEGER)) FROM tasks_current WHERE task_id LIKE 'T-%'), 0)
-       ) + 1
-       WHERE id = 'tasks' RETURNING current_value`
+       SET current_value = current_value + 1
+       WHERE id = 'tasks' AND current_value > 0
+       RETURNING current_value`
     ).first();
     if (row2?.current_value) {
       return `T-${String(row2.current_value).padStart(4, "0")}`;
     }
+    // Cold start initialization: only runs if counter is 0. Inspect latest task using index (LIMIT 1)
+    const row = await env.DB.prepare(
+      "SELECT task_id FROM tasks_current WHERE task_id LIKE 'T-%' ORDER BY created_at DESC LIMIT 1"
+    ).first();
+    let nextNum = 1;
+    if (row?.task_id) {
+      const match = row.task_id.match(/T-(\d+)/i);
+      if (match) {
+        nextNum = parseInt(match[1], 10) + 1;
+      }
+    }
+    await env.DB.prepare("UPDATE task_counters SET current_value = ? WHERE id = 'tasks'").bind(nextNum).run();
+    return `T-${String(nextNum).padStart(4, "0")}`;
   } catch {
   }
-  const row = await env.DB.prepare(
-    "SELECT task_id FROM tasks_current WHERE task_id LIKE 'T-%' ORDER BY CAST(SUBSTR(task_id, 3) AS INTEGER) DESC LIMIT 1"
-  ).first();
-  let nextNum = 1;
-  if (row?.task_id) {
-    const match = row.task_id.match(/T-(\d+)/i);
-    if (match) {
-      nextNum = parseInt(match[1], 10) + 1;
-    }
-  }
-  return `T-${String(nextNum).padStart(4, "0")}`;
+  return `T-${Date.now().toString().slice(-4)}`;
 }
 __name(nextTaskId, "nextTaskId");
 function periodFields(dateValue) {
@@ -693,8 +695,21 @@ async function routeTasks(req, env, url) {
       binds.push(uid);
     }
     if (status) {
-      clauses.push("status = ?");
-      binds.push(status);
+      if (status === "open") {
+        const placeholders = ACTIVE_STATUSES.map(() => "?").join(",");
+        clauses.push(`status IN (${placeholders})`);
+        binds.push(...ACTIVE_STATUSES);
+      } else if (status === "Completed") {
+        clauses.push("status IN ('Completed', 'Verified')");
+      } else if (status !== "all") {
+        clauses.push("status = ?");
+        binds.push(status);
+      }
+    } else if (url.searchParams.get("includeCompleted") !== "true") {
+      // By default when fetching tasks, ONLY fetch open tasks (saves quota and only loads active tasks)
+      const placeholders = ACTIVE_STATUSES.map(() => "?").join(",");
+      clauses.push(`status IN (${placeholders})`);
+      binds.push(...ACTIVE_STATUSES);
     }
     if (department) {
       clauses.push("department = ?");
@@ -707,21 +722,21 @@ async function routeTasks(req, env, url) {
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
   if (url.pathname === "/tasks/active" && req.method === "GET") {
-    const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 100);
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 100, 1), 1000);
     const placeholders = ACTIVE_STATUSES.map(() => "?").join(",");
     const rows = await env.DB.prepare(`SELECT * FROM tasks_current WHERE status IN (${placeholders}) ORDER BY created_at DESC, task_id DESC LIMIT ?`).bind(...ACTIVE_STATUSES, limit).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
   if (url.pathname === "/tasks/overdue" && req.method === "GET") {
     const now = nowIso();
-    const rows = await env.DB.prepare("SELECT * FROM tasks_current WHERE status IN ('Pending Accept', 'In Progress') AND end_date IS NOT NULL AND end_date < ? ORDER BY end_date ASC LIMIT 1000").bind(now).all();
+    const rows = await env.DB.prepare("SELECT * FROM tasks_current WHERE status IN ('Pending Accept', 'In Progress') AND end_date IS NOT NULL AND end_date < ? ORDER BY end_date ASC LIMIT 100").bind(now).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
   if (url.pathname === "/tasks/due-within" && req.method === "GET") {
     const hours = Math.min(Math.max(Number(url.searchParams.get("hours") || 24), 1), 720);
     const from = nowIso();
     const to = new Date(Date.now() + hours * 60 * 60 * 1e3).toISOString();
-    const rows = await env.DB.prepare("SELECT * FROM tasks_current WHERE status IN ('Pending Accept', 'In Progress') AND end_date IS NOT NULL AND end_date >= ? AND end_date <= ? ORDER BY end_date ASC LIMIT 1000").bind(from, to).all();
+    const rows = await env.DB.prepare("SELECT * FROM tasks_current WHERE status IN ('Pending Accept', 'In Progress') AND end_date IS NOT NULL AND end_date >= ? AND end_date <= ? ORDER BY end_date ASC LIMIT 100").bind(from, to).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
   if (url.pathname === "/tasks/by-ids" && req.method === "GET") {
@@ -738,8 +753,12 @@ async function routeTasks(req, env, url) {
     const next = new Date(`${start}T00:00:00.000Z`);
     next.setUTCMonth(next.getUTCMonth() + 1);
     const end = next.toISOString().slice(0, 10);
-    const rows = await env.DB.prepare("SELECT * FROM tasks_current WHERE department=? AND ((delayed_date>=? AND delayed_date<?) OR ((delayed_date IS NULL OR delayed_date='') AND end_date>=? AND end_date<?)) ORDER BY COALESCE(delayed_date,end_date),task_id LIMIT 500").bind(department,start,end,start,end).all();
+    const rows = await env.DB.prepare("SELECT * FROM tasks_current WHERE department=? AND ((delayed_date>=? AND delayed_date<?) OR ((delayed_date IS NULL OR delayed_date='') AND end_date>=? AND end_date<?)) ORDER BY COALESCE(delayed_date,end_date),task_id LIMIT 150").bind(department,start,end,start,end).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
+  }
+  if (url.pathname === "/tasks/next-id" && req.method === "GET") {
+    const taskId = await nextTaskId(env);
+    return json({ success: true, taskId });
   }
   if (url.pathname.startsWith("/tasks/") && req.method === "GET") {
     const id = decodeURIComponent(url.pathname.slice("/tasks/".length));
@@ -749,10 +768,32 @@ async function routeTasks(req, env, url) {
   if (url.pathname === "/tasks" && req.method === "POST") {
     try {
       const data = await body(req);
-      const creator = userFromRow(await env.DB.prepare("SELECT * FROM users WHERE uid = ?").bind(data.creatorUid || "").first()) || data.creatorFallback;
-      const assignee = userFromRow(await env.DB.prepare("SELECT * FROM users WHERE uid = ?").bind(data.assignedTo || "").first());
-      const handoff = userFromRow(await env.DB.prepare("SELECT * FROM users WHERE uid = ?").bind(data.handoffUid || data.creatorUid || "").first()) || creator;
-      if (!assignee) return json({ success: false, error: "Selected assignee was not found" }, { status: 400 });
+      let creator = data.creatorFallback || null;
+      let assignee = data.assigneeFallback || null;
+      let handoff = creator;
+      try {
+        if (!creator && data.creatorUid) creator = userFromRow(await env.DB.prepare("SELECT * FROM users WHERE uid = ?").bind(data.creatorUid).first());
+      } catch {}
+      try {
+        if (!assignee && data.assignedTo) assignee = userFromRow(await env.DB.prepare("SELECT * FROM users WHERE uid = ?").bind(data.assignedTo).first());
+      } catch {}
+      try {
+        if (data.handoffUid) handoff = userFromRow(await env.DB.prepare("SELECT * FROM users WHERE uid = ?").bind(data.handoffUid).first()) || creator;
+      } catch {}
+
+      const assigneeUid = assignee?.uid || data.assignedTo;
+      if (!assigneeUid) return json({ success: false, error: "Selected assignee was not found" }, { status: 400 });
+      const assigneeName = assignee?.name || data.assignedToName || "Assigned User";
+      const assigneeWa = assignee?.waNumber || data.assignedToWa || "";
+      const assigneeDept = assignee?.department || data.department || "";
+
+      const creatorUid = creator?.uid || data.creatorUid || "admin";
+      const creatorName = creator?.name || data.creatorFallback?.name || "Admin";
+
+      const handoffUid = handoff?.uid || data.handoffUid || creatorUid;
+      const handoffName = handoff?.name || creatorName;
+      const handoffWa = handoff?.waNumber || "";
+
       const taskId = await nextTaskId(env);
       const now = nowIso();
       const startDateVal = data.startDate && String(data.startDate).trim() ? data.startDate : null;
@@ -760,15 +801,49 @@ async function routeTasks(req, env, url) {
       const createdAt = data.createdAt || now;
       const pf = periodFields(endDateVal || startDateVal || now);
       const status = data.skipAcceptance ? "In Progress" : data.status || "Pending Accept";
+
       await env.DB.prepare(
         `INSERT INTO tasks_current (task_id, description, assigned_to, assigned_to_name, assigned_to_wa, created_by, created_by_name, handoff_uid, handoff_name, handoff_wa, category, priority, status, department, start_date, end_date, delayed_date, delay_reason, revision_status, notes, accepted_at, completed_at, verified_at, created_at, updated_at, day_key, month_key)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'none', ?, ?, NULL, NULL, ?, ?, ?, ?)`
-      ).bind(taskId, data.description || "", assignee.uid, assignee.name, assignee.waNumber, creator?.uid || data.creatorUid || "admin", creator?.name || "Admin", handoff?.uid || data.handoffUid || creator?.uid || "admin", handoff?.name || creator?.name || "Admin", handoff?.waNumber || creator?.waNumber || "", data.category || "One Time", data.priority || "Medium", status, assignee.department || data.department || "", startDateVal, endDateVal, data.notes || null, data.skipAcceptance ? now : null, createdAt, now, pf.dayKey, pf.monthKey).run();
-      await log(env, "TASK_CREATED", `Task ${taskId} created`, { taskId, uid: creator?.uid });
+      ).bind(taskId, data.description || "", assigneeUid, assigneeName, assigneeWa, creatorUid, creatorName, handoffUid, handoffName, handoffWa, data.category || "One Time", data.priority || "Medium", status, assigneeDept, startDateVal, endDateVal, data.notes || null, data.skipAcceptance ? now : null, createdAt, now, pf.dayKey, pf.monthKey).run();
+
+      await log(env, "TASK_CREATED", `Task ${taskId} created`, { taskId, uid: creatorUid }).catch(() => {});
+      await adjustTaskCount(env, null, { assigned_to: assigneeUid, department: assigneeDept, status }).catch(() => {});
       if (!["daily", "weekly", "monthly"].includes(String(data.category || "One Time").toLowerCase())) {
-        await refreshDelegationMisSnapshot(env, assignee.uid);
+        await refreshDelegationMisSnapshot(env, assigneeUid).catch(() => {});
       }
-      return json({ success: true, data: taskFromRow(await env.DB.prepare("SELECT * FROM tasks_current WHERE task_id = ?").bind(taskId).first()) }, { status: 201 });
+
+      // Return constructed task in memory without requiring an extra DB SELECT read (saves quota and works even if read limits are hit)
+      const createdTask = {
+        taskId,
+        description: data.description || "",
+        assignedTo: assigneeUid,
+        assignedToName: assigneeName,
+        assignedToWa: assigneeWa,
+        createdBy: creatorUid,
+        createdByName: creatorName,
+        handoffUid,
+        handoffName,
+        handoffWa,
+        category: data.category || "One Time",
+        priority: data.priority || "Medium",
+        status,
+        department: assigneeDept,
+        startDate: startDateVal,
+        endDate: endDateVal,
+        delayedDate: null,
+        delayReason: null,
+        revisionStatus: "none",
+        notes: data.notes || null,
+        acceptedAt: data.skipAcceptance ? now : null,
+        completedAt: null,
+        verifiedAt: null,
+        createdAt,
+        updatedAt: now,
+        dayKey: pf.dayKey,
+        monthKey: pf.monthKey,
+      };
+      return json({ success: true, data: createdTask }, { status: 201 });
     } catch (err) {
       console.error("POST /tasks worker error:", err);
       return json({ success: false, error: err.message || String(err) }, { status: 500 });
@@ -778,7 +853,7 @@ async function routeTasks(req, env, url) {
     try {
       const id = decodeURIComponent(url.pathname.slice("/tasks/".length));
       const data = await body(req);
-      const existing = await env.DB.prepare("SELECT category, assigned_to FROM tasks_current WHERE task_id = ?").bind(id).first();
+      const existing = await env.DB.prepare("SELECT * FROM tasks_current WHERE task_id = ?").bind(id).first();
       const recurring = ["daily", "weekly", "monthly"].includes(String(existing?.category || "").toLowerCase());
       const closing = ["completed", "verified"].includes(String(data.status || "").toLowerCase());
       if (recurring && closing) {
@@ -815,6 +890,8 @@ async function routeTasks(req, env, url) {
       }
       binds.push(id);
       await env.DB.prepare(`UPDATE tasks_current SET ${updates.join(", ")} WHERE task_id = ?`).bind(...binds).run();
+      const updatedRow = await env.DB.prepare("SELECT * FROM tasks_current WHERE task_id = ?").bind(id).first();
+      await adjustTaskCount(env, existing, updatedRow);
       if (data.scoreIncrement?.uid && data.scoreIncrement?.field) {
         const col = data.scoreIncrement.field === "tasksCompleted" ? "tasks_completed" : data.scoreIncrement.field === "onTimeCount" ? "on_time_count" : data.scoreIncrement.field === "lateCount" ? "late_count" : "tasks_assigned";
         await env.DB.prepare(`UPDATE scores SET ${col} = ${col} + 1, last_updated = ? WHERE uid = ?`).bind(nowIso(), data.scoreIncrement.uid).run();
@@ -822,7 +899,7 @@ async function routeTasks(req, env, url) {
       if (!recurring && existing?.assigned_to) {
         await refreshDelegationMisSnapshot(env, existing.assigned_to);
       }
-      return json({ success: true, data: taskFromRow(await env.DB.prepare("SELECT * FROM tasks_current WHERE task_id = ?").bind(id).first()) });
+      return json({ success: true, data: taskFromRow(updatedRow) });
     } catch (err) {
       return json({ success: false, error: err.stack || err.message || String(err) }, { status: 500 });
     }
@@ -830,12 +907,13 @@ async function routeTasks(req, env, url) {
   if (url.pathname.startsWith("/tasks/") && req.method === "DELETE") {
     try {
       const id = decodeURIComponent(url.pathname.slice("/tasks/".length));
-      const existing = await env.DB.prepare("SELECT task_id, category, assigned_to FROM tasks_current WHERE task_id = ? LIMIT 1").bind(id).first();
+      const existing = await env.DB.prepare("SELECT * FROM tasks_current WHERE task_id = ? LIMIT 1").bind(id).first();
       if (!existing) return json({ success: false, error: "Not found" }, { status: 404 });
       await env.DB.batch([
         env.DB.prepare("DELETE FROM revisions WHERE task_id = ?").bind(id),
         env.DB.prepare("DELETE FROM tasks_current WHERE task_id = ?").bind(id)
       ]);
+      await adjustTaskCount(env, existing, null);
       try {
         await log(env, "TASK_DELETED", `Task ${id} deleted`, { taskId: id });
       } catch {
@@ -916,7 +994,7 @@ async function routeRevisions(req, env, url) {
     const requestedBy = url.searchParams.get("requestedBy");
     const handoffUid = url.searchParams.get("handoffUid");
     const visibleForUid = url.searchParams.get("visibleForUid");
-    const limit = url.searchParams.get("limit") === "all" ? null : Math.min(Math.max(Number(url.searchParams.get("limit") || 300), 1), 1e3);
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 100), 1), 100);
     if (handoffUid) {
       const clauses2 = ["t.handoff_uid = ?"];
       const binds2 = [handoffUid];
@@ -928,8 +1006,8 @@ async function routeRevisions(req, env, url) {
         `SELECT r.* FROM revisions r
          JOIN tasks_current t ON t.task_id = r.task_id
          WHERE ${clauses2.join(" AND ")}
-         ORDER BY r.created_at DESC ${limit ? "LIMIT ?" : ""}`
-      ).bind(...binds2, ...(limit ? [limit] : [])).all();
+         ORDER BY r.created_at DESC LIMIT ?`
+      ).bind(...binds2, limit).all();
       return json({ success: true, data: rows2.results.map(revisionFromRow) });
     }
     if (visibleForUid) {
@@ -943,8 +1021,8 @@ async function routeRevisions(req, env, url) {
         `SELECT r.* FROM revisions r
          LEFT JOIN tasks_current t ON t.task_id = r.task_id
          WHERE ${clauses2.join(" AND ")}
-         ORDER BY r.created_at DESC ${limit ? "LIMIT ?" : ""}`
-      ).bind(...binds2, ...(limit ? [limit] : [])).all();
+         ORDER BY r.created_at DESC LIMIT ?`
+      ).bind(...binds2, limit).all();
       return json({ success: true, data: rows2.results.map(revisionFromRow) });
     }
     const clauses = [];
@@ -964,23 +1042,47 @@ async function routeRevisions(req, env, url) {
     const department=url.searchParams.get('department');
     if(department){clauses.push('task_id IN (SELECT task_id FROM tasks_current WHERE department=?)');binds.push(department);}
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    const rows = await env.DB.prepare(`SELECT * FROM revisions ${where} ORDER BY created_at DESC ${limit ? "LIMIT ?" : ""}`).bind(...binds, ...(limit ? [limit] : [])).all();
+    const rows = await env.DB.prepare(`SELECT * FROM revisions ${where} ORDER BY created_at DESC LIMIT ?`).bind(...binds, limit).all();
     return json({ success: true, data: rows.results.map(revisionFromRow) });
   }
   if (url.pathname === "/revisions" && req.method === "POST") {
     const data = await body(req);
     const id = randomId("rev_");
     const now = nowIso();
+    const taskId = data.taskId || "";
     await env.DB.prepare(
       "INSERT INTO revisions (id, task_id, requested_by, requested_by_name, requested_date, reason, status, decided_by, decided_by_name, decided_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)"
-    ).bind(id, data.taskId || "", data.requestedBy || "", data.requestedByName || "", data.requestedDate || now, data.reason || "", "pending", now).run();
+    ).bind(id, taskId, data.requestedBy || "", data.requestedByName || "", data.requestedDate || now, data.reason || "", "pending", now).run();
+    if (taskId) {
+      const requestedDateStr = (data.requestedDate || '').slice(0, 10);
+      await env.DB.prepare(
+        "UPDATE tasks_current SET revision_status = 'requested', delayed_date = ?, delay_reason = ?, status = CASE WHEN status = 'In Progress' THEN 'Delay Requested' ELSE status END, updated_at = ? WHERE task_id = ?"
+      ).bind(requestedDateStr || null, data.reason || null, now, taskId).run();
+    }
     return json({ success: true, data: revisionFromRow(await env.DB.prepare("SELECT * FROM revisions WHERE id = ?").bind(id).first()) }, { status: 201 });
   }
   if (url.pathname === "/revisions" && req.method === "PATCH") {
     const data = await body(req);
     if (!data.revisionId) return json({ success: false, error: "revisionId is required" }, { status: 400 });
-    await env.DB.prepare("UPDATE revisions SET status = ?, decided_by = ?, decided_by_name = ?, decided_at = ? WHERE id = ?").bind(data.decision || "approved", data.decidedBy || null, data.decidedByName || null, nowIso(), data.revisionId).run();
-    return json({ success: true, data: revisionFromRow(await env.DB.prepare("SELECT * FROM revisions WHERE id = ?").bind(data.revisionId).first()) });
+    const decision = data.decision || "approved";
+    const now = nowIso();
+    await env.DB.prepare("UPDATE revisions SET status = ?, decided_by = ?, decided_by_name = ?, decided_at = ? WHERE id = ?").bind(decision, data.decidedBy || null, data.decidedByName || null, now, data.revisionId).run();
+    const revRow = await env.DB.prepare("SELECT * FROM revisions WHERE id = ?").bind(data.revisionId).first();
+    if (revRow?.task_id) {
+      if (decision === 'approved' && revRow.requested_date) {
+        const newEndDate = revRow.requested_date.slice(0, 10);
+        const dayKey = newEndDate;
+        const monthKey = newEndDate.slice(0, 7);
+        await env.DB.prepare(
+          "UPDATE tasks_current SET end_date = ?, day_key = ?, month_key = ?, revision_status = 'accepted', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ? WHERE task_id = ?"
+        ).bind(newEndDate, dayKey, monthKey, now, revRow.task_id).run();
+      } else {
+        await env.DB.prepare(
+          "UPDATE tasks_current SET revision_status = 'rejected', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ? WHERE task_id = ?"
+        ).bind(now, revRow.task_id).run();
+      }
+    }
+    return json({ success: true, data: revisionFromRow(revRow) });
   }
   return null;
 }
@@ -1375,6 +1477,30 @@ async function ensurePeriodRowsTable(env) {
   await env.DB.prepare(
     "CREATE INDEX IF NOT EXISTS idx_period_rows_template ON recurring_period_rows(template_id, is_deleted)"
   ).run().catch(() => null);
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_period_rows_user_date ON recurring_period_rows(assigned_to, category, due_date, is_deleted, status)"
+  ).run().catch(() => null);
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_period_rows_due ON recurring_period_rows(due_date, category, is_deleted, status)"
+  ).run().catch(() => null);
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_period_rows_name_due ON recurring_period_rows(assigned_to_name, due_date, is_deleted, status)"
+  ).run().catch(() => null);
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks_current(assigned_to, status)"
+  ).run().catch(() => null);
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_tasks_status_end ON tasks_current(status, end_date)"
+  ).run().catch(() => null);
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks_current(status, created_at)"
+  ).run().catch(() => null);
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_tasks_handoff_status ON tasks_current(handoff_uid, status)"
+  ).run().catch(() => null);
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_tasks_dept_status ON tasks_current(department, status)"
+  ).run().catch(() => null);
   periodRowsTableReady = true;
 }
 __name(ensurePeriodRowsTable, "ensurePeriodRowsTable");
@@ -1514,6 +1640,12 @@ function getIstPartsForDateStr(dateStr) {
   };
 }
 __name(getIstPartsForDateStr, "getIstPartsForDateStr");
+function addDaysDateStr(dateStr, days) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days, 12, 0, 0));
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+}
+__name(addDaysDateStr, "addDaysDateStr");
 var OPEN_RECURRING_STATUSES = ["in progress", "pending", "pending accept", "delay requested", "overdue"];
 function dateKeyOf(value) {
   const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})/);
@@ -2064,13 +2196,25 @@ async function routeRecurring(req, env, url) {
     return row?json({success:true,data:periodRowFromDb(row)}):json({success:false,error:'Checklist period not found'},{status:404});
   }
   if (path === "/recurring/checklist" && req.method === "GET") {
-    const category=url.searchParams.get('category')||'Daily',date=url.searchParams.get('date')||getIstDateParts().dateStr;
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!['Daily','Weekly','Monthly','All','all'].includes(category))return json({success:false,error:'Invalid checklist date or category'},{status:400});
-    if(date>getIstDateParts().dateStr)return json({success:true,data:[]});
+    const tomorrowStr = addDaysDateStr(getIstDateParts().dateStr, 1);
+    const startDate = url.searchParams.get('startDate'), endDate = url.searchParams.get('endDate');
     const due="COALESCE(NULLIF(due_date,''),SUBSTR(period_key,1,10))";
     const clauses=["is_deleted=0","status!='Deleted'"],binds=[];
     const paged=url.searchParams.has('limit');
-    if(paged){
+    if (startDate && endDate) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return json({success:false,error:'Invalid date range'},{status:400});
+      const cappedEnd = endDate > tomorrowStr ? tomorrowStr : endDate;
+      const startMonth = startDate.slice(0, 7), endMonth = cappedEnd.slice(0, 7);
+      const months = [startMonth];
+      if (endMonth !== startMonth) months.push(endMonth);
+      clauses.push('month_key IN ('+months.map(()=>'?').join(',')+')');binds.push(...months);
+      clauses.push(due+'>=? AND '+due+'<=?');binds.push(startDate, cappedEnd);
+      const category=url.searchParams.get('category');
+      if (category && category.toLowerCase() !== 'all') { clauses.push('category=?'); binds.push(category); }
+    } else {
+      const category=url.searchParams.get('category')||'Daily',date=url.searchParams.get('date')||getIstDateParts().dateStr;
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!['Daily','Weekly','Monthly','All','all'].includes(category))return json({success:false,error:'Invalid checklist date or category'},{status:400});
+      if(date>tomorrowStr)return json({success:true,data:[]});
       const months=[date.slice(0,7)];
       if(category==='Weekly'){
         const from=weekStartMonday(date),end=new Date(from+'T12:00:00Z');end.setUTCDate(end.getUTCDate()+6);
@@ -2078,22 +2222,11 @@ async function routeRecurring(req, env, url) {
         const endMonth=end.toISOString().slice(0,7);if(endMonth!==months[0])months.push(endMonth);
       }
       clauses.push('month_key IN ('+months.map(()=>'?').join(',')+')');binds.push(...months);
+      if(category.toLowerCase()!=='all'){clauses.push('category=?');binds.push(category);}
+      if(category==='Daily'){clauses.push(due+'=?');binds.push(date);}
+      else if(category==='Weekly'){const from=weekStartMonday(date),to=new Date(from+'T12:00:00Z');to.setUTCDate(to.getUTCDate()+6);clauses.push(due+'>=? AND '+due+'<=?');binds.push(from,to.toISOString().slice(0,10));}
+      else {clauses.push('SUBSTR('+due+',1,7)=?');binds.push(date.slice(0,7));}
     }
-    if(category.toLowerCase()!=='all'){clauses.push(paged?'category=?':'LOWER(category)=LOWER(?)');binds.push(category);}
-    if(paged){
-      const scopeUid=url.searchParams.get('scopeUid'),scopeName=url.searchParams.get('scopeName'),scopeDepartment=url.searchParams.get('scopeDepartment');
-      if(scopeUid||scopeName||scopeDepartment){
-        const scope=[];
-        if(scopeUid){scope.push('assigned_to=?');binds.push(scopeUid);}
-        if(scopeName){scope.push('LOWER(TRIM(assigned_to_name))=LOWER(TRIM(?))');binds.push(scopeName);}
-        if(scopeDepartment){scope.push('LOWER(TRIM(department))=LOWER(TRIM(?))');binds.push(scopeDepartment);}
-        clauses.push('('+scope.join(' OR ')+')');
-      }
-    }
-    const name=url.searchParams.get('userName');if(name){clauses.push('LOWER(TRIM(assigned_to_name))=LOWER(TRIM(?))');binds.push(name);}
-    if(category==='Daily'){clauses.push(due+'=?');binds.push(date);}
-    else if(category==='Weekly'){const from=weekStartMonday(date),to=new Date(from+'T12:00:00Z');to.setUTCDate(to.getUTCDate()+6);clauses.push(due+'>=? AND '+due+'<=?');binds.push(from,to.toISOString().slice(0,10));}
-    else {clauses.push('SUBSTR('+due+',1,7)=?');binds.push(date.slice(0,7));}
     if(paged){
       const cursor=url.searchParams.get('cursor');
       if(cursor){clauses.push('id>?');binds.push(cursor);}
@@ -2109,9 +2242,9 @@ async function routeRecurring(req, env, url) {
       const items=selected.map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
       return json({success:true,data:{items,hasMore,nextCursor:hasMore?selected[selected.length-1].id:null}});
     }
-    const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY due_date,id LIMIT 1001').bind(...binds).all();
-    const data=(result.results||[]).slice(0,1000).map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
-    return json({success:true,data,meta:{istDate:date,count:data.length,hasMore:(result.results||[]).length>1000,readOnly:true}});
+    const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY due_date,id LIMIT 200').bind(...binds).all();
+    const data=(result.results||[]).slice(0,200).map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
+    return json({success:true,data,meta:{istDate:date,count:data.length,hasMore:(result.results||[]).length>=200,readOnly:true}});
   }
   if (path === "/recurring/completions" && req.method === "POST") {
     const data=await body(req),templateId=String(data.templateId||''),periodKey=String(data.periodKey||''),action=String(data.action||'complete');

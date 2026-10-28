@@ -8,6 +8,7 @@ import {
 } from '@/lib/cloudflare/recurring';
 import { checklistPermissions } from '@/lib/utils/checklistPermissions';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
+import { addDaysKey } from '@/lib/mis/week';
 
 const CATEGORIES = ['Daily', 'Weekly', 'Monthly'];
 
@@ -29,7 +30,8 @@ export async function GET(req: NextRequest) {
   const search = rawSearch.replace(/[^a-zA-Z0-9\s\-_.:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
 
   const today = indiaTodayKey();
-  if (dateParam && dateParam > today) {
+  const tomorrow = addDaysKey(today, 1);
+  if (dateParam && dateParam > tomorrow) {
     return NextResponse.json({
       success: true,
       meta: {

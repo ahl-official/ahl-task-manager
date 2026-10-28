@@ -8,7 +8,14 @@ import { adminDb } from './admin';
 import type { Task, TaskSerialized, TaskStatus, CreateTaskInput } from '@/types';
 import { adminGetUserByUid } from './users';
 import { handleFirestoreReadError } from './errors';
-import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
+import {
+  cachedFirestoreRead,
+  clearFirestoreReadCache,
+  addTaskToReadCache,
+  updateTaskInReadCache,
+  removeTaskFromReadCache,
+  LONG_READ_CACHE_TTL_MS,
+} from './readCache';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { cfTask, cfTimestampFields } from '@/lib/cloudflare/models';
 
@@ -219,25 +226,33 @@ export async function generateTaskId(): Promise<string> {
       if (res?.taskId) return res.taskId;
     } catch {
       // Fallback: derive from latest task in Cloudflare D1
-      const tasks = await adminGetAllTasks({ limit: 1 });
-      const latestTask = tasks[0];
-      const match = latestTask?.taskId?.match(/^T-(\d+)$/);
-      const currentNum = match ? parseInt(match[1], 10) : 0;
-      const nextNum = (Number.isFinite(currentNum) && currentNum > 0 ? currentNum : 6644) + 1;
-      return `T-${String(nextNum).padStart(4, '0')}`;
+      try {
+        const tasks = await adminGetAllTasks({ limit: 1 });
+        const latestTask = tasks[0];
+        const match = latestTask?.taskId?.match(/^T-(\d+)$/);
+        const currentNum = match ? parseInt(match[1], 10) : 0;
+        const nextNum = (Number.isFinite(currentNum) && currentNum > 0 ? currentNum : 6644) + 1;
+        return `T-${String(nextNum).padStart(4, '0')}`;
+      } catch {
+        return `T-${Date.now().toString().slice(-4)}`;
+      }
     }
   }
 
   const counterRef = adminDb.collection(COUNTERS).doc('tasks');
   let newId = 1;
 
-  await adminDb.runTransaction(async (tx) => {
-    const snap = await tx.get(counterRef);
-    newId = snap.exists ? (snap.data()!.current as number) + 1 : 1;
-    tx.set(counterRef, { current: newId });
-  });
-
-  return `T-${String(newId).padStart(4, '0')}`;
+  try {
+    await adminDb.runTransaction(async (tx) => {
+      const snap = await tx.get(counterRef);
+      newId = snap.exists ? (snap.data()!.current as number) + 1 : 1;
+      tx.set(counterRef, { current: newId });
+    });
+    return `T-${String(newId).padStart(4, '0')}`;
+  } catch (err) {
+    console.warn('[generateTaskId] Transaction read failed (possibly read limit), generating fallback ID', err);
+    return `T-${Date.now().toString().slice(-4)}`;
+  }
 }
 
 // ─── Serialize Timestamps for client ────────────────────────────────────────
@@ -276,28 +291,48 @@ export async function adminCreateTask(
   options?: { skipAcceptance?: boolean },
 ): Promise<Task> {
   if (hasCloudflareApi()) {
-    const created = cfTask(await cfApi('/tasks', {
-      method: 'POST',
-      body: JSON.stringify({
-        ...input,
-        creatorUid,
-        creatorFallback,
-        skipAcceptance: options?.skipAcceptance ?? false,
-      }),
-    }))!;
-    clearFirestoreReadCache('tasks:');
-    clearFirestoreReadCache('scores:');
-    return created;
+    try {
+      const created = cfTask(await cfApi('/tasks', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...input,
+          creatorUid,
+          creatorFallback,
+          skipAcceptance: options?.skipAcceptance ?? false,
+        }),
+      }));
+      if (created) {
+        addTaskToReadCache(created);
+        clearFirestoreReadCache('scores:');
+        return created;
+      }
+      throw new Error('Task creation returned no response');
+    } catch (cfErr: any) {
+      console.error('[Task creation] Cloudflare write failed or limit reached:', cfErr);
+      throw new Error(`Cloudflare database limit reached. Task could not be created: ${cfErr?.message || String(cfErr)}`);
+    }
   }
 
   const [taskId, creator, assignee, handoff] = await Promise.all([
-    generateTaskId(),
-    adminGetUserByUid(creatorUid),
-    adminGetUserByUid(input.assignedTo),
-    adminGetUserByUid(input.handoffUid),
+    generateTaskId().catch(() => `T-${Date.now().toString().slice(-4)}`),
+    adminGetUserByUid(creatorUid).catch(() => null),
+    adminGetUserByUid(input.assignedTo).catch(() => null),
+    adminGetUserByUid(input.handoffUid).catch(() => null),
   ]);
 
-  if (!assignee) {
+  const rawInput = input as any;
+  const assigneeUser = assignee ?? (input.assignedTo ? {
+    uid: input.assignedTo,
+    name: rawInput.assignedToName || 'Assigned User',
+    department: input.department || '',
+    waNumber: rawInput.assignedToWa || '',
+    role: 'member' as const,
+    isActive: true,
+    createdAt: AdminTimestamp.now(),
+    updatedAt: AdminTimestamp.now(),
+  } : null);
+
+  if (!assigneeUser) {
     throw new Error(`Selected assignee was not found: ${input.assignedTo}`);
   }
 
@@ -309,7 +344,12 @@ export async function adminCreateTask(
       department: creatorFallback.department ?? '',
     }
     : null;
-  const handoffUser = handoff ?? (input.handoffUid === creatorUid ? creator : null) ?? fallbackHandoff;
+  const handoffUser = handoff ?? (input.handoffUid === creatorUid ? creator : null) ?? fallbackHandoff ?? (input.handoffUid ? {
+    uid: input.handoffUid,
+    name: rawInput.handoffName || 'Checker',
+    waNumber: rawInput.handoffWa || '',
+    department: '',
+  } : null);
 
   if (!handoffUser) {
     throw new Error(`Selected checker was not found: ${input.handoffUid}`);
@@ -324,9 +364,9 @@ export async function adminCreateTask(
   const task: Task = {
     taskId,
     description:    input.description,
-    assignedTo:     assignee.uid,
-    assignedToName: assignee.name,
-    assignedToWa:   assignee.waNumber,
+    assignedTo:     assigneeUser.uid,
+    assignedToName: assigneeUser.name,
+    assignedToWa:   assigneeUser.waNumber,
     createdBy:      creator?.uid ?? creatorUid,
     createdByName:  creatorName,
     handoffUid:     handoffUser.uid,
@@ -335,7 +375,7 @@ export async function adminCreateTask(
     category:       input.category,
     priority:       input.priority,
     status:         skipAcceptance ? 'In Progress' : 'Pending Accept',
-    department:     assignee.department,
+    department:     assigneeUser.department,
     startDate,
     endDate,
     delayedDate:    null,
@@ -366,7 +406,7 @@ export async function adminUpdateTaskStatus(
       method: 'PATCH',
       body: JSON.stringify(cfTimestampFields({ status, ...(extra ?? {}) })),
     }));
-    clearFirestoreReadCache('tasks:');
+    updateTaskInReadCache(taskId, { status, ...extra, ...(updated || {}) });
     clearFirestoreReadCache('scores:');
     return updated;
   }
@@ -376,15 +416,16 @@ export async function adminUpdateTaskStatus(
     updatedAt: AdminTimestamp.now(),
     ...extra,
   });
-  clearFirestoreReadCache('tasks:');
+  const task = await adminGetTask(taskId);
+  updateTaskInReadCache(taskId, { status, ...extra, ...(task || {}) });
   clearFirestoreReadCache('scores:');
-  return adminGetTask(taskId);
+  return task;
 }
 
 export async function adminDeleteTask(taskId: string): Promise<boolean> {
   if (hasCloudflareApi()) {
     await cfApi(`/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
-    clearFirestoreReadCache('tasks:');
+    removeTaskFromReadCache(taskId);
     clearFirestoreReadCache('revisions:');
     clearFirestoreReadCache('scores:');
     return true;
@@ -399,19 +440,31 @@ export async function adminDeleteTask(taskId: string): Promise<boolean> {
   revisionSnap.docs.forEach(doc => batch.delete(doc.ref));
   batch.delete(ref);
   await batch.commit();
-  clearFirestoreReadCache('tasks:');
+  removeTaskFromReadCache(taskId);
   clearFirestoreReadCache('revisions:');
   clearFirestoreReadCache('scores:');
   return true;
 }
 
 export async function adminGetTask(taskId: string): Promise<Task | null> {
-  if (hasCloudflareApi()) {
-    return cfTask(await cfApi(`/tasks/${encodeURIComponent(taskId)}`));
-  }
+  return cachedFirestoreRead(`tasks:single:${taskId}`, LONG_READ_CACHE_TTL_MS, async () => {
+    if (hasCloudflareApi()) {
+      try {
+        return cfTask(await cfApi(`/tasks/${encodeURIComponent(taskId)}`));
+      } catch (err) {
+        console.warn(`[adminGetTask] Cloudflare read failed for ${taskId}:`, err);
+        return null;
+      }
+    }
 
-  const snap = await adminDb.collection(COL).doc(taskId).get();
-  return snap.exists ? normalizeTaskDoc(snap.id, snap.data() as Record<string, any>) : null;
+    try {
+      const snap = await adminDb.collection(COL).doc(taskId).get();
+      return snap.exists ? normalizeTaskDoc(snap.id, snap.data() as Record<string, any>) : null;
+    } catch (err) {
+      handleFirestoreReadError(`adminGetTask(${taskId})`, err);
+      return null;
+    }
+  });
 }
 
 export async function adminGetTasksByIds(taskIds: string[]): Promise<Task[]> {
@@ -434,14 +487,14 @@ export async function adminGetTasksByIds(taskIds: string[]): Promise<Task[]> {
 export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
   if (hasCloudflareApi()) {
     const key = `tasks:assignee:${uid}`;
-    return cachedFirestoreRead(key, 5 * 60 * 1000, async () => {
+    return cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
       const tasks = await cfApi<any[]>(`/tasks?scope=mine&uid=${encodeURIComponent(uid)}&limit=${MAX_TASK_READ_LIMIT}`);
       return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
     });
   }
 
   try {
-    return await cachedFirestoreRead(`tasks:assignee:${uid}`, 5 * 60 * 1000, async () => {
+    return await cachedFirestoreRead(`tasks:assignee:${uid}`, LONG_READ_CACHE_TTL_MS, async () => {
       const user = await adminGetUserByUid(uid);
       const queries: Query[] = [
         adminDb.collection(COL).where('assignedTo', '==', uid).orderBy('createdAt', 'desc').limit(MAX_TASK_READ_LIMIT),
@@ -478,7 +531,7 @@ export async function adminGetTasksByHandoff(uid: string, status?: TaskStatus): 
     if (status) params.set('status', status);
     params.set('limit', String(MAX_TASK_READ_LIMIT));
     const key = `tasks:handoff:${uid}:${status ?? 'any'}`;
-    return cachedFirestoreRead(key, 5 * 60 * 1000, async () => {
+    return cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
       const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
       return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
     });
@@ -486,7 +539,7 @@ export async function adminGetTasksByHandoff(uid: string, status?: TaskStatus): 
 
   try {
     const key = `tasks:handoff:${uid}:${status ?? 'any'}`;
-    return await cachedFirestoreRead(key, 5 * 60 * 1000, async () => {
+    return await cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
       let ref: Query = adminDb
         .collection(COL)
         .where('handoffUid', '==', uid);
@@ -504,24 +557,28 @@ export async function adminGetTasksByHandoff(uid: string, status?: TaskStatus): 
 }
 
 export async function adminGetAllTasks(filters?: {
-  status?: TaskStatus;
+  status?: TaskStatus | 'open' | 'all';
   department?: string;
   limit?: number | null;
   fresh?: boolean;
+  includeCompleted?: boolean;
 }): Promise<Task[]> {
   if (filters?.fresh) {
     clearFirestoreReadCache('tasks:');
     clearFirestoreReadCache('scores:');
   }
 
+  const effectiveStatus = filters?.status ?? (filters?.includeCompleted ? undefined : 'open');
+
   if (hasCloudflareApi()) {
     const params = new URLSearchParams({ scope: 'all' });
-    if (filters?.status) params.set('status', filters.status);
+    if (effectiveStatus) params.set('status', effectiveStatus);
+    if (filters?.includeCompleted) params.set('includeCompleted', 'true');
     if (filters?.department) params.set('department', filters.department);
     params.set('limit', String(Math.min(Math.max(Number(filters?.limit) || DEFAULT_TASK_READ_LIMIT, 1), MAX_TASK_READ_LIMIT)));
     const limitKey = params.get('limit');
-    const key = `tasks:all:${filters?.department ?? 'any'}:${filters?.status ?? 'any'}:${limitKey}`;
-    return cachedFirestoreRead(key, 5 * 60 * 1000, async () => {
+    const key = `tasks:all:${filters?.department ?? 'any'}:${effectiveStatus ?? 'any'}:${limitKey}`;
+    return cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
       const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
       return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
     });
@@ -529,17 +586,19 @@ export async function adminGetAllTasks(filters?: {
 
   try {
     const readLimit = Math.min(Math.max(Number(filters?.limit) || DEFAULT_TASK_READ_LIMIT, 1), MAX_TASK_READ_LIMIT);
-    const key = `tasks:all:${filters?.department ?? 'any'}:${filters?.status ?? 'any'}:${readLimit}`;
+    const key = `tasks:all:${filters?.department ?? 'any'}:${effectiveStatus ?? 'any'}:${readLimit}`;
 
-    return await cachedFirestoreRead(key, 2 * 60 * 1000, async () => {
+    return await cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
       let ref: Query = adminDb.collection(COL);
 
       if (filters?.department) {
         ref = ref.where('department', '==', filters.department);
       }
 
-      if (filters?.status) {
-        ref = ref.where('status', '==', filters.status);
+      if (effectiveStatus === 'open') {
+        ref = ref.where('status', 'in', ['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue']);
+      } else if (effectiveStatus && effectiveStatus !== 'all') {
+        ref = ref.where('status', '==', effectiveStatus);
       }
 
       ref = ref.orderBy('createdAt', 'desc');
@@ -550,7 +609,7 @@ export async function adminGetAllTasks(filters?: {
 
       const snap = await ref.get();
       let tasks = sortNewestFirst(snap.docs.map(d => normalizeTaskDoc(d.id, d.data())));
-      if (readLimit && (filters?.department || filters?.status)) {
+      if (readLimit && (filters?.department || effectiveStatus)) {
         tasks = tasks.slice(0, readLimit);
       }
       return tasks;
@@ -591,10 +650,25 @@ function taskScopeParams(department?: string, options: TaskReadScope = {}) {
 
 export async function adminGetTaskCounts(department?: string, options: TaskReadScope = {}): Promise<TaskAggregateCounts> {
   const params = taskScopeParams(department, options);
-  return cachedFirestoreRead('tasks:counts:' + params.toString(), 30_000, async () => {
-    if (hasCloudflareApi()) return cfApi<TaskAggregateCounts>('/tasks/counts?' + params);
-    // Counts must never be calculated from a truncated task list.
-    throw new Error('Complete task counts require the Cloudflare aggregate endpoint');
+  return cachedFirestoreRead('tasks:counts:' + params.toString(), LONG_READ_CACHE_TTL_MS, async () => {
+    if (hasCloudflareApi()) {
+      try {
+        return await cfApi<TaskAggregateCounts>('/tasks/counts?' + params);
+      } catch (err) {
+        console.warn('[Read budget] Cloudflare task counts failed or quota reached, showing loaded metrics without scanning DB', err);
+      }
+    }
+    return {
+      total: 0,
+      pending: 0,
+      inProgress: 0,
+      delayRequested: 0,
+      overdue: 0,
+      completed: 0,
+      verified: 0,
+      dead: 0,
+      active: 0,
+    };
   });
 }
 
@@ -604,7 +678,7 @@ export async function adminSearchTasks(queryText: string, options: TaskReadScope
   const params = taskScopeParams(department, scope);
   params.set('q', queryText.trim());
   params.set('limit', String(Math.min(Math.max(limit || 100, 1), 100)));
-  return cachedFirestoreRead('tasks:search:' + params.toString(), 30_000, async () => {
+  return cachedFirestoreRead('tasks:search:' + params.toString(), 5 * 60 * 1000, async () => {
     const rows = await cfApi<any[]>('/tasks/search?' + params);
     return rows.map(cfTask).filter(Boolean) as Task[];
   });

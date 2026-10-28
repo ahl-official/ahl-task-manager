@@ -30,11 +30,18 @@ export async function GET(req: NextRequest) {
   let sent = 0;
 
   try {
-    const [tasks, users] = await Promise.all([
-      adminGetReminderTasks('recent', indiaTodayKey()),
-      adminGetAllUsers(),
-    ]);
+    const users = await adminGetAllUsers();
+    const activeUsers = users.filter(u => {
+      if (u.isActive === false) return false;
+      const digits = String(u.waNumber || '').replace(/\D/g, '');
+      return digits.length >= 10;
+    });
 
+    if (activeUsers.length === 0) {
+      return NextResponse.json({ success: true, sent: 0, errors: [], scope: 'One Time Overdue', message: 'No active users with valid WhatsApp numbers' });
+    }
+
+    const tasks = await adminGetReminderTasks('recent', indiaTodayKey());
     const todayKey = indiaTodayKey();
     const usersByUid = new Map(users.map(u => [u.uid, u]));
     const recentOverdueByUid = new Map<string, Array<{ task: Task; daysOverdue: number; dueDateFormatted: string }>>();

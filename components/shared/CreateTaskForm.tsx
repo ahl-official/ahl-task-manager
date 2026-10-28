@@ -196,37 +196,59 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
         {/* Assigned To */}
         <div>
           <label className="label">Assign To *</label>
-          <select
-            value={form.assignedTo}
-            onChange={e => set('assignedTo', e.target.value)}
-            className="input"
-            required
-            disabled={assignableUsers.length === 0}
-          >
-            <option value="">Select member…</option>
-            {assignableUsers.map(u => (
-              <option key={u.uid} value={u.uid}>{u.name} ({roleLabel(u.role)})</option>
-            ))}
-          </select>
+          {users.length > 0 ? (
+            <select
+              value={form.assignedTo}
+              onChange={e => set('assignedTo', e.target.value)}
+              className="input"
+              required
+              disabled={assignableUsers.length === 0}
+            >
+              <option value="">Select member…</option>
+              {assignableUsers.map(u => (
+                <option key={u.uid} value={u.uid}>{u.name} ({roleLabel(u.role)})</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={form.assignedTo}
+              onChange={e => set('assignedTo', e.target.value)}
+              placeholder="Enter member UID or name..."
+              className="input"
+              required
+            />
+          )}
           <p className="mt-1 text-[11px] text-gray-400">{describeAssignmentRule(currentUser.role)}</p>
         </div>
 
         {/* Checker */}
         <div>
           <label className="label">Checker / Handoff *</label>
-          <select
-            value={form.handoffUid}
-            onChange={e => set('handoffUid', e.target.value)}
-            className="input"
-            required
-          >
-            <option value="">Select checker…</option>
-            {checkerUsers.map(u => (
-              <option key={u.uid} value={u.uid}>
-                {u.name}{u.uid === currentUser.uid ? ' (You)' : ''} ({roleLabel(u.role)})
-              </option>
-            ))}
-          </select>
+          {users.length > 0 ? (
+            <select
+              value={form.handoffUid}
+              onChange={e => set('handoffUid', e.target.value)}
+              className="input"
+              required
+            >
+              <option value="">Select checker…</option>
+              {checkerUsers.map(u => (
+                <option key={u.uid} value={u.uid}>
+                  {u.name}{u.uid === currentUser.uid ? ' (You)' : ''} ({roleLabel(u.role)})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={form.handoffUid}
+              onChange={e => set('handoffUid', e.target.value)}
+              placeholder="Enter checker UID or name..."
+              className="input"
+              required
+            />
+          )}
           <p className="mt-1 text-[11px] text-gray-400">
             {isIntern
               ? 'Select another person or leader from your department to verify and check your work.'

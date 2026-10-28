@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertOctagon, CalendarOff, CheckCircle2, Circle, MessageSquare, Loader2, RefreshCw, RotateCcw, Search, X, Trash2 } from 'lucide-react';
+import { AlertOctagon, CalendarOff, CheckCircle2, Circle, MessageSquare, Loader2, RotateCcw, Search, X, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn, formatDate } from '@/lib/utils';
 import { namesEqual, normalizePersonName } from '@/lib/utils/names';
@@ -410,6 +410,18 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   }, [category, date]);
 
   useEffect(() => {
+    const handleGlobalRefresh = (e: any) => {
+      const scope = e?.detail?.scope;
+      if (!scope || scope === 'checklist' || scope === 'all') {
+        loadRows(category, date, true);
+      }
+    };
+    window.addEventListener('app-global-refresh', handleGlobalRefresh);
+    return () => window.removeEventListener('app-global-refresh', handleGlobalRefresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category, date]);
+
+  useEffect(() => {
     if (!nextCursor || loading || loadingMore || search.trim() || !pageSentinel.current) return;
     const observer = new IntersectionObserver(entries => {
       if (entries[0]?.isIntersecting) void loadMore();
@@ -496,15 +508,6 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
               <option key={option} value={option}>{option} Tasks</option>
             ))}
           </select>
-          <button
-            type="button"
-            onClick={() => loadRows(category, date, true)}
-            className="btn-secondary py-2"
-            disabled={loading}
-          >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            Refresh
-          </button>
         </div>
       </div>
 

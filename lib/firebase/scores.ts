@@ -2,7 +2,7 @@ import { Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from './admin';
 import type { AHLUser, UserScore, AppLog, LogType } from '@/types';
 import { handleFirestoreReadError } from './errors';
-import { cachedFirestoreRead, clearFirestoreReadCache } from './readCache';
+import { cachedFirestoreRead, clearFirestoreReadCache, LONG_READ_CACHE_TTL_MS } from './readCache';
 import { adminGetAllUsers } from './users';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { cfScore } from '@/lib/cloudflare/models';
@@ -118,13 +118,13 @@ export async function adminIncrementScores(
 }
 
 export async function adminGetAllScores(): Promise<UserScore[]> {
-  if (hasCloudflareApi()) {
-    const scores = await cfApi<any[]>('/scores');
-    return scores.map(cfScore).filter(Boolean) as UserScore[];
-  }
+  return cachedFirestoreRead('scores:all', LONG_READ_CACHE_TTL_MS, async () => {
+    if (hasCloudflareApi()) {
+      const scores = await cfApi<any[]>('/scores');
+      return scores.map(cfScore).filter(Boolean) as UserScore[];
+    }
 
-  try {
-    return await cachedFirestoreRead('scores:all', 2 * 60 * 1000, async () => {
+    try {
       const [scoreSnap, users] = await Promise.all([
         adminDb.collection(SCORES).get(),
         adminGetAllUsers(),
@@ -141,11 +141,11 @@ export async function adminGetAllScores(): Promise<UserScore[]> {
       });
 
       return hydrated.sort((a, b) => b.monthlyScore - a.monthlyScore);
-    });
-  } catch (err) {
-    handleFirestoreReadError('adminGetAllScores', err);
-    return [];
-  }
+    } catch (err) {
+      handleFirestoreReadError('adminGetAllScores', err);
+      return [];
+    }
+  });
 }
 
 export async function adminGetScore(uid: string): Promise<UserScore | null> {
@@ -154,7 +154,7 @@ export async function adminGetScore(uid: string): Promise<UserScore | null> {
   }
 
   try {
-    return await cachedFirestoreRead(`scores:user:${uid}`, 2 * 60 * 1000, async () => {
+    return await cachedFirestoreRead(`scores:user:${uid}`, LONG_READ_CACHE_TTL_MS, async () => {
       const [scoreSnap, userSnap] = await Promise.all([
         adminDb.collection(SCORES).doc(uid).get(),
         adminDb.collection('users').doc(uid).get(),

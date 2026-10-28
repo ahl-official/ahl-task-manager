@@ -39,10 +39,24 @@ export async function GET(req: NextRequest) {
   const errors: string[] = [];
 
   try {
-    const [users, tasks] = await Promise.all([
-      adminGetAllUsers(),
-      adminGetReminderTasks('high', indiaTodayKey()),
-    ]);
+    const users = await adminGetAllUsers();
+    const activeUsers = users.filter(user => {
+      if (user.isActive === false) return false;
+      const digits = String(user.waNumber || '').replace(/\D/g, '');
+      return digits.length >= 10;
+    });
+
+    if (activeUsers.length === 0) {
+      return NextResponse.json({
+        success: true,
+        sent: 0,
+        people: 0,
+        errors: [],
+        message: 'No active users with valid WhatsApp numbers found',
+      });
+    }
+
+    const tasks = await adminGetReminderTasks('high', indiaTodayKey());
 
     const high = oneTimeHighPriority(tasks);
     const byUid = new Map<string, typeof high>();

@@ -39,10 +39,25 @@ export async function GET(req: NextRequest) {
   const errors: string[] = [];
 
   try {
-    const [users, tasks] = await Promise.all([
-      adminGetAllUsers(),
-      adminGetReminderTasks(mode === 'priority' ? 'priority' : 'due', indiaTodayKey()),
-    ]);
+    const users = await adminGetAllUsers();
+    const activeUsers = users.filter(user => {
+      if (user.isActive === false) return false;
+      const digits = String(user.waNumber || '').replace(/\D/g, '');
+      return digits.length >= 10;
+    });
+
+    if (activeUsers.length === 0) {
+      return NextResponse.json({
+        success: true,
+        mode,
+        sent: 0,
+        skipped: 0,
+        errors: [],
+        message: 'No active users with valid WhatsApp numbers found',
+      });
+    }
+
+    const tasks = await adminGetReminderTasks(mode === 'priority' ? 'priority' : 'due', indiaTodayKey());
 
     const todayKey = indiaTodayKey();
     const dateLabel = (() => {
@@ -50,8 +65,6 @@ export async function GET(req: NextRequest) {
       const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       return `${d} ${months[Number(m) - 1]} ${y}`;
     })();
-
-    const activeUsers = users.filter(user => user.isActive !== false && user.waNumber);
 
     for (const user of activeUsers) {
       try {

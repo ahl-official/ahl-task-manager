@@ -37,10 +37,24 @@ export async function GET(req: NextRequest) {
     const users = await adminGetAllUsers();
 
     const todayKey = indiaTodayKey();
-    const activeUsers = users.filter(user => user.isActive !== false && user.waNumber);
+    const activeUsers = users.filter(user => {
+      if (user.isActive === false) return false;
+      const digits = String(user.waNumber || '').replace(/\D/g, '');
+      return digits.length >= 10;
+    });
     const targetUsers = targetUid
       ? activeUsers.filter(u => u.uid === targetUid)
       : activeUsers;
+
+    if (targetUsers.length === 0) {
+      return NextResponse.json({
+        success: true,
+        sent: 0,
+        skipped: 0,
+        errors: [],
+        message: 'No eligible active users with valid WhatsApp numbers found',
+      });
+    }
 
     for (const user of targetUsers) {
       try {

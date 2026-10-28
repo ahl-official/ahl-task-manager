@@ -199,6 +199,18 @@ export default function ScoresClient({
   }, []);
 
   useEffect(() => {
+    const handleGlobalRefresh = (e: any) => {
+      const scope = e?.detail?.scope;
+      if (!scope || scope === 'scores' || scope === 'all') {
+        weekCacheRef.current.clear();
+        setPdfByKey({});
+      }
+    };
+    window.addEventListener('app-global-refresh', handleGlobalRefresh);
+    return () => window.removeEventListener('app-global-refresh', handleGlobalRefresh);
+  }, []);
+
+  useEffect(() => {
     if (!weekStart) return;
 
     if (weekCacheRef.current.has(weekStart)) {

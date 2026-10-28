@@ -94,7 +94,7 @@ export default function Sidebar({
             <Link
               key={href}
               href={href}
-              prefetch={true}
+              prefetch={false}
               onClick={() => {
                 setPendingHref(href);
                 setOpen(false);

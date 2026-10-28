@@ -701,19 +701,43 @@ async function routeRevisions(req: Request, env: Env, url: URL) {
     const data = await body<any>(req);
     const id = randomId('rev_');
     const now = nowIso();
+    const taskId = data.taskId || '';
     await env.DB.prepare(
       'INSERT INTO revisions (id, task_id, requested_by, requested_by_name, requested_date, reason, status, decided_by, decided_by_name, decided_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)'
-    ).bind(id, data.taskId || '', data.requestedBy || '', data.requestedByName || '', data.requestedDate || now, data.reason || '', 'pending', now).run();
+    ).bind(id, taskId, data.requestedBy || '', data.requestedByName || '', data.requestedDate || now, data.reason || '', 'pending', now).run();
+    if (taskId) {
+      const requestedDateStr = (data.requestedDate || '').slice(0, 10);
+      await env.DB.prepare(
+        "UPDATE tasks_current SET revision_status = 'requested', delayed_date = ?, delay_reason = ?, status = CASE WHEN status = 'In Progress' THEN 'Delay Requested' ELSE status END, updated_at = ? WHERE task_id = ?"
+      ).bind(requestedDateStr || null, data.reason || null, now, taskId).run();
+    }
     return json({ success: true, data: revisionFromRow(await env.DB.prepare('SELECT * FROM revisions WHERE id = ?').bind(id).first()) }, { status: 201 });
   }
 
   if (url.pathname === '/revisions' && req.method === 'PATCH') {
     const data = await body<any>(req);
     if (!data.revisionId) return json({ success: false, error: 'revisionId is required' }, { status: 400 });
+    const decision = data.decision || 'approved';
+    const now = nowIso();
     await env.DB.prepare('UPDATE revisions SET status = ?, decided_by = ?, decided_by_name = ?, decided_at = ? WHERE id = ?')
-      .bind(data.decision || 'approved', data.decidedBy || null, data.decidedByName || null, nowIso(), data.revisionId)
+      .bind(decision, data.decidedBy || null, data.decidedByName || null, now, data.revisionId)
       .run();
-    return json({ success: true, data: revisionFromRow(await env.DB.prepare('SELECT * FROM revisions WHERE id = ?').bind(data.revisionId).first()) });
+    const revRow = await env.DB.prepare('SELECT * FROM revisions WHERE id = ?').bind(data.revisionId).first<any>();
+    if (revRow?.task_id) {
+      if (decision === 'approved' && revRow.requested_date) {
+        const newEndDate = revRow.requested_date.slice(0, 10);
+        const dayKey = newEndDate;
+        const monthKey = newEndDate.slice(0, 7);
+        await env.DB.prepare(
+          "UPDATE tasks_current SET end_date = ?, day_key = ?, month_key = ?, revision_status = 'accepted', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ? WHERE task_id = ?"
+        ).bind(newEndDate, dayKey, monthKey, now, revRow.task_id).run();
+      } else {
+        await env.DB.prepare(
+          "UPDATE tasks_current SET revision_status = 'rejected', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ? WHERE task_id = ?"
+        ).bind(now, revRow.task_id).run();
+      }
+    }
+    return json({ success: true, data: revisionFromRow(revRow) });
   }
 
   return null;

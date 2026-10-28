@@ -7,11 +7,29 @@ export async function getPersonalTimelyTasks(session: SessionUser): Promise<Task
     const { hasCloudflareApi } = await import('@/lib/cloudflare/api');
     if (hasCloudflareApi()) {
       const { getRecurringChecklist } = await import('@/lib/cloudflare/recurring');
-      const d1Items = await getRecurringChecklist({ userName: session.name, uid: session.uid });
+      const { indiaTodayKey } = await import('@/lib/utils/indiaDate');
+      const { addDaysKey } = await import('@/lib/mis/week');
+
+      const today = indiaTodayKey();
+      const yesterday = addDaysKey(today, -1);
+      const tomorrow = addDaysKey(today, 1);
+
+      const rawItems = await getRecurringChecklist({
+        startDate: yesterday,
+        endDate: tomorrow,
+        userName: session.name,
+        uid: session.uid,
+      });
+
+      const d1Items = (rawItems || []).filter(item => {
+        const d = String(item.dueDate || item.periodKey || '').slice(0, 10);
+        return d >= yesterday && d <= tomorrow;
+      });
       if (d1Items && d1Items.length > 0) {
         return d1Items.map(item => {
           const due = timestamp(indiaNoonIso(item.dueDate || item.periodKey))!;
           const done = item.completed ? timestamp(indiaNoonIso(item.completedAt || item.dueDate || item.periodKey)) : null;
+          const created = (item as any).createdAt ? timestamp((item as any).createdAt)! : timestamp(indiaNoonIso('2026-09-01'))!;
           return {
             taskId: item.taskId,
             description: item.description,
@@ -36,7 +54,7 @@ export async function getPersonalTimelyTasks(session: SessionUser): Promise<Task
             acceptedAt: due,
             completedAt: done,
             verifiedAt: null,
-            createdAt: due,
+            createdAt: created,
             updatedAt: done || due,
             dayKey: item.dueDate || item.periodKey,
             monthKey: (item.dueDate || item.periodKey).slice(0, 7),
