@@ -1,5 +1,6 @@
 'use client';
 import type { TaskAggregateCounts } from '@/lib/firebase/tasks';
+import ServerLimitBanner from '@/components/shared/ServerLimitBanner';
 
 import { useEffect, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
@@ -46,7 +47,7 @@ function isOverdue(task: TaskSerialized): boolean {
 function addTaskToCounts(counts: TaskCounts, task: TaskSerialized) {
   counts.total += 1;
   const norm = normalizeBaseStatus(task.status);
-  if (norm === 'Pending Accept') counts.pending += 1;
+  if (norm === 'Pending Accept' || norm === 'Pending') counts.pending += 1;
   if (norm === 'In Progress') counts.inProgress += 1;
   if (norm === 'Completed') counts.completed += 1;
   if (norm === 'Verified') counts.verified += 1;
@@ -57,6 +58,7 @@ function addTaskToCounts(counts: TaskCounts, task: TaskSerialized) {
 function matchesFilter(task: TaskSerialized, filter: TaskFilter) {
   if (filter === 'all') return true;
   if (filter === 'Overdue') return isOverdue(task);
+  if (filter === 'Pending Accept') return ['Pending', 'Pending Accept'].includes(normalizeBaseStatus(task.status));
   return task.status === filter || normalizeBaseStatus(task.status) === filter;
 }
 
@@ -77,10 +79,20 @@ interface Props {
   users: any[];
   tasks: TaskSerialized[];
   departments: { id: string; name: string }[];
+  readLimitReached?: boolean;
 }
 
-export default function AdminDashboardClient({ currentUid, taskCounts, users, tasks, departments: initialDepartments }: Props) {
+export default function AdminDashboardClient({ currentUid, taskCounts, users, tasks, departments: initialDepartments, readLimitReached }: Props) {
   const [taskItems, setTaskItems] = useState(tasks);
+  const [limitHit, setLimitHit] = useState(Boolean(readLimitReached));
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      if (e?.detail?.readLimitReached) setLimitHit(true);
+    };
+    window.addEventListener('app-global-refresh', handler);
+    return () => window.removeEventListener('app-global-refresh', handler);
+  }, []);
   const [filter, setFilter]         = useState<TaskFilter>('all');
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null);

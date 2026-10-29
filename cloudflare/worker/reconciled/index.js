@@ -501,6 +501,7 @@ async function routeUsers(req, env, url) {
       env.DB.prepare("DELETE FROM scores WHERE uid = ?").bind(uid),
       env.DB.prepare("DELETE FROM users WHERE uid = ?").bind(uid)
     ]);
+    await env.DB.prepare("DELETE FROM task_counts_summary WHERE assigned_to = ?").bind(uid).run();
     return json({ success: true });
   }
   return null;
@@ -1528,7 +1529,7 @@ function periodRowFromDb(row) {
     completed,
     completedAt: row.completed_at || null,
     isOnTime: row.is_on_time !== 0 && row.is_on_time !== false,
-    dead: deleted,
+    dead: deleted || status === "Dead",
     deadAt: row.deleted_at || null,
     remark: row.remark || "",
     remarkBy: row.remark_by || "",
@@ -2201,6 +2202,16 @@ async function routeRecurring(req, env, url) {
     const due="COALESCE(NULLIF(due_date,''),SUBSTR(period_key,1,10))";
     const clauses=["is_deleted=0","status!='Deleted'"],binds=[];
     const paged=url.searchParams.has('limit');
+    const scopeUid=url.searchParams.get('scopeUid')||url.searchParams.get('uid');
+    const scopeName=url.searchParams.get('scopeName')||url.searchParams.get('userName');
+    const scopeDepartment=url.searchParams.get('scopeDepartment');
+    if(scopeUid||scopeName||scopeDepartment){
+      const scope=[];
+      if(scopeUid){scope.push('assigned_to=?');binds.push(scopeUid);}
+      if(scopeName){scope.push("(COALESCE(assigned_to,'')='' AND LOWER(assigned_to_name)=LOWER(?))");binds.push(scopeName);}
+      if(scopeDepartment){scope.push('department=?');binds.push(scopeDepartment);}
+      clauses.push('('+scope.join(' OR ')+')');
+    }
     if (startDate && endDate) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return json({success:false,error:'Invalid date range'},{status:400});
       const cappedEnd = endDate > tomorrowStr ? tomorrowStr : endDate;
@@ -2245,6 +2256,22 @@ async function routeRecurring(req, env, url) {
     const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY due_date,id LIMIT 200').bind(...binds).all();
     const data=(result.results||[]).slice(0,200).map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
     return json({success:true,data,meta:{istDate:date,count:data.length,hasMore:(result.results||[]).length>=200,readOnly:true}});
+  }
+  if (path === "/sheet-sync/period-status" && req.method === "PATCH") {
+    const data = await body(req);
+    const items = Array.isArray(data.items) ? data.items : [{ id: data.id, status: data.status }];
+    if (!items.length || items.length > 100 || items.some(item => !item.id || !["Completed", "Verified", "Dead"].includes(item.status))) {
+      return json({ success: false, error: "Invalid sheet period update" }, { status: 400 });
+    }
+    const now = nowIso();
+    const results = await env.DB.batch(items.map(item => {
+      const actualDate = /^\d{4}-\d{2}-\d{2}$/.test(String(item.actualDate || '')) ? String(item.actualDate) : null;
+      const completed = item.status === 'Completed' || item.status === 'Verified';
+      return env.DB.prepare(
+        "UPDATE recurring_period_rows SET status=?,completed_at=CASE WHEN ? THEN COALESCE(?,completed_at) ELSE NULL END,is_on_time=COALESCE(?,is_on_time),updated_at=? WHERE id=? AND status='Pending' AND is_deleted=0"
+      ).bind(item.status, completed ? 1 : 0, completed && actualDate ? `${actualDate}T12:00:00+05:30` : null, completed && actualDate ? (actualDate <= String(item.dueDate || actualDate) ? 1 : 0) : null, now, String(item.id));
+    }));
+    return json({ success: true, data: { updated: results.reduce((n, result) => n + Number(result.meta?.changes || 0), 0) } });
   }
   if (path === "/recurring/completions" && req.method === "POST") {
     const data=await body(req),templateId=String(data.templateId||''),periodKey=String(data.periodKey||''),action=String(data.action||'complete');
@@ -2297,7 +2324,7 @@ var index_default = {
     if(url.searchParams.get('fresh')==='true')invalidateReadCache();
     const cached=getCachedRead(req,url);
     if(cached)return new Response(cached.body,{status:cached.status,headers:{...Object.fromEntries(cached.headers),...corsHeaders(wrappedEnv)}});
-    const response = await routeLifecycle(req,wrappedEnv,url,{nextTaskId,taskFromRow,revisionFromRow,resolveRecurringDefinition,buildMonthPeriodRows,periodRowId}) || await routeReadOptimizations(req,wrappedEnv,url,taskFromRow) || await routeUsers(req, wrappedEnv, url) || await routeDepartments(req, wrappedEnv, url) || await routeTasks(req, wrappedEnv, url) || await routeScores(req, wrappedEnv, url) || await routeRevisions(req, wrappedEnv, url) || await routeCrm(req, wrappedEnv, url) || await routeAutomations(req, wrappedEnv, url) || await routeMis(req, wrappedEnv, url) || await routeRecurring(req, wrappedEnv, url) || await routeChecklist(req, wrappedEnv, url) || json({ success: false, error: "Not found" }, { status: 404 });
+    const response = await routeLifecycle(req,wrappedEnv,url,{nextTaskId,taskFromRow,revisionFromRow,resolveRecurringDefinition,buildMonthPeriodRows,periodRowId,adjustTaskCount}) || await routeReadOptimizations(req,wrappedEnv,url,taskFromRow) || await routeUsers(req, wrappedEnv, url) || await routeDepartments(req, wrappedEnv, url) || await routeTasks(req, wrappedEnv, url) || await routeScores(req, wrappedEnv, url) || await routeRevisions(req, wrappedEnv, url) || await routeCrm(req, wrappedEnv, url) || await routeAutomations(req, wrappedEnv, url) || await routeMis(req, wrappedEnv, url) || await routeRecurring(req, wrappedEnv, url) || await routeChecklist(req, wrappedEnv, url) || json({ success: false, error: "Not found" }, { status: 404 });
     if(req.method!=='GET'&&response.ok)invalidateReadCache();
     await cacheRead(req,url,response);
     return new Response(response.body, { status: response.status, headers: { ...Object.fromEntries(response.headers), ...corsHeaders(wrappedEnv) } });

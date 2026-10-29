@@ -3,14 +3,16 @@ import { adminGetAllTasks, adminGetTaskCounts, serializeTask } from '@/lib/fireb
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import TaskListClient from '@/components/shared/TaskListClient';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
+import { shouldRefreshTasks } from '@/lib/utils/taskRefresh';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export default async function AdminTasksPage() {
+  const fresh = shouldRefreshTasks();
   const [session, tasks, counts, users] = await Promise.all([
     getSession(),
-    adminGetAllTasks({ limit: 100 }),
-    adminGetTaskCounts(),
+    adminGetAllTasks({ limit: 100, fresh }),
+    adminGetTaskCounts(undefined, { fresh }),
     adminGetAllUsers(),
   ]);
 

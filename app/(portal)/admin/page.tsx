@@ -4,14 +4,16 @@ import { adminGetAllTasks, adminGetTaskCounts, serializeTask } from '@/lib/fireb
 import { adminGetDepartments, serializeDepartment } from '@/lib/firebase/departments';
 import AdminDashboardClient from '@/components/admin/AdminDashboardClient';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
+import { shouldRefreshTasks } from '@/lib/utils/taskRefresh';
 
 export default async function AdminDashboardPage() {
   const session = await getSession();
+  const fresh = shouldRefreshTasks();
   const [users, tasks, departments, taskCounts] = await Promise.all([
     adminGetAllUsers(),
-    adminGetAllTasks({ limit: 100 }),
+    adminGetAllTasks({ limit: 100, fresh }),
     adminGetDepartments(),
-    adminGetTaskCounts(),
+    adminGetTaskCounts(undefined, { fresh }),
   ]);
 
   // Serialize for client

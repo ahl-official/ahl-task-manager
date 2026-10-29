@@ -1,8 +1,9 @@
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { getSession } from '@/lib/utils/auth';
 import CreateTaskForm from '@/components/shared/CreateTaskForm';
+import ServerLimitBanner from '@/components/shared/ServerLimitBanner';
 import { redirect } from 'next/navigation';
-import { getAssignableUsers } from '@/lib/utils/hierarchy';
+import { isReadLimitHit } from '@/lib/firebase/errors';
 
 function normalizeRole(role: string) {
   return role === 'user' ? 'member' : role;
@@ -29,13 +30,26 @@ export default async function PortalCreateTaskPage() {
       isActive:   u.isActive,
     }));
 
+  const readLimitReached = isReadLimitHit() || (rawUsers.length === 0);
+
   return (
     <div className="p-6 max-w-2xl">
-      <div className="mb-6 pr-14">
+      <div className="mb-6">
         <h1 className="text-xl font-semibold text-gray-900">Create Task</h1>
         <p className="mt-0.5 text-sm text-gray-500">Delegate a task to a team member</p>
       </div>
-      <CreateTaskForm users={activeUsers as any} currentUser={currentUser as any} redirectTo="/portal" />
+      {readLimitReached && (
+        <ServerLimitBanner
+          role="user"
+          message="Server read limit reached: The user directory could not be read from the database right now. Task creation is fully functional and writes directly — select from cached team members or enter assignee details below."
+        />
+      )}
+      <CreateTaskForm
+        users={activeUsers as any}
+        currentUser={currentUser as any}
+        redirectTo="/portal"
+        isReadLimit={readLimitReached}
+      />
     </div>
   );
 }

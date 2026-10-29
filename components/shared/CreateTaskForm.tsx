@@ -1,9 +1,9 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Loader2, Mic, Square, Wand2 } from 'lucide-react';
+import { Loader2, Mic, Square, Wand2, AlertTriangle } from 'lucide-react';
 import { canAssignTask, describeAssignmentRule, roleLabel } from '@/lib/utils/hierarchy';
 import { stashPendingCreatedTask } from '@/lib/utils/pendingCreatedTask';
 import type { UserRole } from '@/types';
@@ -15,21 +15,57 @@ interface Props {
   users: { uid: string; name: string; department: string; role: UserRole; isActive: boolean }[];
   currentUser: { uid: string; name: string; department: string; role: UserRole };
   redirectTo: string;
+  isReadLimit?: boolean;
 }
 
-export default function CreateTaskForm({ users, currentUser, redirectTo }: Props) {
+export default function CreateTaskForm({ users, currentUser, redirectTo, isReadLimit }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [voiceLoading, setVoiceLoading] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const assignableUsers = users.filter(user => canAssignTask(currentUser as any, user as any));
+
+  // Cache and resolve team members across sessions
+  const [effectiveUsers, setEffectiveUsers] = useState(users);
+
+  useEffect(() => {
+    if (users && users.length > 0) {
+      setEffectiveUsers(users);
+      try {
+        localStorage.setItem('ahl_cached_team_users', JSON.stringify(users));
+      } catch {}
+    } else {
+      try {
+        const cached = localStorage.getItem('ahl_cached_team_users');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setEffectiveUsers(parsed);
+            return;
+          }
+        }
+      } catch {}
+      if (currentUser?.uid) {
+        setEffectiveUsers([
+          {
+            uid: currentUser.uid,
+            name: currentUser.name,
+            department: currentUser.department,
+            role: currentUser.role,
+            isActive: true,
+          },
+        ]);
+      }
+    }
+  }, [users, currentUser]);
+
+  const assignableUsers = effectiveUsers.filter(user => canAssignTask(currentUser as any, user as any));
   const isIntern = currentUser.role === 'intern';
   const isMember = currentUser.role === 'member';
   const myDept = (currentUser.department || '').trim().toLowerCase();
 
-  const checkerUsers = users.filter(user => {
+  const checkerUsers = effectiveUsers.filter(user => {
     if (!user.isActive) return false;
     if (user.role === 'admin') return true;
 
@@ -75,7 +111,7 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
       const next = { ...f, [field]: value };
       // Auto-fill department from assignee
       if (field === 'assignedTo') {
-        const user = users.find(u => u.uid === value);
+        const user = effectiveUsers.find(u => u.uid === value);
         if (user) next.department = user.department;
       }
       return next;
@@ -178,8 +214,28 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
     }
   }
 
+  const showLimitNotice = isReadLimit || users.length === 0;
+
   return (
     <form onSubmit={handleSubmit} className="card p-6 space-y-5">
+      {/* Read Limit Notice inside Create Task form */}
+      {showLimitNotice && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs text-amber-950 flex items-start gap-3 shadow-xs">
+          <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-amber-900 text-sm">Server Read Limit Active</span>
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                ⚡ Direct Save Active
+              </span>
+            </div>
+            <p className="mt-1 text-amber-800 leading-relaxed">
+              Database reads are currently paused, but <strong>task creation writes directly without reading</strong>. Your new task will be saved into the database immediately.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Description */}
       <div>
         <label className="label">Task Description *</label>
@@ -196,13 +252,17 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
         {/* Assigned To */}
         <div>
           <label className="label">Assign To *</label>
-          {users.length > 0 ? (
+          {effectiveUsers.length > 0 ? (
             <select
               value={form.assignedTo}
-              onChange={e => set('assignedTo', e.target.value)}
+              onChange={e => {
+                const selectedUid = e.target.value;
+                const user = effectiveUsers.find(u => u.uid === selectedUid);
+                set('assignedTo', selectedUid);
+                if (user?.department) set('department', user.department);
+              }}
               className="input"
               required
-              disabled={assignableUsers.length === 0}
             >
               <option value="">Select member…</option>
               {assignableUsers.map(u => (
@@ -225,7 +285,7 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
         {/* Checker */}
         <div>
           <label className="label">Checker / Handoff *</label>
-          {users.length > 0 ? (
+          {effectiveUsers.length > 0 ? (
             <select
               value={form.handoffUid}
               onChange={e => set('handoffUid', e.target.value)}
@@ -308,7 +368,6 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
         </div>
       </div>
 
-
       {/* Notes */}
       <div>
         <div className="mb-1 flex items-center justify-between gap-3">
@@ -355,7 +414,11 @@ export default function CreateTaskForm({ users, currentUser, redirectTo }: Props
 
       {/* Submit */}
       <div className="flex gap-3 pt-1">
-        <button type="submit" disabled={loading || assignableUsers.length === 0} className="btn-primary">
+        <button
+          type="submit"
+          disabled={loading || (!form.assignedTo && assignableUsers.length === 0)}
+          className="btn-primary"
+        >
           {loading && <Loader2 size={15} className="animate-spin" />}
           {loading ? 'Creating…' : 'Create Task'}
         </button>

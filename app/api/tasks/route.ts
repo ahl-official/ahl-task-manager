@@ -80,6 +80,7 @@ export async function GET(req: NextRequest) {
   try {
     if (wantCounts) {
       const counts = await adminGetTaskCounts(department, {
+        fresh: isFresh,
         scope: isAdmin || isLeader ? (scope === 'mine' ? 'mine' : scope === 'handoff' ? 'handoff' : 'all') : (scope === 'handoff' ? 'handoff' : 'mine'),
         uid: session.uid,
         assignedTo: searchParams.get('assignedTo') || undefined,

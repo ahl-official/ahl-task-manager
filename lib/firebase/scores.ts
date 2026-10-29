@@ -120,8 +120,13 @@ export async function adminIncrementScores(
 export async function adminGetAllScores(): Promise<UserScore[]> {
   return cachedFirestoreRead('scores:all', LONG_READ_CACHE_TTL_MS, async () => {
     if (hasCloudflareApi()) {
-      const scores = await cfApi<any[]>('/scores');
-      return scores.map(cfScore).filter(Boolean) as UserScore[];
+      try {
+        const scores = await cfApi<any[]>('/scores');
+        return scores.map(cfScore).filter(Boolean) as UserScore[];
+      } catch (err) {
+        handleFirestoreReadError('adminGetAllScores_cf', err);
+        return [];
+      }
     }
 
     try {
@@ -150,7 +155,12 @@ export async function adminGetAllScores(): Promise<UserScore[]> {
 
 export async function adminGetScore(uid: string): Promise<UserScore | null> {
   if (hasCloudflareApi()) {
-    return cfScore(await cfApi(`/scores?uid=${encodeURIComponent(uid)}`));
+    try {
+      return cfScore(await cfApi(`/scores?uid=${encodeURIComponent(uid)}`));
+    } catch (err) {
+      handleFirestoreReadError(`adminGetScore_cf(${uid})`, err);
+      return null;
+    }
   }
 
   try {

@@ -41,17 +41,28 @@ export default function GlobalRefreshButton() {
     try {
       // 1. Invalidate ONLY this specific tab's server cache and restart its timer
       const res = await fetch(`/api/cache/refresh?scope=${scope}`, { method: 'POST' });
-      if (!res.ok) throw new Error('Cache reset returned non-OK status');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data.error || 'Refresh request failed');
 
       // 2. Broadcast event to any client-rendered components on this specific tab
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('app-global-refresh', { detail: { scope } }));
+        window.dispatchEvent(
+          new CustomEvent('app-global-refresh', {
+            detail: { scope, readLimitReached: Boolean(data.readLimitReached) },
+          })
+        );
       }
 
       // 3. Re-execute ONLY the current active tab's Server Component
       router.refresh();
 
-      toast.success(`${label} refreshed & cache timer restarted`);
+      if (data?.readLimitReached) {
+        toast.warning(`Server read limit hit on ${label}. You can still create tasks!`, {
+          duration: 5000,
+        });
+      } else {
+        toast.success(`${label} data refreshed`);
+      }
     } catch (err) {
       console.error('Refresh error:', err);
       toast.error(`Failed to refresh ${label}`);
@@ -67,20 +78,20 @@ export default function GlobalRefreshButton() {
       type="button"
       onClick={handleRefresh}
       disabled={refreshing}
-      title={`Rescan ${label} from database & restart cache timer`}
+      title={`Rescan ${label} from database & refresh cache`}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-xl border border-gray-200/90 bg-white/95 px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm backdrop-blur-xs transition-all hover:bg-gray-50 hover:text-gray-900 hover:border-gray-300 focus:outline-none focus:ring-2 focus:ring-brand-500/20 active:scale-95 disabled:cursor-wait disabled:opacity-75',
-        refreshing && 'border-brand-300 bg-brand-50/50'
+        'inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-800 shadow-sm transition-all hover:bg-gray-50 hover:text-gray-950 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20 active:scale-95 disabled:cursor-wait disabled:opacity-75',
+        refreshing && 'border-brand-400 bg-brand-50 text-brand-900'
       )}
     >
       <RotateCw
-        size={14}
-        className={cn('text-brand-600 transition-transform', refreshing && 'animate-spin')}
+        size={16}
+        className={cn('text-brand-600 transition-transform shrink-0', refreshing && 'animate-spin')}
       />
       <span className="hidden sm:inline">
         {refreshing ? `Refreshing ${label}…` : `Refresh ${label}`}
       </span>
-      <span className="sm:hidden">{refreshing ? '…' : 'Refresh'}</span>
+      <span className="sm:hidden">{refreshing ? '…' : `Refresh ${label}`}</span>
     </button>
   );
 }

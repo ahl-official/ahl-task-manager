@@ -13,6 +13,7 @@ import {
   takePendingCreatedTask,
 } from '@/lib/utils/pendingCreatedTask';
 import type { TaskSerialized } from '@/types';
+import ServerLimitBanner from './ServerLimitBanner';
 
 interface Props {
   headerTitle?: string;
@@ -34,6 +35,7 @@ interface Props {
     active?: number;
   };
   totalCount?: number;
+  readLimitReached?: boolean;
 }
 
 const STATUS_OPTIONS = ['all', 'Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Dead', 'Completed', 'Verified'];
@@ -93,8 +95,18 @@ export default function TaskListClient({
   users = [],
   initialCounts,
   totalCount,
+  readLimitReached,
 }: Props) {
   const [taskItems, setTaskItems] = useState(tasks);
+  const [limitHit, setLimitHit] = useState(Boolean(readLimitReached));
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      if (e?.detail?.readLimitReached) setLimitHit(true);
+    };
+    window.addEventListener('app-global-refresh', handler);
+    return () => window.removeEventListener('app-global-refresh', handler);
+  }, []);
   const [mineOnly, setMineOnly] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatus] = useState('all');
@@ -455,6 +467,12 @@ export default function TaskListClient({
 
   return (
     <>
+      {limitHit && (
+        <ServerLimitBanner
+          role={role}
+          message="Server read limit reached: Tasks could not be refreshed from the database. Task creation is active — new tasks write directly to the database without reading."
+        />
+      )}
       {/* Top Header Row (Positioned at the VERY TOP, beside the Bell Icon with pr-14) */}
       {(headerTitle || role === 'admin') && (
         <div className="surface-enter mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pr-14 sm:pr-16">

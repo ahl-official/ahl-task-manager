@@ -488,8 +488,13 @@ export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
   if (hasCloudflareApi()) {
     const key = `tasks:assignee:${uid}`;
     return cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
-      const tasks = await cfApi<any[]>(`/tasks?scope=mine&uid=${encodeURIComponent(uid)}&limit=${MAX_TASK_READ_LIMIT}`);
-      return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
+      try {
+        const tasks = await cfApi<any[]>(`/tasks?scope=mine&uid=${encodeURIComponent(uid)}&limit=${MAX_TASK_READ_LIMIT}`);
+        return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
+      } catch (err) {
+        handleFirestoreReadError(`adminGetTasksByAssignee_cf(${uid})`, err);
+        return [];
+      }
     });
   }
 
@@ -532,8 +537,13 @@ export async function adminGetTasksByHandoff(uid: string, status?: TaskStatus): 
     params.set('limit', String(MAX_TASK_READ_LIMIT));
     const key = `tasks:handoff:${uid}:${status ?? 'any'}`;
     return cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
-      const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
-      return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
+      try {
+        const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
+        return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
+      } catch (err) {
+        handleFirestoreReadError(`adminGetTasksByHandoff_cf(${uid})`, err);
+        return [];
+      }
     });
   }
 
@@ -579,8 +589,13 @@ export async function adminGetAllTasks(filters?: {
     const limitKey = params.get('limit');
     const key = `tasks:all:${filters?.department ?? 'any'}:${effectiveStatus ?? 'any'}:${limitKey}`;
     return cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
-      const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
-      return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
+      try {
+        const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
+        return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
+      } catch (err) {
+        handleFirestoreReadError('adminGetAllTasks_cf', err);
+        return [];
+      }
     });
   }
 
@@ -636,6 +651,7 @@ export interface TaskAggregateCounts {
 
 export interface TaskReadScope {
   scope?: 'all' | 'mine' | 'handoff' | 'visible'; uid?: string; status?: string;
+  fresh?: boolean;
   assignedTo?: string; category?: string; priority?: string;
   excludeRecurring?: boolean; includeChecklist?: boolean; verificationPending?: boolean;
   weekStart?: string; weekEnd?: string;
@@ -649,11 +665,15 @@ function taskScopeParams(department?: string, options: TaskReadScope = {}) {
 }
 
 export async function adminGetTaskCounts(department?: string, options: TaskReadScope = {}): Promise<TaskAggregateCounts> {
-  const params = taskScopeParams(department, options);
+  const { fresh, ...scope } = options;
+  if (options.fresh) clearFirestoreReadCache('tasks:counts:');
+  const params = taskScopeParams(department, scope);
+  const requestParams = new URLSearchParams(params);
+  if (fresh) requestParams.set('fresh', 'true');
   return cachedFirestoreRead('tasks:counts:' + params.toString(), LONG_READ_CACHE_TTL_MS, async () => {
     if (hasCloudflareApi()) {
       try {
-        return await cfApi<TaskAggregateCounts>('/tasks/counts?' + params);
+        return await cfApi<TaskAggregateCounts>('/tasks/counts?' + requestParams);
       } catch (err) {
         console.warn('[Read budget] Cloudflare task counts failed or quota reached, showing loaded metrics without scanning DB', err);
       }
@@ -679,8 +699,13 @@ export async function adminSearchTasks(queryText: string, options: TaskReadScope
   params.set('q', queryText.trim());
   params.set('limit', String(Math.min(Math.max(limit || 100, 1), 100)));
   return cachedFirestoreRead('tasks:search:' + params.toString(), 5 * 60 * 1000, async () => {
-    const rows = await cfApi<any[]>('/tasks/search?' + params);
-    return rows.map(cfTask).filter(Boolean) as Task[];
+    try {
+      const rows = await cfApi<any[]>('/tasks/search?' + params);
+      return rows.map(cfTask).filter(Boolean) as Task[];
+    } catch (err) {
+      handleFirestoreReadError('adminSearchTasks_cf', err);
+      return [];
+    }
   });
 }
 
