@@ -138,6 +138,15 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
     setSelectedTask(null);
   }
 
+  function handleTaskClick(task: TaskSerialized) {
+    if (['Daily', 'Weekly', 'Monthly'].includes(task.category)) {
+      const params = new URLSearchParams({ category: task.category, taskId: task.taskId });
+      window.location.href = `/admin/checklist?${params.toString()}`;
+      return;
+    }
+    setSelectedTask(task);
+  }
+
   const departments = useMemo(() => {
     const userDepartments = users.map((u: any) => u.department).filter(Boolean);
     const savedDepartments = initialDepartments.map(d => d.name).filter(Boolean);
@@ -278,7 +287,7 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
                 <button
                   key={task.taskId}
                   type="button"
-                  onClick={() => setSelectedTask(task)}
+                  onClick={() => handleTaskClick(task)}
                   className="card group flex min-h-[150px] flex-col justify-between p-4 text-left hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus:ring-2 focus:ring-brand-500"
                 >
                   <div>
@@ -480,7 +489,7 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
                           <button
                             key={task.taskId}
                             type="button"
-                            onClick={() => setSelectedTask(task)}
+                            onClick={() => handleTaskClick(task)}
                             className="flex w-full items-start gap-2 rounded-lg bg-white p-3 text-left hover:bg-gray-100"
                           >
                             <div className={cn('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full',

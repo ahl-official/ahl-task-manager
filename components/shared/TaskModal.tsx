@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2, Trash2, ArrowRightLeft, Pencil, Check } from 'lucide-react';
+import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2, Trash2, ArrowRightLeft, ArrowRight, Pencil, Check } from 'lucide-react';
 import { cn, formatDate, formatDateTime, STATUS_COLORS, PRIORITY_COLORS, PRIORITY_DOT, getDueBadge, canUserShiftTask } from '@/lib/utils';
 import { toast } from 'sonner';
 import ShiftTaskModal from '@/components/shared/ShiftTaskModal';
@@ -249,6 +249,15 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             <span className="text-xs font-mono font-medium text-brand-600 bg-brand-50 px-2 py-0.5 rounded-md shrink-0">{task.taskId}</span>
             <span className={cn('badge text-[11px]', STATUS_COLORS[displayStatus])}>{displayStatus}</span>
             <span className={cn('badge text-[11px]', PRIORITY_COLORS[task.priority])}>{task.priority}</span>
+            {['Daily', 'Weekly', 'Monthly'].includes(task.category) && (
+              <a
+                href={`/${isAdmin ? 'admin' : 'portal'}/checklist?category=${encodeURIComponent(task.category)}&taskId=${encodeURIComponent(task.taskId)}`}
+                className="inline-flex items-center gap-1 rounded-md bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-700 hover:bg-brand-100 border border-brand-200 transition"
+              >
+                <span>View in Checklist</span>
+                <ArrowRight size={11} />
+              </a>
+            )}
           </div>
           <button
             type="button"

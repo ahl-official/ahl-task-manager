@@ -41,7 +41,7 @@ interface ChecklistRow {
 
 const CATEGORY_OPTIONS: ChecklistCategory[] = ['Daily', 'Weekly', 'Monthly'];
 
-export default function ChecklistClient({ initialCategory = 'Daily' }: { initialCategory?: ChecklistCategory }) {
+export default function ChecklistClient({ initialCategory = 'Daily', initialTaskId = '' }: { initialCategory?: ChecklistCategory; initialTaskId?: string }) {
   const [category, setCategory] = useState<ChecklistCategory>(initialCategory);
   const [rows, setRows] = useState<ChecklistRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,7 +49,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   const [ticking, setTicking] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(initialTaskId);
   const [department, setDepartment] = useState('');
   const [individual, setIndividual] = useState('');
   const [mineOnly, setMineOnly] = useState(false);
@@ -64,6 +64,8 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
 
   const categoryCache = useRef<Record<string, { rows: ChecklistRow[]; elevated: boolean; isAdmin: boolean; currentUserName: string; nextCursor: string | null }>>({});
   const pageSentinel = useRef<HTMLDivElement | null>(null);
+  const selectedTaskRow = useRef<HTMLDivElement | null>(null);
+  const selectedTaskFocused = useRef(false);
   const requestKey = useRef('');
   const pageInFlight = useRef(false);
   const searchedKeys = useRef(new Set<string>());
@@ -116,6 +118,15 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
     });
   }, [rows, department, individual, date, mineOnly, currentUserName, search]);
   const completedCount = useMemo(() => visibleRows.filter(row => row.completed).length, [visibleRows]);
+
+  useEffect(() => {
+    if (loading || selectedTaskFocused.current || !initialTaskId ||
+        search.trim().toLowerCase() !== initialTaskId.toLowerCase() ||
+        !visibleRows.some(row => row.taskId.toLowerCase() === initialTaskId.toLowerCase())) return;
+    selectedTaskFocused.current = true;
+    selectedTaskRow.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    selectedTaskRow.current?.focus({ preventScroll: true });
+  }, [loading, visibleRows, initialTaskId, search]);
 
   async function loadRows(nextCategory = category, nextDate = date, forceRefresh = false) {
     const cacheKey = `${nextCategory}:${nextDate || 'today'}`;
@@ -433,7 +444,11 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
 
   useEffect(() => {
     const query = search.trim();
-    if (loading || query.length < 2 || visibleRows.length > 0) {
+    const exactSelectedTaskLoaded = initialTaskId && query.toLowerCase() === initialTaskId.toLowerCase()
+      ? visibleRows.some(row => row.taskId.toLowerCase() === initialTaskId.toLowerCase())
+      : false;
+    if (loading || query.length < 2 || (initialTaskId && query.toLowerCase() === initialTaskId.toLowerCase()
+      ? exactSelectedTaskLoaded : visibleRows.length > 0)) {
       setSearching(false);
       return;
     }
@@ -466,7 +481,7 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
     }, 350);
     return () => { window.clearTimeout(timer); controller.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, category, date, loading, visibleRows.length]);
+  }, [search, category, date, loading, visibleRows, initialTaskId]);
 
   return (
     <div className="space-y-4">
@@ -632,18 +647,28 @@ export default function ChecklistClient({ initialCategory = 'Daily' }: { initial
 
         {!loading && visibleRows.length === 0 && (
           <div className="px-4 py-12 text-center text-sm text-gray-400">
-            {searching ? 'Searching checklist...' : `No ${category.toLowerCase()} checklist tasks match these filters.`}
+            {searching ? 'Searching checklist...' : initialTaskId && search === initialTaskId
+              ? 'This recurring task is not scheduled for the selected date.'
+              : `No ${category.toLowerCase()} checklist tasks match these filters.`}
           </div>
         )}
 
         {!loading && visibleRows.length > 0 && (
           <div className="divide-y divide-gray-50">
             {visibleRows.map(row => (
-              <div key={row.id} className={cn('flex flex-col gap-3 px-5 py-4', row.dead && 'bg-red-50')}>
+              <div
+                key={row.id}
+                ref={row.taskId.toLowerCase() === initialTaskId.toLowerCase() ? selectedTaskRow : undefined}
+                tabIndex={row.taskId.toLowerCase() === initialTaskId.toLowerCase() ? -1 : undefined}
+                className={cn('flex flex-col gap-3 px-5 py-4', row.dead && 'bg-red-50',
+                  row.taskId.toLowerCase() === initialTaskId.toLowerCase() && 'bg-brand-50 ring-2 ring-inset ring-brand-400')}
+              >
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="mb-1 flex flex-wrap items-center gap-2">
                       <span className="font-mono text-xs text-brand-600">{row.taskId}</span>
+                      {row.taskId.toLowerCase() === initialTaskId.toLowerCase() &&
+                        <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-semibold text-white">Selected task</span>}
                       <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">{row.label}</span>
                       <span className={cn(
                         'badge text-[10px]',

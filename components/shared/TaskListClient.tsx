@@ -457,8 +457,9 @@ export default function TaskListClient({
   }, [isDefaultView, initialCounts, totalCount, filtered]);
 
   const openTask = (task: TaskSerialized) => {
-    if (role === 'user' && RECURRING_CATEGORIES.has(task.category)) {
-      window.location.href = `/portal/checklist?category=${encodeURIComponent(task.category)}`;
+    if (RECURRING_CATEGORIES.has(task.category)) {
+      const params = new URLSearchParams({ category: task.category, taskId: task.taskId });
+      window.location.href = `/${role === 'admin' ? 'admin' : 'portal'}/checklist?${params}`;
       return;
     }
 
