@@ -20,7 +20,7 @@ export default function CrmClient({
   users,
 }: {
   leads: any[];
-  users: { uid: string; name: string; department: string }[];
+  users: { uid: string; name: string; department: string; isActive?: boolean }[];
 }) {
   const [leads, setLeads] = useState(initialLeads);
   const [query, setQuery] = useState('');
@@ -114,7 +114,7 @@ export default function CrmClient({
           <div>
             <label className="label">Owner</label>
             <select className="input" value={form.ownerUid} onChange={e => setF('ownerUid', e.target.value)}>
-              {users.map(user => <option key={user.uid} value={user.uid}>{user.name}</option>)}
+              {users.filter(u => u.isActive !== false).map(user => <option key={user.uid} value={user.uid}>{user.name}</option>)}
             </select>
           </div>
           <div>

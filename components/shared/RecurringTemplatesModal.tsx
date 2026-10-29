@@ -10,6 +10,7 @@ interface UserOption {
   uid: string;
   name: string;
   department?: string;
+  isActive?: boolean;
 }
 
 const DAYS_OF_WEEK = [
@@ -76,11 +77,14 @@ export default function RecurringTemplatesModal({
       const res = await fetch('/api/users');
       const data = await res.json();
       if (data.success && Array.isArray(data.data)) {
-        setUsers(data.data.map((u: any) => ({
-          uid: u.uid,
-          name: u.name,
-          department: u.department || '',
-        })));
+        setUsers(data.data
+          .filter((u: any) => u.isActive !== false)
+          .map((u: any) => ({
+            uid: u.uid,
+            name: u.name,
+            department: u.department || '',
+            isActive: u.isActive !== false,
+          })));
       }
     } catch (err) {
       console.warn('Failed to load users for template assignment', err);
@@ -451,7 +455,7 @@ export default function RecurringTemplatesModal({
                     className="input mt-1 w-full text-sm"
                   />
                   <datalist id="user-suggestions">
-                    {users.map(u => (
+                    {users.filter(u => u.isActive !== false).map(u => (
                       <option key={u.uid} value={u.name}>{u.department ? `${u.name} (${u.department})` : u.name}</option>
                     ))}
                   </datalist>

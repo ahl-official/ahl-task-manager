@@ -12,7 +12,7 @@ import type { TaskSerialized } from '@/types';
 
 interface Props {
   tasks: TaskSerialized[];
-  users: { uid: string; name: string; department: string }[];
+  users: { uid: string; name: string; department: string; isActive?: boolean }[];
 }
 
 export default function CalendarClient({ tasks, users }: Props) {
@@ -68,7 +68,7 @@ export default function CalendarClient({ tasks, users }: Props) {
 
   const departmentUsers = useMemo(() =>
     users
-      .filter(user => user.department === departmentFilter)
+      .filter(user => user.isActive !== false && user.department === departmentFilter)
       .sort((a, b) => a.name.localeCompare(b.name)),
     [departmentFilter, users],
   );

@@ -13,7 +13,8 @@ export function roleLabel(role: UserRole): string {
   return ROLE_LABELS[role] ?? role;
 }
 
-export function canAssignTask(creator: Pick<AHLUser, 'uid' | 'role' | 'department'>, assignee: Pick<AHLUser, 'uid' | 'role' | 'department'>): boolean {
+export function canAssignTask(creator: Pick<AHLUser, 'uid' | 'role' | 'department'>, assignee: Pick<AHLUser, 'uid' | 'role' | 'department'> & { isActive?: boolean }): boolean {
+  if (assignee.isActive === false) return false;
   if (creator.role === 'admin') return true;
   if (creator.role === 'intern') {
     // Intern can assign tasks to themselves

@@ -148,7 +148,7 @@ export default function TaskListClient({
     const timer = setTimeout(async () => {
       setIsSearchingServer(true);
       try {
-        const params = new URLSearchParams({ search: q, limit: '100', filter: 'true', scope: mineOnly ? 'mine' : 'all' });
+        const params = new URLSearchParams({ search: q, limit: '2000', filter: 'true', scope: mineOnly ? 'mine' : 'all' });
         for (const [key, value] of [['department', departmentFilter], ['status', statusFilter], ['assignedTo', userFilter], ['category', categoryFilter], ['priority', priorityFilter]]) if (value !== 'all') params.set(key, value);
         const response = await fetch('/api/tasks?' + params, { signal: controller.signal });
         const json = await response.json();
@@ -296,7 +296,7 @@ export default function TaskListClient({
 
   const visibleUsers = useMemo(() =>
     users
-      .filter(user => departmentFilter === 'all' || user.department === departmentFilter)
+      .filter(user => user.isActive !== false && (departmentFilter === 'all' || user.department === departmentFilter))
       .sort((a, b) => a.name.localeCompare(b.name)),
     [departmentFilter, users]
   );

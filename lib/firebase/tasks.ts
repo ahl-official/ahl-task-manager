@@ -23,6 +23,7 @@ const COL      = 'tasks';
 const COUNTERS = 'counters';
 const DEFAULT_TASK_READ_LIMIT = 100;
 const MAX_TASK_READ_LIMIT = 100;
+const MAX_SEARCH_READ_LIMIT = 5000;
 const REMINDER_TASK_READ_LIMIT = 500;
 const ACTIVE_TASK_STATUSES: TaskStatus[] = ['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue'];
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -697,7 +698,7 @@ export async function adminSearchTasks(queryText: string, options: TaskReadScope
   const { department, limit, ...scope } = options;
   const params = taskScopeParams(department, scope);
   params.set('q', queryText.trim());
-  params.set('limit', String(Math.min(Math.max(limit || 100, 1), 100)));
+  params.set('limit', String(Math.min(Math.max(limit || 2000, 1), MAX_SEARCH_READ_LIMIT)));
   return cachedFirestoreRead('tasks:search:' + params.toString(), 5 * 60 * 1000, async () => {
     try {
       const rows = await cfApi<any[]>('/tasks/search?' + params);

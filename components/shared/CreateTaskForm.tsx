@@ -27,13 +27,14 @@ export default function CreateTaskForm({ users, currentUser, redirectTo, isReadL
   const audioChunksRef = useRef<Blob[]>([]);
 
   // Cache and resolve team members across sessions
-  const [effectiveUsers, setEffectiveUsers] = useState(users);
+  const [effectiveUsers, setEffectiveUsers] = useState((users || []).filter(u => u.isActive !== false));
 
   useEffect(() => {
     if (users && users.length > 0) {
-      setEffectiveUsers(users);
+      const active = users.filter(u => u.isActive !== false);
+      setEffectiveUsers(active);
       try {
-        localStorage.setItem('ahl_cached_team_users', JSON.stringify(users));
+        localStorage.setItem('ahl_cached_team_users', JSON.stringify(active));
       } catch {}
     } else {
       try {
@@ -41,7 +42,7 @@ export default function CreateTaskForm({ users, currentUser, redirectTo, isReadL
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setEffectiveUsers(parsed);
+            setEffectiveUsers(parsed.filter((u: any) => u.isActive !== false));
             return;
           }
         }
@@ -60,7 +61,7 @@ export default function CreateTaskForm({ users, currentUser, redirectTo, isReadL
     }
   }, [users, currentUser]);
 
-  const assignableUsers = effectiveUsers.filter(user => canAssignTask(currentUser as any, user as any));
+  const assignableUsers = effectiveUsers.filter(user => user.isActive !== false && canAssignTask(currentUser as any, user as any));
   const isIntern = currentUser.role === 'intern';
   const isMember = currentUser.role === 'member';
   const myDept = (currentUser.department || '').trim().toLowerCase();

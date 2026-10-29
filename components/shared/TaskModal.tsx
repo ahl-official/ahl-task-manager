@@ -50,7 +50,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const [isEditingChecker, setIsEditingChecker] = useState(false);
   const [selectedCheckerUid, setSelectedCheckerUid] = useState(task.handoffUid || '');
   const [isEditingDates, setIsEditingDates] = useState(!task.endDate && !isDone && (isAssignee || isAdmin));
-  const [userList, setUserList] = useState(users || []);
+  const [userList, setUserList] = useState((users || []).filter(u => u.isActive !== false));
 
   useEffect(() => {
     setMounted(true);
@@ -70,13 +70,13 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
 
   useEffect(() => {
     if (users && users.length > 0) {
-      setUserList(users);
+      setUserList(users.filter(u => u.isActive !== false));
     } else {
       fetch('/api/users')
         .then(r => r.json())
         .then(d => {
           if (d.success && Array.isArray(d.data)) {
-            setUserList(d.data);
+            setUserList(d.data.filter((u: any) => u.isActive !== false));
           }
         })
         .catch(() => { });

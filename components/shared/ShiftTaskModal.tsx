@@ -26,7 +26,7 @@ export default function ShiftTaskModal({
   const [shiftNote, setShiftNote] = useState('');
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [userList, setUserList] = useState(users || []);
+  const [userList, setUserList] = useState((users || []).filter(u => u.isActive !== false));
   const [fetchingUsers, setFetchingUsers] = useState(false);
 
   useEffect(() => {
@@ -37,11 +37,13 @@ export default function ShiftTaskModal({
         .then(res => res.json())
         .then(data => {
           if (data.success && Array.isArray(data.data)) {
-            setUserList(data.data);
+            setUserList(data.data.filter((u: any) => u.isActive !== false));
           }
         })
         .catch(() => {})
         .finally(() => setFetchingUsers(false));
+    } else {
+      setUserList(users.filter(u => u.isActive !== false));
     }
   }, [users]);
 

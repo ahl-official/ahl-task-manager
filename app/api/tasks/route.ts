@@ -62,11 +62,13 @@ export async function GET(req: NextRequest) {
   const searchQuery = searchParams.get('search') ?? searchParams.get('q') ?? undefined;
   const wantCounts = searchParams.get('counts') === 'true';
   const isFresh    = searchParams.get('fresh') === 'true' || searchParams.get('sync') === 'true';
+  const isSearch = Boolean(searchQuery?.trim());
   const requestedLimit = searchParams.get('limit');
-  const limitParam = Number(requestedLimit) || 100;
-  const maxResults = typeof limitParam === 'number' && Number.isFinite(limitParam)
-    ? Math.min(Math.max(limitParam, 1), 100)
-    : 100;
+  const limitParam = Number(requestedLimit);
+  // Search bar results have no 100 limit; standard lookups keep the 100 limit
+  const maxResults = isSearch
+    ? (typeof limitParam === 'number' && Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 5000) : 5000)
+    : (typeof limitParam === 'number' && Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 100) : 100);
 
   if (isFresh) {
     clearFirestoreReadCache('tasks:');
@@ -97,7 +99,7 @@ export async function GET(req: NextRequest) {
 
     if (searchQuery?.trim() || searchParams.get('filter') === 'true') {
       tasks = await adminSearchTasks(searchQuery || '', {
-        department, limit: Math.min(maxResults || 100, 100), status,
+        department, limit: maxResults, status,
         scope: isAdmin || isLeader ? (scope === 'mine' ? 'mine' : scope === 'handoff' ? 'handoff' : 'all') : (scope === 'handoff' ? 'handoff' : 'visible'),
         uid: session.uid, assignedTo: searchParams.get('assignedTo') || undefined,
         category: searchParams.get('category') || undefined, priority: searchParams.get('priority') || undefined,

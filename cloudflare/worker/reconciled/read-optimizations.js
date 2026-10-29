@@ -205,7 +205,8 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
   }
   if(url.pathname==='/tasks/search'){
     const {clauses,binds}=scopeFilters(url),q=(url.searchParams.get('q')||'').trim();
-    const limit=Math.min(Math.max(Number(url.searchParams.get('limit'))||100,1),100);
+
+    const limit=Math.min(Math.max(Number(url.searchParams.get('limit'))||2000,1),5000);
     const status=url.searchParams.get('status');
     if(url.searchParams.get('verificationPending')==='true')clauses.push("status='Completed' AND (verified_at IS NULL OR verified_at='')");
     else statusFilter(clauses,binds,status);
