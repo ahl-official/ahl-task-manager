@@ -123,7 +123,7 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     const open="('Pending','Pending Accept','In Progress','Delay Requested','Overdue')";
     let sql;
     if(kind==='delegation'){
-      sql=`SELECT task_id,assigned_to,assigned_to_name,description,status,start_date,end_date,delayed_date
+      sql=`SELECT task_id,assigned_to,assigned_to_name,description,status,start_date,end_date,delayed_date,updated_at
         FROM tasks_current WHERE task_id>? AND status IN ${open}
         AND LOWER(COALESCE(category,'')) NOT IN ('daily','weekly','monthly') ORDER BY task_id LIMIT ?`;
     }else if(kind==='recurring-legacy'){

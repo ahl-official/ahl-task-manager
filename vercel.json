@@ -48,8 +48,12 @@
       "schedule": "30 3 * * *"
     },
     {
-      "path": "/api/cron/sheet-sync",
+      "path": "/api/cron/sheet-sync?phase=recurring",
       "schedule": "30 17 * * *"
+    },
+    {
+      "path": "/api/cron/sheet-sync?phase=delegation",
+      "schedule": "35 17 * * *"
     }
   ]
 }

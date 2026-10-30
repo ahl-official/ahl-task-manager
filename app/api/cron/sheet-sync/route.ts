@@ -116,17 +116,23 @@ async function checkBudget() {
 
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  const phase = req.nextUrl.searchParams.get('phase') || 'all';
+  if (!['all', 'delegation', 'recurring'].includes(phase)) {
+    return NextResponse.json({ success: false, error: 'Invalid sheet sync phase' }, { status: 400 });
+  }
+  const runDelegation = phase !== 'recurring';
+  const runRecurring = phase !== 'delegation';
+  const deadline = Date.now() + 45_000;
   try {
     // Fail closed before any D1 read or write if analytics is unavailable or usage is high.
     const initial = await checkBudget();
     if (!initial.allowed) return NextResponse.json({ success: true, skipped: 'D1 soft limit reserve reached', usage: initial.usage });
 
-    const [delegationValues, ...checklistValues] = await Promise.all([
-      readSpreadsheetValues(DELEGATION_ID, "'Master'!A:H", 'FORMATTED_VALUE'),
-      ...CHECKLISTS.map(sheet => readSpreadsheetValues(sheet.id, [
-        "'Master'!A:I",
-        "'Task List'!A:G",
-      ], 'FORMATTED_VALUE')),
+    const [delegationValues, checklistValues] = await Promise.all([
+      runDelegation ? readSpreadsheetValues(DELEGATION_ID, "'Master'!A:H", 'FORMATTED_VALUE') : Promise.resolve([]),
+      runRecurring ? Promise.all(CHECKLISTS.map(sheet => readSpreadsheetValues(sheet.id, [
+        "'Master'!A:I", "'Task List'!A:G",
+      ], 'FORMATTED_VALUE'))) : Promise.resolve([]),
     ]);
     const delegation = indexRows(delegationValues[0] || [], 0, 1);
     const recurringMasters = checklistValues.map(values => indexRows(values[0] || [], 0, 5));
@@ -134,15 +140,15 @@ export async function GET(req: NextRequest) {
     if (!beforeDatabaseReads.allowed) return NextResponse.json({ success: true, skipped: 'D1 soft limit reserve reached before database reads', usage: beforeDatabaseReads.usage });
 
     const [openDelegation, openPeriods, legacyRecurring, recurringHistory, templates, users] = await Promise.all([
-      candidates('delegation'),
-      candidates('recurring-period'),
-      candidates('recurring-legacy'),
-      cfApi<Candidate[]>('/sheet-sync/recurring-history'),
-      cfApi<Candidate[]>('/recurring/templates'),
-      cfApi<Candidate[]>('/users'),
+      runDelegation ? candidates('delegation') : Promise.resolve([]),
+      runRecurring ? candidates('recurring-period') : Promise.resolve([]),
+      runRecurring ? candidates('recurring-legacy') : Promise.resolve([]),
+      runRecurring ? cfApi<Candidate[]>('/sheet-sync/recurring-history') : Promise.resolve([]),
+      runRecurring ? cfApi<Candidate[]>('/recurring/templates') : Promise.resolve([]),
+      runRecurring ? cfApi<Candidate[]>('/users') : Promise.resolve([]),
     ]);
-    if (!users.length) throw new Error('Cannot resolve assignees from an empty user list');
-    if (recurringHistory.length > 5000) throw new Error('Recurring history exceeds the safe deduplication limit');
+    if (runRecurring && !users.length) throw new Error('Cannot resolve assignees from an empty user list');
+    if (runRecurring && recurringHistory.length > 5000) throw new Error('Recurring history exceeds the safe deduplication limit');
     const beforeWrites = await checkBudget();
     if (!beforeWrites.allowed) return NextResponse.json({ success: true, skipped: 'D1 soft limit reserve reached after reads', usage: beforeWrites.usage });
 
@@ -157,32 +163,58 @@ export async function GET(req: NextRequest) {
     }
 
     let updatedDelegation = 0, updatedRecurring = 0, createdRecurring = 0, skippedAmbiguous = 0;
-    let changes = 0, estimatedReads = 0, estimatedWrites = 0;
+    let unfinishedDelegation = 0, unfinishedRecurring = 0, deferredTemplates = 0, skippedConflicts = 0;
+    let changes = 0, estimatedReads = 0, estimatedWrites = 0, lastBudgetCheck = Date.now();
     const mayWrite = async (readCost: number, writeCost: number, changeCount = 1) => {
+      if (Date.now() >= deadline) return false;
       if (changes + changeCount > MAX_CHANGES) return false;
       if (beforeWrites.usage.rowsRead + estimatedReads + readCost >= D1_READ_SOFT_LIMIT - 50_000) return false;
       if (beforeWrites.usage.rowsWritten + estimatedWrites + writeCost >= D1_WRITE_SOFT_LIMIT - 1_000) return false;
-      if (changes % 20 === 0 && !(await checkBudget()).allowed) return false;
+      if (Date.now() - lastBudgetCheck >= 5_000) {
+        if (!(await checkBudget()).allowed) return false;
+        lastBudgetCheck = Date.now();
+      }
       return true;
     };
 
+    const delegationMatches: Array<{ task: Candidate; row: SheetRow }> = [];
+    const delegationMatchCounts = new Map<SheetRow, number>();
     for (const task of openDelegation) {
       const matches = delegation.get(taskKey(task.assigned_to_name, task.description)) || [];
       const row = matchDelegation(task, matches);
       if (!row) { if (matches.length > 1) skippedAmbiguous++; continue; }
+      delegationMatches.push({ task, row });
+      delegationMatchCounts.set(row, (delegationMatchCounts.get(row) || 0) + 1);
+    }
+    const delegationUpdates: Array<{ taskId: string; assignedTo: string; expectedUpdatedAt: string; status?: 'Completed' | 'Verified' | 'Dead'; endDate?: string }> = [];
+    for (const { task, row } of delegationMatches) {
+      if (delegationMatchCounts.get(row) !== 1) { skippedAmbiguous++; continue; }
       const due = dateKey(row[5] || row[2]); // Final Date, then First Date. No start date is read.
       const status = sheetStatus(row[7]);
-      const update: Record<string, string> = {};
+      const update: { taskId: string; assignedTo: string; expectedUpdatedAt: string; status?: 'Completed' | 'Verified' | 'Dead'; endDate?: string } = {
+        taskId: String(task.task_id), assignedTo: String(task.assigned_to || ''), expectedUpdatedAt: String(task.updated_at || ''),
+      };
+      if (!update.expectedUpdatedAt) throw new Error('Sheet sync candidate omitted updated_at');
       if (due && due !== dateKey(task.end_date)) update.endDate = `${due}T12:00:00+05:30`;
       if (status && status !== 'Pending' && status !== task.status) update.status = status;
-      if (!Object.keys(update).length) continue;
-      if (!(await mayWrite(1_000, 50))) break;
-      await cfApi(`/tasks/${encodeURIComponent(task.task_id)}`, { method: 'PATCH', body: JSON.stringify(update) });
-      changes++; updatedDelegation++; estimatedReads += 1_000; estimatedWrites += 50;
+      if (update.endDate || update.status) delegationUpdates.push(update);
     }
+    delegationUpdates.sort((left, right) => left.assignedTo.localeCompare(right.assignedTo) || left.taskId.localeCompare(right.taskId));
+    let delegationOffset = 0;
+    for (; delegationOffset < delegationUpdates.length; delegationOffset += 25) {
+      const batch = delegationUpdates.slice(delegationOffset, delegationOffset + Math.min(25, MAX_CHANGES - changes));
+      if (!batch.length || !(await mayWrite(batch.length * 1_000, batch.length * 50, batch.length))) break;
+      const result = await cfApi<{ updated: number; skipped: number }>('/sheet-sync/delegation-batch', {
+        method: 'PATCH', body: JSON.stringify({ items: batch }),
+      });
+      changes += result.updated; updatedDelegation += result.updated; skippedConflicts += result.skipped;
+      estimatedReads += batch.length * 1_000; estimatedWrites += batch.length * 50;
+    }
+    unfinishedDelegation = Math.max(0, delegationUpdates.length - delegationOffset);
 
     const periodMaps = recurringMasters;
-    const periodUpdates: Array<{ id: string; status: 'Completed' | 'Verified' | 'Dead'; actualDate: string | null; dueDate: string }> = [];
+    const periodMatches: Array<{ period: Candidate; row: SheetRow; due: string }> = [];
+    const periodMatchCounts = new Map<SheetRow, number>();
     for (const period of openPeriods) {
       const due = dateKey(period.due_date || period.period_key);
       if (!due) continue;
@@ -191,12 +223,19 @@ export async function GET(req: NextRequest) {
       const byDepartment = dated.filter(row => normalizePersonName(row[2]) === normalizePersonName(period.department));
       const matches = byDepartment.length === 1 ? byDepartment : dated;
       if (matches.length !== 1) { if (matches.length > 1) skippedAmbiguous++; continue; }
-      const status = sheetStatus(matches[0][8]);
-      if (!status || status === 'Pending') continue;
-      periodUpdates.push({ id: period.id, status, actualDate: dateKey(matches[0][7]), dueDate: due });
+      periodMatches.push({ period, row: matches[0], due });
+      periodMatchCounts.set(matches[0], (periodMatchCounts.get(matches[0]) || 0) + 1);
     }
-    for (let offset = 0; offset < periodUpdates.length && changes < MAX_CHANGES; offset += 100) {
-      const batch = periodUpdates.slice(offset, offset + Math.min(100, MAX_CHANGES - changes));
+    const periodUpdates: Array<{ id: string; status: 'Completed' | 'Verified' | 'Dead'; actualDate: string | null; dueDate: string }> = [];
+    for (const { period, row, due } of periodMatches) {
+      if (periodMatchCounts.get(row) !== 1) { skippedAmbiguous++; continue; }
+      const status = sheetStatus(row[8]);
+      if (!status || status === 'Pending') continue;
+      periodUpdates.push({ id: period.id, status, actualDate: dateKey(row[7]), dueDate: due });
+    }
+    let periodOffset = 0;
+    for (; periodOffset < periodUpdates.length && changes < MAX_CHANGES; periodOffset += 100) {
+      const batch = periodUpdates.slice(periodOffset, periodOffset + Math.min(100, MAX_CHANGES - changes));
       if (!(await mayWrite(batch.length * 100, batch.length * 10, batch.length))) break;
       const result = await cfApi<{ updated: number }>('/sheet-sync/period-status', {
         method: 'PATCH', body: JSON.stringify({ items: batch }),
@@ -204,13 +243,14 @@ export async function GET(req: NextRequest) {
       estimatedReads += batch.length * 100; estimatedWrites += batch.length * 10;
       changes += result.updated; updatedRecurring += result.updated;
     }
+    unfinishedRecurring = Math.max(0, periodUpdates.length - periodOffset);
 
     const existingRecurring = new Set<string>();
     for (const task of [...templates, ...legacyRecurring, ...openPeriods, ...recurringHistory]) {
       const category = categoryFromFrequency(task.category);
       if (category) existingRecurring.add(`${category}\u0000${taskKey(task.assignedToName || task.assigned_to_name, task.description || task.title)}`);
     }
-    for (let i = 0; i < CHECKLISTS.length; i++) {
+    for (let i = 0; i < checklistValues.length && !unfinishedRecurring; i++) {
       for (const row of (checklistValues[i][1] || []).slice(1)) {
         const category = categoryFromFrequency(row[3]);
         const taskText = String(row[0] || '').trim();
@@ -221,7 +261,7 @@ export async function GET(req: NextRequest) {
         const user = userByName.get(normalizePersonName(name));
         const startDate = dateKey(row[4]);
         if (!user || !startDate) { skippedAmbiguous++; continue; }
-        if (!(await mayWrite(1_000, 300))) break;
+        if (!(await mayWrite(1_000, 300))) { deferredTemplates++; continue; }
         const id = `rec_sheet_${createHash('sha256').update(key).digest('hex').slice(0, 24)}`;
         const date = new Date(`${startDate}T12:00:00Z`);
         const isoDow = date.getUTCDay() || 7;
@@ -241,7 +281,11 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ success: true, updatedDelegation, updatedRecurring, createdRecurring, skippedAmbiguous, changes });
+    const summary = { phase, updatedDelegation, updatedRecurring, createdRecurring, skippedAmbiguous,
+      skippedConflicts, unfinishedDelegation, unfinishedRecurring, deferredTemplates,
+      complete: !unfinishedDelegation && !unfinishedRecurring && !deferredTemplates, changes };
+    console.info('[sheet-sync] finished', summary);
+    return NextResponse.json({ success: true, ...summary });
   } catch (error) {
     console.error('[sheet-sync] stopped without WhatsApp notification:', error);
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'Sheet sync failed' }, { status: 503 });

@@ -850,6 +850,41 @@ async function routeTasks(req, env, url) {
       return json({ success: false, error: err.message || String(err) }, { status: 500 });
     }
   }
+  if (url.pathname === "/sheet-sync/delegation-batch" && req.method === "PATCH") {
+    const data = await body(req);
+    const items = data.items;
+    if (!Array.isArray(items) || items.length < 1 || items.length > 25 || items.some(item =>
+      !item || typeof item.taskId !== "string" || !item.taskId ||
+      typeof item.assignedTo !== "string" || !item.assignedTo ||
+      typeof item.expectedUpdatedAt !== "string" ||
+      (item.status !== undefined && !["Completed", "Verified", "Dead"].includes(item.status)) ||
+      (item.endDate !== undefined && !/^\d{4}-\d{2}-\d{2}T12:00:00\+05:30$/.test(item.endDate)) ||
+      (item.status === undefined && item.endDate === undefined)
+    )) return json({ success: false, error: "Invalid delegation sync batch" }, { status: 400 });
+    const open = new Set(["Pending", "Pending Accept", "In Progress", "Delay Requested", "Overdue"]);
+    const affectedUsers = new Set();
+    let updated = 0, skipped = 0;
+    for (const item of items) {
+      const existing = await env.DB.prepare("SELECT * FROM tasks_current WHERE task_id=?").bind(item.taskId).first();
+      if (!existing || !open.has(existing.status) || existing.assigned_to !== item.assignedTo ||
+          ["daily", "weekly", "monthly"].includes(String(existing.category || "").toLowerCase()) ||
+          String(existing.updated_at || "") !== item.expectedUpdatedAt) { skipped++; continue; }
+      const nextStatus = item.status || existing.status;
+      const nextEndDate = item.endDate || existing.end_date;
+      if (nextStatus === existing.status && nextEndDate === existing.end_date) { skipped++; continue; }
+      const now = nowIso();
+      const period = item.endDate ? periodFields(item.endDate) : { dayKey: existing.day_key, monthKey: existing.month_key };
+      const result = await env.DB.prepare(
+        "UPDATE tasks_current SET status=?,end_date=?,day_key=?,month_key=?,updated_at=? WHERE task_id=? AND status=? AND COALESCE(updated_at,'')=?"
+      ).bind(nextStatus, nextEndDate, period.dayKey, period.monthKey, now, item.taskId, existing.status, item.expectedUpdatedAt).run();
+      if (!result.meta?.changes) { skipped++; continue; }
+      updated++;
+      if (nextStatus !== existing.status) await adjustTaskCount(env, existing, { ...existing, status: nextStatus });
+      if (existing.assigned_to) affectedUsers.add(existing.assigned_to);
+    }
+    for (const uid of affectedUsers) await refreshDelegationMisSnapshot(env, uid);
+    return json({ success: true, data: { updated, skipped } });
+  }
   if (url.pathname.startsWith("/tasks/") && req.method === "PATCH") {
     try {
       const id = decodeURIComponent(url.pathname.slice("/tasks/".length));
