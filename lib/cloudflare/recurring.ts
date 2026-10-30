@@ -217,8 +217,25 @@ export async function getRecurringChecklist(params: {
     if (params.endDate) search.set('endDate', params.endDate);
     if (params.userName) search.set('userName', params.userName);
     if (params.uid) search.set('uid', params.uid);
-    const qs = search.toString();
-    return cfApi<RecurringChecklistItem[]>(`/recurring/checklist${qs ? `?${qs}` : ''}`);
+    search.set('limit', '100');
+    const items: RecurringChecklistItem[] = [];
+    let cursor: string | null = null;
+    const seenCursors = new Set<string>();
+    for (let pageNumber = 0; pageNumber < 1000; pageNumber++) {
+      if (cursor) search.set('cursor', cursor);
+      const page = await cfApi<
+        RecurringChecklistItem[] |
+        { items: RecurringChecklistItem[]; nextCursor: string | null; hasMore: boolean }
+      >(`/recurring/checklist?${search.toString()}`);
+      if (Array.isArray(page)) return [...items, ...page];
+      if (!page || !Array.isArray(page.items)) throw new Error('Invalid checklist response from Cloudflare Worker');
+      items.push(...page.items);
+      if (!page.hasMore) return items;
+      if (!page.nextCursor || seenCursors.has(page.nextCursor)) throw new Error('Checklist pagination did not advance');
+      seenCursors.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
+    throw new Error('Checklist exceeded the safe pagination limit');
   }
 
   // Local calculation
