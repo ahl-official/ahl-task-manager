@@ -270,10 +270,17 @@ export async function getRecurringChecklist(params: {
     const cat = t.category.toLowerCase();
     if (cat === 'daily') return true;
     if (cat === 'weekly') {
+      if (params.date) return t.dayOfWeek == null || t.dayOfWeek === dowIso;
       if (params.category?.toLowerCase() === 'weekly') return true;
       return t.dayOfWeek == null || t.dayOfWeek === dowIso;
     }
-    if (cat === 'monthly') return true;
+    if (cat === 'monthly') {
+      if (params.date) {
+        const targetDay = t.dayOfMonth ? Math.min(t.dayOfMonth, lastDayOfMonth) : lastDayOfMonth;
+        return targetDay === d;
+      }
+      return true;
+    }
     return true;
   });
 
@@ -286,7 +293,8 @@ export async function getRecurringChecklist(params: {
 
     if (cat === 'monthly') {
       periodKey = monthKey;
-      dueDate = endOfMonthDate;
+      const targetDay = t.dayOfMonth ? Math.min(t.dayOfMonth, lastDayOfMonth) : lastDayOfMonth;
+      dueDate = `${monthKey}-${String(targetDay).padStart(2, '0')}`;
       periodStart = `${y}-${String(m).padStart(2, '0')}-01`;
       periodEnd = endOfMonthDate;
     }
@@ -378,18 +386,21 @@ export async function getRecurringChecklist(params: {
 export async function getRecurringChecklistPage(params: {
   category: string;
   date?: string;
+  exactDate?: boolean;
   cursor?: string;
   search?: string;
   uid: string;
   userName: string;
+  scopeUser?: boolean;
   department?: string;
   isAdmin: boolean;
 }): Promise<{ items: RecurringChecklistItem[]; nextCursor: string | null; hasMore: boolean }> {
   const query = new URLSearchParams({ category: params.category, limit: '100' });
   if (params.date) query.set('date', params.date);
+  if (params.exactDate) query.set('exactDate', 'true');
   if (params.cursor) query.set('cursor', params.cursor);
   if (params.search) query.set('search', params.search);
-  if (!params.isAdmin) {
+  if (!params.isAdmin || params.scopeUser) {
     query.set('scopeUid', params.uid);
     query.set('scopeName', params.userName);
     if (params.department) query.set('scopeDepartment', params.department);

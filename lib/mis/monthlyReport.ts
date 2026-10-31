@@ -4,9 +4,9 @@ import { getMonthWeekSlots } from '@/lib/mis/week';
 import { adminGetMisWeeklySnapshots } from '@/lib/mis/weeklySnapshot';
 import { buildMonthlyMisPdfBuffer } from '@/lib/mis/docTemplatePdf';
 import { adminGetAllUsers } from '@/lib/firebase/users';
-import { sendWhatsAppFile } from '@/lib/waha';
+import { sendWhatsAppFile, automatedWhatsAppDisabled } from '@/lib/waha';
 import { indiaDateKey, INDIA_TIMEZONE } from '@/lib/utils/indiaDate';
-import { normalizePersonName } from '@/lib/utils/names';
+import { normalizePersonName, isVinittUser } from '@/lib/utils/names';
 
 function shouldRunMonthlyReports(now = new Date()) {
   const day = Number(
@@ -92,6 +92,11 @@ export async function generateAndSendMonthlyMisReports(input?: {
   dryRun?: boolean;
   onlyName?: string;
 }) {
+  if (automatedWhatsAppDisabled()) {
+    console.log('[MIS monthly] WhatsApp is disabled — skipping automated monthly reports');
+    return { skipped: true, reason: 'Automated WhatsApp is disabled', sent: 0, reportCount: 0, reports: [] as MisMonthlyPersonReport[], errors: [] };
+  }
+
   if (!input?.force && !shouldRunMonthlyReports()) {
     console.warn('[MIS monthly] skipped — not scheduled day (30th, or Feb 28)');
     return { skipped: true, reason: 'Not scheduled day (30th, or Feb 28)', sent: 0, reports: [] as MisMonthlyPersonReport[] };
@@ -113,6 +118,10 @@ export async function generateAndSendMonthlyMisReports(input?: {
   const errors: string[] = [];
 
   for (const report of reports) {
+    if (isVinittUser(report)) {
+      console.log(`[MIS monthly] Skipped report for Vinitt Sir (${report.name})`);
+      continue;
+    }
     if (input?.onlyName && !normalizePersonName(report.name).includes(normalizePersonName(input.onlyName))) {
       continue;
     }

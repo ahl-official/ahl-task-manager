@@ -118,6 +118,8 @@ export default function TaskListClient({
   const [selectedTask, setSelected] = useState<TaskSerialized | null>(null);
   const [mounted, setMounted] = useState(false);
   const [isSearchingServer, setIsSearchingServer] = useState(false);
+  const [isFetchingFilter, setIsFetchingFilter] = useState(false);
+  const fetchedFilterKeys = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setMounted(true);
@@ -133,6 +135,7 @@ export default function TaskListClient({
       const scope = e?.detail?.scope;
       if (!scope || scope === 'tasks' || scope === 'all') {
         countsCache.current = {};
+        fetchedFilterKeys.current.clear();
       }
     };
     window.addEventListener('app-global-refresh', handleGlobalRefresh);
@@ -252,39 +255,75 @@ export default function TaskListClient({
     setSelected(null);
   }
 
-  // Fetch completed tasks on-demand when user explicitly clicks Completed filter tab
-  const completedFetchedRef = useRef(false);
+  // On-demand fetch 100 tasks for any active filter (individual user, my tasks, status, etc.)
+  // and cache along with the initial tasks fetched so no matching tasks are missed.
   useEffect(() => {
-    if (statusFilter === 'Completed' && !completedFetchedRef.current) {
-      completedFetchedRef.current = true;
-      const controller = new AbortController();
-      (async () => {
-        try {
-          const params = new URLSearchParams({ status: 'Completed', limit: '100', scope: mineOnly ? 'mine' : 'all' });
-          if (departmentFilter !== 'all') params.set('department', departmentFilter);
-          if (userFilter !== 'all') params.set('assignedTo', userFilter);
-          const response = await fetch('/api/tasks?' + params, { signal: controller.signal });
-          const json = await response.json();
-          if (!controller.signal.aborted && json.success && Array.isArray(json.data)) {
-            setTaskItems(current => {
-              const byId = new Map(current.map(task => [task.taskId, task]));
-              let changed = false;
-              for (const task of json.data) {
-                if (!byId.has(task.taskId)) {
-                  byId.set(task.taskId, task);
-                  changed = true;
-                }
+    // If text search is active, the dedicated search debouncer handles it
+    if (search.trim()) return;
+
+    const isFiltered = mineOnly || userFilter !== 'all' || statusFilter !== 'all' || departmentFilter !== 'all' || categoryFilter !== 'all' || priorityFilter !== 'all';
+    if (!isFiltered) return;
+
+    const filterKey = [
+      mineOnly ? `mine:${currentUid}` : 'all',
+      `user:${userFilter}`,
+      `status:${statusFilter}`,
+      `dept:${departmentFilter}`,
+      `cat:${categoryFilter}`,
+      `pri:${priorityFilter}`,
+    ].join('|');
+
+    if (fetchedFilterKeys.current.has(filterKey)) return;
+    fetchedFilterKeys.current.add(filterKey);
+
+    const controller = new AbortController();
+    setIsFetchingFilter(true);
+
+    (async () => {
+      try {
+        const params = new URLSearchParams({
+          filter: 'true',
+          limit: '100',
+          scope: mineOnly ? 'mine' : 'all',
+        });
+        if (userFilter !== 'all') params.set('assignedTo', userFilter);
+        if (statusFilter !== 'all') params.set('status', statusFilter);
+        if (departmentFilter !== 'all') params.set('department', departmentFilter);
+        if (categoryFilter !== 'all') params.set('category', categoryFilter);
+        if (priorityFilter !== 'all') params.set('priority', priorityFilter);
+
+        const response = await fetch('/api/tasks?' + params.toString(), { signal: controller.signal });
+        const json = await response.json();
+        if (!controller.signal.aborted && json.success && Array.isArray(json.data)) {
+          setTaskItems(current => {
+            const byId = new Map(current.map(task => [task.taskId, task]));
+            let changed = false;
+            for (const task of json.data) {
+              const prev = byId.get(task.taskId);
+              if (!prev || prev.updatedAt !== task.updatedAt) {
+                byId.set(task.taskId, task);
+                changed = true;
               }
-              return changed ? Array.from(byId.values()) : current;
-            });
-          }
-        } catch (err: any) {
-          if (err.name !== 'AbortError') console.error('Failed to load completed tasks', err);
+            }
+            return changed ? Array.from(byId.values()) : current;
+          });
         }
-      })();
-      return () => controller.abort();
-    }
-  }, [statusFilter, mineOnly, departmentFilter, userFilter]);
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error('Failed to load tasks for filter', err);
+          fetchedFilterKeys.current.delete(filterKey);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsFetchingFilter(false);
+        }
+      }
+    })();
+
+    return () => {
+      controller.abort();
+    };
+  }, [statusFilter, mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, currentUid]);
 
   const departments = useMemo(() =>
     Array.from(new Set([
@@ -681,7 +720,7 @@ export default function TaskListClient({
             onChange={e => setSearch(e.target.value)}
             className="input pl-8 pr-8 py-1.5 sm:py-2 text-xs sm:text-sm h-9 sm:h-10"
           />
-          {isSearchingServer && (
+          {(isSearchingServer || isFetchingFilter) && (
             <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-brand-600" />
           )}
         </div>
@@ -747,6 +786,7 @@ export default function TaskListClient({
         </select>
 
         <div className="flex items-center text-xs text-gray-400 shrink-0">
+          {isFetchingFilter && <Loader2 size={12} className="mr-1.5 animate-spin text-brand-600 inline" />}
           {filtered.length} loaded{!search.trim() && aggregateCards ? ` of ${aggregateCards.total} total` : search.trim() ? " matches (server lookup returns up to 100)" : " (total unavailable)"}
         </div>
       </div>

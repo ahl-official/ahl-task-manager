@@ -6,7 +6,7 @@ const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
 const PORTAL_URL   = process.env.NEXT_PUBLIC_APP_URL || 'https://ahl-task-manager.vercel.app';
 
 export function automatedWhatsAppDisabled(): boolean {
-  return process.env.VERCEL_ENV === 'production' || process.env.DISABLE_WHATSAPP === 'true';
+  return process.env.DISABLE_WHATSAPP === 'true' || process.env.DISABLE_WHATSAPP === '1';
 }
 
 function buildHeaders(): Record<string, string> {
@@ -104,21 +104,40 @@ function enqueueSend<T>(fn: () => Promise<T>): Promise<T> {
   });
 }
 
+const VINITT_PHONE_LAST10 = (process.env.VINITT_WA || '9820188505').replace(/\D/g, '').slice(-10);
+
+export function isVinittWa(waNumber: unknown): boolean {
+  const digits = String(waNumber ?? '').replace(/\D/g, '');
+  return digits.endsWith(VINITT_PHONE_LAST10);
+}
+
+export function isOtpMessage(text: string): boolean {
+  if (!text) return false;
+  const heading = text.split('\n', 1)[0] || '';
+  return (
+    heading.toLowerCase().includes('otp') ||
+    text.toLowerCase().includes('login otp') ||
+    text.toLowerCase().includes('otp is') ||
+    text.toLowerCase().includes('verification code is:')
+  );
+}
+
+export function isTaskCreationMessage(text: string): boolean {
+  if (!text) return false;
+  const heading = text.split('\n', 1)[0] || '';
+  return (
+    heading.includes('Task Assigned') ||
+    heading.includes('Task Created') ||
+    heading.includes('Task Delegated') ||
+    text.startsWith('📋 *New Task Assigned') ||
+    text.startsWith('📌 *New') ||
+    text.startsWith('📌 *Task Created')
+  );
+}
+
 function isEssentialMessage(text: string, options?: { bypassDisable?: boolean }): boolean {
   if (options?.bypassDisable === true) return true;
-  if (!text) return false;
-  const heading = text.split('\n', 1)[0];
-  // OTP messages (Critical for Login)
-  if (heading.includes('Login OTP')) return true;
-  // Task Creation / Assignment notifications
-  if (
-    heading.includes('Task Assigned') ||
-    heading.includes('Task Created:') ||
-    heading.includes('Task Delegated')
-  ) {
-    return true;
-  }
-  return false;
+  return isOtpMessage(text) || isTaskCreationMessage(text);
 }
 
 export async function sendWhatsApp(
@@ -136,6 +155,12 @@ export async function sendWhatsApp(
     // OTP sending and Task Creation notifications always send.
     const isEssential = isEssentialMessage(text, options);
     if (automatedWhatsAppDisabled() && !isEssential) {
+      return { ok: true, chatId: formatWaId(waNumber) };
+    }
+
+    // Exception: Vinitt Sir must ONLY receive Task Creation messages (and Login OTP)
+    if (isVinittWa(waNumber) && !isTaskCreationMessage(text) && !isOtpMessage(text)) {
+      console.log(`[WAHA] Suppressed message for Vinitt Sir (${waNumber}) — only task creation allowed`);
       return { ok: true, chatId: formatWaId(waNumber) };
     }
 
@@ -195,7 +220,7 @@ export async function sendWhatsAppFile(input: {
   caption?: string;
   taskId?: string;
 }): Promise<SendWhatsAppResult> {
-  if (automatedWhatsAppDisabled() || !process.env.WAHA_URL) {
+  if (automatedWhatsAppDisabled() || !process.env.WAHA_URL || isVinittWa(input.waNumber)) {
     return { ok: true, chatId: formatWaId(input.waNumber) };
   }
 
@@ -250,7 +275,7 @@ export async function sendWhatsAppPdfFromDriveLink(
   _processName: string,
   message: string,
 ): Promise<SendWhatsAppResult> {
-  if (automatedWhatsAppDisabled() || !process.env.WAHA_URL) {
+  if (automatedWhatsAppDisabled() || !process.env.WAHA_URL || isVinittWa(waNumber)) {
     return { ok: true, chatId: formatWaId(waNumber) };
   }
 

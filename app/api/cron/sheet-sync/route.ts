@@ -1,7 +1,6 @@
 import { createHash, timingSafeEqual } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { cfApi } from '@/lib/cloudflare/api';
-import { D1_READ_SOFT_LIMIT, D1_WRITE_SOFT_LIMIT, getTodayD1Usage } from '@/lib/cloudflare/d1Usage';
 import { readSpreadsheetValues } from '@/lib/google/sheets';
 import { normalizePersonName } from '@/lib/utils/names';
 
@@ -15,8 +14,6 @@ const CHECKLISTS = [
   { id: '1CE0ydiaeYYAPU31QJiZxMk444odWVXHgxj4O1nXu6Vc' },
 ] as const;
 const MAX_CHANGES = 1_000;
-const READ_RESERVE = 250_000;
-const WRITE_RESERVE = 5_000;
 
 type Candidate = Record<string, any>;
 type SheetRow = unknown[];
@@ -105,15 +102,6 @@ function categoryFromFrequency(value: unknown): 'Daily' | 'Weekly' | 'Monthly' |
   return null;
 }
 
-async function checkBudget() {
-  const usage = await getTodayD1Usage();
-  return {
-    usage,
-    allowed: usage.rowsRead < D1_READ_SOFT_LIMIT - READ_RESERVE &&
-      usage.rowsWritten < D1_WRITE_SOFT_LIMIT - WRITE_RESERVE,
-  };
-}
-
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   const phase = req.nextUrl.searchParams.get('phase') || 'all';
@@ -124,10 +112,6 @@ export async function GET(req: NextRequest) {
   const runRecurring = phase !== 'delegation';
   const deadline = Date.now() + 45_000;
   try {
-    // Fail closed before any D1 read or write if analytics is unavailable or usage is high.
-    const initial = await checkBudget();
-    if (!initial.allowed) return NextResponse.json({ success: true, skipped: 'D1 soft limit reserve reached', usage: initial.usage });
-
     const [delegationValues, checklistValues] = await Promise.all([
       runDelegation ? readSpreadsheetValues(DELEGATION_ID, "'Master'!A:H", 'FORMATTED_VALUE') : Promise.resolve([]),
       runRecurring ? Promise.all(CHECKLISTS.map(sheet => readSpreadsheetValues(sheet.id, [
@@ -136,8 +120,6 @@ export async function GET(req: NextRequest) {
     ]);
     const delegation = indexRows(delegationValues[0] || [], 0, 1);
     const recurringMasters = checklistValues.map(values => indexRows(values[0] || [], 0, 5));
-    const beforeDatabaseReads = await checkBudget();
-    if (!beforeDatabaseReads.allowed) return NextResponse.json({ success: true, skipped: 'D1 soft limit reserve reached before database reads', usage: beforeDatabaseReads.usage });
 
     const [openDelegation, openPeriods, legacyRecurring, recurringHistory, templates, users] = await Promise.all([
       runDelegation ? candidates('delegation') : Promise.resolve([]),
@@ -149,8 +131,6 @@ export async function GET(req: NextRequest) {
     ]);
     if (runRecurring && !users.length) throw new Error('Cannot resolve assignees from an empty user list');
     if (runRecurring && recurringHistory.length > 5000) throw new Error('Recurring history exceeds the safe deduplication limit');
-    const beforeWrites = await checkBudget();
-    if (!beforeWrites.allowed) return NextResponse.json({ success: true, skipped: 'D1 soft limit reserve reached after reads', usage: beforeWrites.usage });
 
     const userByName = new Map<string, Candidate | null>();
     for (const user of users.filter(user => user.isActive !== false)) {
@@ -164,16 +144,10 @@ export async function GET(req: NextRequest) {
 
     let updatedDelegation = 0, updatedRecurring = 0, createdRecurring = 0, skippedAmbiguous = 0;
     let unfinishedDelegation = 0, unfinishedRecurring = 0, deferredTemplates = 0, skippedConflicts = 0;
-    let changes = 0, estimatedReads = 0, estimatedWrites = 0, lastBudgetCheck = Date.now();
-    const mayWrite = async (readCost: number, writeCost: number, changeCount = 1) => {
+    let changes = 0;
+    const mayWrite = (changeCount = 1) => {
       if (Date.now() >= deadline) return false;
       if (changes + changeCount > MAX_CHANGES) return false;
-      if (beforeWrites.usage.rowsRead + estimatedReads + readCost >= D1_READ_SOFT_LIMIT - 50_000) return false;
-      if (beforeWrites.usage.rowsWritten + estimatedWrites + writeCost >= D1_WRITE_SOFT_LIMIT - 1_000) return false;
-      if (Date.now() - lastBudgetCheck >= 5_000) {
-        if (!(await checkBudget()).allowed) return false;
-        lastBudgetCheck = Date.now();
-      }
       return true;
     };
 
@@ -203,12 +177,11 @@ export async function GET(req: NextRequest) {
     let delegationOffset = 0;
     for (; delegationOffset < delegationUpdates.length; delegationOffset += 25) {
       const batch = delegationUpdates.slice(delegationOffset, delegationOffset + Math.min(25, MAX_CHANGES - changes));
-      if (!batch.length || !(await mayWrite(batch.length * 1_000, batch.length * 50, batch.length))) break;
+      if (!batch.length || !mayWrite(batch.length)) break;
       const result = await cfApi<{ updated: number; skipped: number }>('/sheet-sync/delegation-batch', {
         method: 'PATCH', body: JSON.stringify({ items: batch }),
       });
       changes += result.updated; updatedDelegation += result.updated; skippedConflicts += result.skipped;
-      estimatedReads += batch.length * 1_000; estimatedWrites += batch.length * 50;
     }
     unfinishedDelegation = Math.max(0, delegationUpdates.length - delegationOffset);
 
@@ -236,11 +209,10 @@ export async function GET(req: NextRequest) {
     let periodOffset = 0;
     for (; periodOffset < periodUpdates.length && changes < MAX_CHANGES; periodOffset += 100) {
       const batch = periodUpdates.slice(periodOffset, periodOffset + Math.min(100, MAX_CHANGES - changes));
-      if (!(await mayWrite(batch.length * 100, batch.length * 10, batch.length))) break;
+      if (!mayWrite(batch.length)) break;
       const result = await cfApi<{ updated: number }>('/sheet-sync/period-status', {
         method: 'PATCH', body: JSON.stringify({ items: batch }),
       });
-      estimatedReads += batch.length * 100; estimatedWrites += batch.length * 10;
       changes += result.updated; updatedRecurring += result.updated;
     }
     unfinishedRecurring = Math.max(0, periodUpdates.length - periodOffset);
@@ -261,7 +233,7 @@ export async function GET(req: NextRequest) {
         const user = userByName.get(normalizePersonName(name));
         const startDate = dateKey(row[4]);
         if (!user || !startDate) { skippedAmbiguous++; continue; }
-        if (!(await mayWrite(1_000, 300))) { deferredTemplates++; continue; }
+        if (!mayWrite(1)) { deferredTemplates++; continue; }
         const id = `rec_sheet_${createHash('sha256').update(key).digest('hex').slice(0, 24)}`;
         const date = new Date(`${startDate}T12:00:00Z`);
         const isoDow = date.getUTCDay() || 7;
@@ -277,7 +249,7 @@ export async function GET(req: NextRequest) {
           }),
         });
         existingRecurring.add(key);
-        changes++; createdRecurring++; estimatedReads += 1_000; estimatedWrites += 300;
+        changes++; createdRecurring++;
       }
     }
 

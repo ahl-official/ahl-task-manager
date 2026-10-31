@@ -131,7 +131,7 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
         FROM tasks_current WHERE task_id>? AND LOWER(COALESCE(category,'')) IN ('daily','weekly','monthly') ORDER BY task_id LIMIT ?`;
     }else if(kind==='recurring-period'){
       sql=`SELECT id,template_id,period_key,due_date,assigned_to,assigned_to_name,department,description,title,category,status
-        FROM recurring_period_rows WHERE id>? AND status='Pending' AND is_deleted=0 ORDER BY id LIMIT ?`;
+        FROM recurring_period_rows WHERE id>? AND status IN ('Pending','Pending Accept','In Progress','Delay Requested','Overdue') AND is_deleted=0 ORDER BY id LIMIT ?`;
     }else throw new Error('Invalid sheet sync candidate kind');
     const rows=await env.DB.prepare(sql).bind(cursor,limit).all();
     return json(rows.results||[]);

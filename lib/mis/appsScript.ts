@@ -5,7 +5,8 @@
 import { createSign } from 'crypto';
 import { hasGoogleSheetsAuth } from '@/lib/google/sheets';
 import { parseSheetDate } from '@/lib/utils/indiaDate';
-import { sendWhatsAppPdfFromDriveLink } from '@/lib/waha';
+import { isVinittUser } from '@/lib/utils/names';
+import { sendWhatsAppPdfFromDriveLink, automatedWhatsAppDisabled } from '@/lib/waha';
 
 export const DEFAULT_MIS_REPORT_SPREADSHEET_ID = '1seVqJ5xPqva1Si6CXDpuZSePvP40PDO2fzJSJfss8GU';
 export const DEFAULT_MIS_DOC_TEMPLATE_ID = '1W0V2w3-xd08FK_Zx7M37k8xOysh2KL2uqNbltbJ1PTs';
@@ -334,6 +335,10 @@ async function docsBatchUpdate(docId: string, requests: unknown[]) {
 export async function generateAndSendReports(input?: { dryRun?: boolean; onlyName?: string }) {
   if (!hasGoogleSheetsAuth()) throw new Error('Google Sheets auth is not configured');
 
+  if (automatedWhatsAppDisabled()) {
+    console.log('[MIS appsScript] WhatsApp is disabled — skipping generateAndSendReports');
+    return { ok: true, sent: 0, skipped: 0, reason: 'Automated WhatsApp is disabled', errors: [], results: [] as any[] };
+  }
   const reportData = await sheetsValuesGet(`${quoteSheet('Week/Month Report')}!A1:G`, 'UNFORMATTED_VALUE');
   if (!reportData || reportData.length < 2) {
     return { ok: true, sent: 0, skipped: 0, errors: ['No data rows found in Week/Month Report.'], results: [] as any[] };
@@ -380,6 +385,11 @@ export async function generateAndSendReports(input?: { dryRun?: boolean; onlyNam
     const ms = row[6];
 
     if (!name) {
+      skipped += 1;
+      continue;
+    }
+    if (isVinittUser({ name: String(name), waNumber: String(nameToPhone[String(name)] || '') })) {
+      console.log(`[MIS appsScript] Skipped report for Vinitt Sir (${name})`);
       skipped += 1;
       continue;
     }
@@ -504,6 +514,10 @@ export function shouldRunTodayAppsScript(date = new Date(), tz = 'Asia/Kolkata')
 }
 
 export async function runMonthlyReports(input?: { force?: boolean; dryRun?: boolean; onlyName?: string }) {
+  if (automatedWhatsAppDisabled()) {
+    console.log('[MIS appsScript] WhatsApp is disabled — skipping runMonthlyReports');
+    return { skipped: true, reason: 'Automated WhatsApp is disabled', sent: 0 };
+  }
   if (!input?.force && !shouldRunTodayAppsScript()) {
     return { skipped: true, reason: 'Not the scheduled day (30th or Feb 28th). Skipping.', sent: 0 };
   }

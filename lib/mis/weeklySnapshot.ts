@@ -4,7 +4,7 @@ import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { computeMisScoresForWeek, misSnapshotId } from '@/lib/mis/compute';
 import type { MisArchiveRow, MisWeeklySnapshot } from '@/lib/mis/types';
 import { formatWeekLabel, getMisWeekPeriod, getPreviousMisWeekPeriod } from '@/lib/mis/week';
-import { normalizePersonName } from '@/lib/utils/names';
+import { normalizePersonName, isVinittUser } from '@/lib/utils/names';
 
 const WEEKLY = 'misWeekly';
 const ARCHIVE = 'misArchive';
@@ -327,6 +327,12 @@ export async function generateAndSendWeeklyMisPdfReports(input?: {
   onlyName?: string;
   dryRun?: boolean;
 }) {
+  const { automatedWhatsAppDisabled } = await import('@/lib/waha');
+  if (automatedWhatsAppDisabled()) {
+    console.log('[MIS weekly] WhatsApp is disabled — skipping automated weekly PDF reports');
+    return { sent: 0, skipped: true, reason: 'Automated WhatsApp is disabled', errors: [], total: 0 };
+  }
+
   const weekMeta = input?.weekStart
     ? getMisWeekPeriod(input.weekStart)
     : getPreviousMisWeekPeriod();
@@ -346,6 +352,10 @@ export async function generateAndSendWeeklyMisPdfReports(input?: {
   const errors: string[] = [];
 
   for (const score of scores) {
+    if (isVinittUser(score)) {
+      console.log(`[MIS weekly] Skipped report for Vinitt Sir (${score.name})`);
+      continue;
+    }
     if (score.planned <= 0) continue;
     if (input?.onlyName && !normalizePersonName(score.name).includes(normalizePersonName(input.onlyName))) {
       continue;

@@ -4,7 +4,7 @@ import { AlertTriangle, PlusCircle, RefreshCw, LayoutDashboard, CheckSquare, Lis
 import Link from 'next/link';
 
 function isQuotaError(error: Error & { digest?: string }) {
-  const text = `${error.name} ${error.message}`.toLowerCase();
+  const text = `${error.name || ''} ${error.message || ''}`.toLowerCase();
   return (
     text.includes('firestore quota') ||
     text.includes('quota exceeded') ||
@@ -12,7 +12,9 @@ function isQuotaError(error: Error & { digest?: string }) {
     text.includes('read limit') ||
     text.includes('rate limit') ||
     text.includes('limit') ||
-    text.includes('429')
+    text.includes('429') ||
+    text.includes('server components render') ||
+    Boolean(error.digest)
   );
 }
 

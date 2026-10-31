@@ -61,6 +61,19 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
   const [remark, setRemark] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<ChecklistRow | null>(null);
   const [deleteConfirmMode, setDeleteConfirmMode] = useState<'day' | 'whole' | null>(null);
+  const [allUsers, setAllUsers] = useState<{ uid: string; name: string; department: string }[]>([]);
+  const fetchedChecklistKeys = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    fetch('/api/users')
+      .then(r => r.json())
+      .then(json => {
+        if (json.success && Array.isArray(json.data)) {
+          setAllUsers(json.data.filter((u: any) => u.isActive !== false));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const categoryCache = useRef<Record<string, { rows: ChecklistRow[]; elevated: boolean; isAdmin: boolean; currentUserName: string; nextCursor: string | null }>>({});
   const pageSentinel = useRef<HTMLDivElement | null>(null);
@@ -87,6 +100,12 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
   }, [rows]);
   const individuals = useMemo(() => {
     const seen = new Map<string, string>();
+    for (const u of allUsers) {
+      if (department && !namesEqual(u.department, department)) continue;
+      const key = normalizePersonName(u.name);
+      if (!key || seen.has(key)) continue;
+      seen.set(key, u.name);
+    }
     for (const row of rows) {
       if (department && !namesEqual(row.department, department)) continue;
       const key = normalizePersonName(row.userName);
@@ -94,12 +113,12 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
       seen.set(key, row.userName);
     }
     return Array.from(seen.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-  }, [rows, department]);
+  }, [allUsers, rows, department]);
   const visibleRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter(row => {
-      const matchesDate = !date || row.dueDate === date || row.periodKey === date ||
-        (row.periodStart && row.periodEnd && date >= row.periodStart && date <= row.periodEnd);
+      const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
+      const matchesDate = !date || rowDate === date;
       const matchesMine = !mineOnly || Boolean(row.mine) || namesEqual(row.userName, currentUserName);
       const matchesDept = !department || namesEqual(row.department, department);
       const matchesIndiv = !individual || namesEqual(row.userName, individual);
@@ -148,7 +167,10 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
 
     try {
       const qs = new URLSearchParams({ category: nextCategory });
-      if (nextDate) qs.set('date', nextDate);
+      if (nextDate) {
+        qs.set('date', nextDate);
+        qs.set('exactDate', 'true');
+      }
       const res = await fetch(`/api/checklist?${qs.toString()}`);
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -183,7 +205,10 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
     setLoadingMore(true);
     try {
       const qs = new URLSearchParams({ category, cursor });
-      if (date) qs.set('date', date);
+      if (date) {
+        qs.set('date', date);
+        qs.set('exactDate', 'true');
+      }
       const res = await fetch(`/api/checklist?${qs}`);
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -424,6 +449,7 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
     const handleGlobalRefresh = (e: any) => {
       const scope = e?.detail?.scope;
       if (!scope || scope === 'checklist' || scope === 'all') {
+        fetchedChecklistKeys.current.clear();
         loadRows(category, date, true);
       }
     };
@@ -431,6 +457,60 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
     return () => window.removeEventListener('app-global-refresh', handleGlobalRefresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category, date]);
+
+  // On-demand fetch recurring tasks for selected individual user or "Show my tasks"
+  // and cache along with the currently fetched rows so no matching recurring tasks are missed.
+  useEffect(() => {
+    if (!individual && !mineOnly) return;
+    const fetchKey = `${category}:${date || 'today'}:${mineOnly ? 'mine' : `user:${individual}`}`;
+    if (fetchedChecklistKeys.current.has(fetchKey)) return;
+    fetchedChecklistKeys.current.add(fetchKey);
+
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const qs = new URLSearchParams({ category });
+        if (date) {
+          qs.set('date', date);
+          qs.set('exactDate', 'true');
+        }
+        if (mineOnly) {
+          qs.set('mine', 'true');
+        } else if (individual) {
+          qs.set('userName', individual);
+        }
+        const res = await fetch(`/api/checklist?${qs.toString()}`, { signal: controller.signal });
+        const data = await res.json();
+        if (!controller.signal.aborted && data.success && Array.isArray(data.data) && data.data.length) {
+          setRows(current => {
+            const byId = new Map(current.map(r => [r.id, r]));
+            let changed = false;
+            for (const item of data.data) {
+              if (!byId.has(item.id)) {
+                byId.set(item.id, item);
+                changed = true;
+              }
+            }
+            if (changed) {
+              const merged = Array.from(byId.values());
+              const activeCacheKey = `${category}:${date || 'today'}`;
+              if (categoryCache.current[activeCacheKey]) {
+                categoryCache.current[activeCacheKey].rows = merged;
+              }
+              return merged;
+            }
+            return current;
+          });
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error('Checklist user lookup failed', err);
+          fetchedChecklistKeys.current.delete(fetchKey);
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [category, date, individual, mineOnly]);
 
   useEffect(() => {
     if (!nextCursor || loading || loadingMore || search.trim() || !pageSentinel.current) return;
@@ -460,7 +540,10 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
       setSearching(true);
       try {
         const qs = new URLSearchParams({ category, search: query });
-        if (date) qs.set('date', date);
+        if (date) {
+        qs.set('date', date);
+        qs.set('exactDate', 'true');
+      }
         const res = await fetch(`/api/checklist?${qs}`, { signal: controller.signal });
         const data = await res.json();
         if (!data.success) throw new Error(data.error);

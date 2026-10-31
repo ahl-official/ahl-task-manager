@@ -1260,11 +1260,15 @@ async function routeRecurring(req: Request, env: Env, url: URL) {
       const cat = (t.category || '').toLowerCase();
       if (cat === 'daily') return true;
       if (cat === 'weekly') {
-        // If specific date given or checking daily view, match day of week (1=Mon..7=Sun)
+        if (dateParam) return t.dayOfWeek == null || t.dayOfWeek === ist.dayOfWeekIso;
         if (categoryParam.toLowerCase() === 'weekly') return true;
         return t.dayOfWeek == null || t.dayOfWeek === ist.dayOfWeekIso;
       }
       if (cat === 'monthly') {
+        if (dateParam) {
+          const dom = Number(t.dayOfMonth) || (ist as any).lastDayOfMonth || 30;
+          return dom === Number(ist.day);
+        }
         if (categoryParam.toLowerCase() === 'monthly') return true;
         return true;
       }
@@ -1300,9 +1304,10 @@ async function routeRecurring(req: Request, env: Env, url: URL) {
         dueDate = ist.dateStr;
       } else if (cat === 'monthly') {
         periodKey = monthlyKey;
-        dueDate = (ist as any).endOfMonthStr || `${ist.year}-${ist.month}-30`;
+        const dom = Number(t.dayOfMonth) || (ist as any).lastDayOfMonth || 30;
+        dueDate = `${ist.year}-${ist.month}-${String(dom).padStart(2, '0')}`;
         periodStart = `${ist.year}-${ist.month}-01`;
-        periodEnd = dueDate;
+        periodEnd = (ist as any).endOfMonthStr || `${ist.year}-${ist.month}-30`;
       }
 
       const comp = completionMap.get(`${t.id}:${periodKey}`);

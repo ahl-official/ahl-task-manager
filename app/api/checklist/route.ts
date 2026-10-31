@@ -25,9 +25,12 @@ export async function GET(req: NextRequest) {
   const isAdmin = session.role === 'admin';
   const elevated = session.role === 'admin' || session.role === 'leader';
   const dateParam = searchParams.get('date') || undefined;
+  const exactDate = searchParams.get('exactDate') === 'true' || Boolean(dateParam);
   const cursor = searchParams.get('cursor') || undefined;
   const rawSearch = (searchParams.get('search') || '').trim();
   const search = rawSearch.replace(/[^a-zA-Z0-9\s\-_.:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+  const userNameParam = searchParams.get('userName') || searchParams.get('assignedToName') || searchParams.get('individual') || undefined;
+  const mineParam = searchParams.get('mine') === 'true';
 
   const today = indiaTodayKey();
   const tomorrow = addDaysKey(today, 1);
@@ -56,21 +59,34 @@ export async function GET(req: NextRequest) {
     const page = await getRecurringChecklistPage({
       category,
       date: dateParam,
+      exactDate,
       cursor,
       search: search.length >= 2 ? search : undefined,
-      uid: session.uid,
-      userName: session.name,
-      department: session.role === 'leader' ? session.department : undefined,
-      isAdmin,
+      uid: mineParam ? session.uid : (searchParams.get('assignedTo') || session.uid),
+      userName: mineParam ? session.name : (userNameParam || session.name),
+      scopeUser: Boolean(mineParam || userNameParam),
+      department: session.role === 'leader' ? session.department : (searchParams.get('department') || undefined),
+      isAdmin: isAdmin && !mineParam && !userNameParam,
     });
 
-    const rows = page.items.filter(row => checklistPermissions(session, row).canView).map(row => {
-      const permissions = checklistPermissions(session, row);
-      return { ...row, mine: permissions.mine, isPast: permissions.isPast,
-        canComplete: !row.completed && !row.dead && permissions.canChange,
-        canUncomplete: row.completed && !row.dead && permissions.canChange,
-        canManage: isAdmin };
-    });
+    const rows = page.items
+      .filter(row => checklistPermissions(session, row).canView)
+      .filter(row => {
+        if (!dateParam) return true;
+        const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
+        return rowDate === dateParam;
+      })
+      .map(row => {
+        const permissions = checklistPermissions(session, row);
+        return {
+          ...row,
+          mine: permissions.mine,
+          isPast: permissions.isPast,
+          canComplete: !row.completed && !row.dead && permissions.canChange,
+          canUncomplete: row.completed && !row.dead && permissions.canChange,
+          canManage: isAdmin,
+        };
+      });
 
     return NextResponse.json({
       success: true,

@@ -850,6 +850,91 @@ async function routeTasks(req, env, url) {
       return json({ success: false, error: err.message || String(err) }, { status: 500 });
     }
   }
+  if (url.pathname === "/sheet-sync/candidates" && req.method === "GET") {
+    const kind = url.searchParams.get("kind") || "delegation";
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 1000, 1), 1000);
+    const after = url.searchParams.get("after") || "";
+
+    if (kind === "delegation") {
+      const open = ["Pending", "Pending Accept", "In Progress", "Delay Requested", "Overdue"];
+      const placeholders = open.map(() => "?").join(",");
+      const clauses = [
+        `LOWER(COALESCE(category,'One Time')) NOT IN ('daily', 'weekly', 'monthly')`,
+        `status IN (${placeholders})`
+      ];
+      const binds = [...open];
+      if (after) {
+        clauses.push("task_id > ?");
+        binds.push(after);
+      }
+      binds.push(limit);
+      const rows = await env.DB.prepare(
+        `SELECT task_id, description, assigned_to, assigned_to_name, status, end_date, delayed_date, updated_at
+         FROM tasks_current
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY task_id ASC
+         LIMIT ?`
+      ).bind(...binds).all();
+      return json({ success: true, data: rows.results || [] });
+    }
+
+    if (kind === "recurring-period") {
+      const open = ["Pending", "Pending Accept", "In Progress", "Delay Requested", "Overdue"];
+      const placeholders = open.map(() => "?").join(",");
+      const clauses = [
+        "is_deleted = 0",
+        `status IN (${placeholders})`
+      ];
+      const binds = [...open];
+      if (after) {
+        clauses.push("id > ?");
+        binds.push(after);
+      }
+      binds.push(limit);
+      const rows = await env.DB.prepare(
+        `SELECT id, template_id, period_key, category, title, description, assigned_to, assigned_to_name, department, due_date, status, updated_at
+         FROM recurring_period_rows
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY id ASC
+         LIMIT ?`
+      ).bind(...binds).all();
+      return json({ success: true, data: rows.results || [] });
+    }
+
+    if (kind === "recurring-legacy") {
+      const open = ["Pending", "Pending Accept", "In Progress", "Delay Requested", "Overdue"];
+      const placeholders = open.map(() => "?").join(",");
+      const clauses = [
+        `LOWER(category) IN ('daily', 'weekly', 'monthly')`,
+        `status IN (${placeholders})`
+      ];
+      const binds = [...open];
+      if (after) {
+        clauses.push("task_id > ?");
+        binds.push(after);
+      }
+      binds.push(limit);
+      const rows = await env.DB.prepare(
+        `SELECT task_id, description, assigned_to, assigned_to_name, department, category, status, end_date, start_date, updated_at
+         FROM tasks_current
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY task_id ASC
+         LIMIT ?`
+      ).bind(...binds).all();
+      return json({ success: true, data: rows.results || [] });
+    }
+
+    return json({ success: true, data: [] });
+  }
+  if (url.pathname === "/sheet-sync/recurring-history" && req.method === "GET") {
+    const rows = await env.DB.prepare(
+      `SELECT DISTINCT category, assigned_to_name, title, description
+       FROM recurring_period_rows
+       WHERE is_deleted = 0
+       LIMIT 5000`
+    ).all();
+    return json({ success: true, data: rows.results || [] });
+  }
   if (url.pathname === "/sheet-sync/delegation-batch" && req.method === "PATCH") {
     const data = await body(req);
     const items = data.items;
@@ -874,12 +959,30 @@ async function routeTasks(req, env, url) {
       if (nextStatus === existing.status && nextEndDate === existing.end_date) { skipped++; continue; }
       const now = nowIso();
       const period = item.endDate ? periodFields(item.endDate) : { dayKey: existing.day_key, monthKey: existing.month_key };
+      const completed = nextStatus === "Completed" || nextStatus === "Verified";
+      const completedAt = completed ? (existing.completed_at || now) : existing.completed_at;
+      const verifiedAt = nextStatus === "Verified" ? (existing.verified_at || now) : existing.verified_at;
+      const acceptedAt = completed ? (existing.accepted_at || now) : existing.accepted_at;
       const result = await env.DB.prepare(
-        "UPDATE tasks_current SET status=?,end_date=?,day_key=?,month_key=?,updated_at=? WHERE task_id=? AND status=? AND COALESCE(updated_at,'')=?"
-      ).bind(nextStatus, nextEndDate, period.dayKey, period.monthKey, now, item.taskId, existing.status, item.expectedUpdatedAt).run();
+        "UPDATE tasks_current SET status=?,end_date=?,completed_at=?,verified_at=?,accepted_at=?,day_key=?,month_key=?,updated_at=? WHERE task_id=? AND status=? AND COALESCE(updated_at,'')=?"
+      ).bind(nextStatus, nextEndDate, completedAt, verifiedAt, acceptedAt, period.dayKey, period.monthKey, now, item.taskId, existing.status, item.expectedUpdatedAt).run();
       if (!result.meta?.changes) { skipped++; continue; }
       updated++;
       if (nextStatus !== existing.status) await adjustTaskCount(env, existing, { ...existing, status: nextStatus });
+      if (existing.assigned_to && completed && existing.status !== "Completed" && existing.status !== "Verified") {
+        const todayStr = getIstDateParts().dateStr;
+        const dueStr = (existing.delayed_date || existing.end_date || "").slice(0, 10);
+        const onTime = !dueStr || todayStr <= dueStr;
+        await env.DB.prepare(
+          `UPDATE scores
+           SET tasks_completed = tasks_completed + 1,
+               on_time_count = on_time_count + ?,
+               late_count = late_count + ?,
+               monthly_score = CASE WHEN tasks_assigned > 0 THEN ROUND(((on_time_count + ?) * 100.0) / tasks_assigned) ELSE 0 END,
+               last_updated = ?
+           WHERE uid = ?`
+        ).bind(onTime ? 1 : 0, onTime ? 0 : 1, onTime ? 1 : 0, now, existing.assigned_to).run().catch(() => {});
+      }
       if (existing.assigned_to) affectedUsers.add(existing.assigned_to);
     }
     for (const uid of affectedUsers) await refreshDelegationMisSnapshot(env, uid);
@@ -2269,7 +2372,9 @@ async function routeRecurring(req, env, url) {
       }
       clauses.push('month_key IN ('+months.map(()=>'?').join(',')+')');binds.push(...months);
       if(category.toLowerCase()!=='all'){clauses.push('category=?');binds.push(category);}
-      if(category==='Daily'){clauses.push(due+'=?');binds.push(date);}
+      const exactDate = url.searchParams.get('exactDate') === 'true' || url.searchParams.has('date');
+      if(exactDate){clauses.push(due+'=?');binds.push(date);}
+      else if(category==='Daily'){clauses.push(due+'=?');binds.push(date);}
       else if(category==='Weekly'){const from=weekStartMonday(date),to=new Date(from+'T12:00:00Z');to.setUTCDate(to.getUTCDate()+6);clauses.push(due+'>=? AND '+due+'<=?');binds.push(from,to.toISOString().slice(0,10));}
       else {clauses.push('SUBSTR('+due+',1,7)=?');binds.push(date.slice(0,7));}
     }
@@ -2303,7 +2408,7 @@ async function routeRecurring(req, env, url) {
       const actualDate = /^\d{4}-\d{2}-\d{2}$/.test(String(item.actualDate || '')) ? String(item.actualDate) : null;
       const completed = item.status === 'Completed' || item.status === 'Verified';
       return env.DB.prepare(
-        "UPDATE recurring_period_rows SET status=?,completed_at=CASE WHEN ? THEN COALESCE(?,completed_at) ELSE NULL END,is_on_time=COALESCE(?,is_on_time),updated_at=? WHERE id=? AND status='Pending' AND is_deleted=0"
+        "UPDATE recurring_period_rows SET status=?,completed_at=CASE WHEN ? THEN COALESCE(?,completed_at) ELSE NULL END,is_on_time=COALESCE(?,is_on_time),updated_at=? WHERE id=? AND status NOT IN ('Completed', 'Verified') AND is_deleted=0"
       ).bind(item.status, completed ? 1 : 0, completed && actualDate ? `${actualDate}T12:00:00+05:30` : null, completed && actualDate ? (actualDate <= String(item.dueDate || actualDate) ? 1 : 0) : null, now, String(item.id));
     }));
     return json({ success: true, data: { updated: results.reduce((n, result) => n + Number(result.meta?.changes || 0), 0) } });

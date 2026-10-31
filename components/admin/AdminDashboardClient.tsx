@@ -2,7 +2,7 @@
 import type { TaskAggregateCounts } from '@/lib/firebase/tasks';
 import ServerLimitBanner from '@/components/shared/ServerLimitBanner';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight, Building2, Clock3, X } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS, normalizeBaseStatus } from '@/lib/utils';
@@ -85,10 +85,15 @@ interface Props {
 export default function AdminDashboardClient({ currentUid, taskCounts, users, tasks, departments: initialDepartments, readLimitReached }: Props) {
   const [taskItems, setTaskItems] = useState(tasks);
   const [limitHit, setLimitHit] = useState(Boolean(readLimitReached));
+  const fetchedFilterKeys = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const handler = (e: any) => {
       if (e?.detail?.readLimitReached) setLimitHit(true);
+      const scope = e?.detail?.scope;
+      if (!scope || scope === 'tasks' || scope === 'all') {
+        fetchedFilterKeys.current.clear();
+      }
     };
     window.addEventListener('app-global-refresh', handler);
     return () => window.removeEventListener('app-global-refresh', handler);
@@ -110,18 +115,50 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
   }, [tasks, currentUid]);
 
 
+  // On-demand fetch 100 tasks for selected individual user, status filter, or department
+  // and cache along with the initial 100 tasks fetched so no matching tasks are missed.
   useEffect(() => {
-    if (!selectedUser || taskItems.some(t => t.assignedTo === selectedUser && matchesFilter(t,filter))) return;
+    const isFiltered = Boolean(selectedUser) || filter !== 'all' || deptFilter !== 'all' || Boolean(selectedDepartment);
+    if (!isFiltered) return;
+
+    const fetchKey = `user:${selectedUser || 'all'}|status:${filter}|dept:${selectedDepartment || deptFilter}`;
+    if (fetchedFilterKeys.current.has(fetchKey)) return;
+    fetchedFilterKeys.current.add(fetchKey);
+
     const controller = new AbortController();
-    const params = new URLSearchParams({filter:'true',scope:'all',assignedTo:selectedUser,limit:'100'});
-    if (filter !== 'all') params.set('status',filter);
-    fetch('/api/tasks?'+params,{signal:controller.signal}).then(r=>r.json()).then(json=>{
-      if (!controller.signal.aborted && json.success && json.data.length) setTaskItems(current=>{
-        const rows=new Map(current.map(t=>[t.taskId,t]));for(const task of json.data)rows.set(task.taskId,task);return Array.from(rows.values());
+    const params = new URLSearchParams({ filter: 'true', scope: 'all', limit: '100' });
+    if (selectedUser) params.set('assignedTo', selectedUser);
+    if (filter !== 'all') params.set('status', filter);
+    if (selectedDepartment) params.set('department', selectedDepartment);
+    else if (deptFilter !== 'all') params.set('department', deptFilter);
+
+    fetch('/api/tasks?' + params.toString(), { signal: controller.signal })
+      .then(r => r.json())
+      .then(json => {
+        if (!controller.signal.aborted && json.success && Array.isArray(json.data) && json.data.length) {
+          setTaskItems(current => {
+            const rows = new Map(current.map(t => [t.taskId, t]));
+            let changed = false;
+            for (const task of json.data) {
+              const prev = rows.get(task.taskId);
+              if (!prev || prev.updatedAt !== task.updatedAt) {
+                rows.set(task.taskId, task);
+                changed = true;
+              }
+            }
+            return changed ? Array.from(rows.values()) : current;
+          });
+        }
+      })
+      .catch(error => {
+        if (error.name !== 'AbortError') {
+          console.error('User/status task lookup failed', error);
+          fetchedFilterKeys.current.delete(fetchKey);
+        }
       });
-    }).catch(error=>{if(error.name!=='AbortError')console.error('User task lookup failed',error);});
-    return ()=>controller.abort();
-  },[selectedUser,filter]);
+
+    return () => controller.abort();
+  }, [selectedUser, filter, deptFilter, selectedDepartment]);
 
   function updateTask(updated?: TaskSerialized) {
     if (!updated) {
