@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { CheckCircle2, XCircle, Calendar, User, Loader2 } from 'lucide-react';
+import { CheckCircle2, XCircle, Calendar, User, Loader2, AlertOctagon } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn, formatDate, STATUS_COLORS } from '@/lib/utils';
 import type { TaskSerialized } from '@/types';
@@ -28,7 +28,7 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
-      toast.success(`Revision ${decision}`);
+      toast.success(decision === 'approved' ? 'Request approved successfully' : 'Request rejected');
       window.location.reload();
     } catch (err: any) {
       toast.error(err.message ?? 'Failed');
@@ -51,16 +51,29 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
     <div className="space-y-3">
       {revisions.map(rev => {
         const task = taskMap[rev.taskId];
-        const canDecide = rev.status === 'pending' && (role === 'admin' || task?.handoffUid === currentUid);
+        const isDeadRequest = rev.type === 'dead' || task?.status === 'Dead Requested';
+        const canDecide = rev.status === 'pending' && (
+          isDeadRequest ? role === 'admin' : (role === 'admin' || task?.handoffUid === currentUid)
+        );
+
         return (
-          <div key={rev.id} className="card p-5">
+          <div key={rev.id} className={cn('card p-5 transition-all', isDeadRequest && 'border-rose-200')}>
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 space-y-2">
-                {/* Task info */}
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono text-brand-600 bg-brand-50 px-2 py-0.5 rounded-md">
+                {/* Task info & Type Badge */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-mono text-brand-600 bg-brand-50 px-2 py-0.5 rounded-md font-semibold">
                     {rev.taskId}
                   </span>
+                  {isDeadRequest ? (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800 border border-rose-200">
+                      <AlertOctagon size={11} /> Dead Approval Request
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 border border-blue-200">
+                      <Calendar size={11} /> Date Extension
+                    </span>
+                  )}
                   {task && (
                     <span className={cn('badge text-xs', STATUS_COLORS[task.status])}>
                       {task.status}
@@ -72,15 +85,22 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
                   <p className="text-sm font-medium text-gray-900">{task.description}</p>
                 )}
 
-                <div className="grid grid-cols-2 gap-3 text-xs text-gray-500">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-gray-500">
                   <div className="flex items-center gap-1.5">
                     <User size={12} />
                     <span>Requested by <strong className="text-gray-700">{rev.requestedByName}</strong></span>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <Calendar size={12} />
-                    <span>New date: <strong className="text-gray-700">{formatDate(rev.requestedDate)}</strong></span>
-                  </div>
+                  {isDeadRequest ? (
+                    <div className="flex items-center gap-1.5">
+                      <AlertOctagon size={12} className="text-rose-500" />
+                      <span>Action requested: <strong className="text-rose-700">Flag Task Dead</strong></span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <Calendar size={12} />
+                      <span>New date: <strong className="text-gray-700">{formatDate(rev.requestedDate)}</strong></span>
+                    </div>
+                  )}
                   {task && (
                     <div className="flex items-center gap-1.5">
                       <Calendar size={12} />
@@ -92,9 +112,11 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
                   </div>
                 </div>
 
-                <div className="bg-orange-50 rounded-lg p-3">
-                  <p className="text-xs font-medium text-orange-800 mb-0.5">Reason</p>
-                  <p className="text-sm text-orange-700">{rev.reason}</p>
+                <div className={cn('rounded-lg p-3', isDeadRequest ? 'bg-rose-50/70 border border-rose-100' : 'bg-orange-50')}>
+                  <p className={cn('text-xs font-semibold mb-0.5', isDeadRequest ? 'text-rose-900' : 'text-orange-800')}>
+                    {isDeadRequest ? 'Remark / Reason for Dead' : 'Reason'}
+                  </p>
+                  <p className={cn('text-sm', isDeadRequest ? 'text-rose-800' : 'text-orange-700')}>{rev.reason}</p>
                 </div>
               </div>
 
@@ -104,18 +126,18 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
                   <button
                     onClick={() => decide(rev.id, rev.taskId, 'approved')}
                     disabled={!!loading}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 bg-green-600 text-white rounded-xl text-xs font-medium hover:bg-green-700 disabled:opacity-60 transition-colors"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 bg-green-600 text-white rounded-xl text-xs font-medium hover:bg-green-700 disabled:opacity-60 transition-colors shadow-xs"
                   >
                     {loading === rev.id + 'approved'
                       ? <Loader2 size={12} className="animate-spin" />
                       : <CheckCircle2 size={13} />
                     }
-                    Approve
+                    {isDeadRequest ? 'Approve Dead' : 'Approve'}
                   </button>
                   <button
                     onClick={() => decide(rev.id, rev.taskId, 'rejected')}
                     disabled={!!loading}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-xl text-xs font-medium hover:bg-red-100 disabled:opacity-60 transition-colors"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-50 text-red-700 border border-red-200 rounded-xl text-xs font-medium hover:bg-red-100 disabled:opacity-60 transition-colors shadow-xs"
                   >
                     {loading === rev.id + 'rejected'
                       ? <Loader2 size={12} className="animate-spin" />
@@ -127,13 +149,21 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
               )}
 
               {!canDecide && (
-                <span className={cn('badge text-xs',
-                  rev.status === 'approved' ? 'bg-green-100 text-green-700' :
-                  rev.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                  'bg-red-100 text-red-700'
-                )}>
-                  {rev.status}
-                </span>
+                <div className="shrink-0 flex items-center">
+                  {rev.status === 'pending' && isDeadRequest && role !== 'admin' ? (
+                    <span className="badge text-xs bg-amber-100 text-amber-800 border border-amber-200">
+                      Pending Admin Approval
+                    </span>
+                  ) : (
+                    <span className={cn('badge text-xs',
+                      rev.status === 'approved' ? 'bg-green-100 text-green-700' :
+                      rev.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-red-100 text-red-700'
+                    )}>
+                      {rev.status}
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           </div>

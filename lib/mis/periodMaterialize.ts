@@ -12,6 +12,9 @@ export type MaterializeTemplate = {
   department?: string;
   dayOfWeek?: number | null;
   dayOfMonth?: number | null;
+  startDate?: string | null;
+  dueDate?: string | null;
+  metadata?: { startDate?: string; dueDate?: string; [key: string]: any } | null;
   createdAt?: string | null;
 };
 
@@ -70,14 +73,23 @@ function eachDateInRange(start: string, end: string): string[] {
 /**
  * Build concrete checklist period rows for one calendar month.
  * Daily = each day (Salon Mondays skipped). Weekly = each week due-day in month.
- * Monthly = one row. Days before template creation are omitted.
+ * Monthly = one row.
+ * Starts from given start date / due date if provided, otherwise from template creation date.
  */
 export function buildMonthPeriodRows(template: MaterializeTemplate, monthKey: string): PeriodRowSpec[] {
   const cat = String(template.category || 'Daily');
   const catLower = cat.toLowerCase();
   const { start: monthStart, end: monthEnd } = monthBounds(monthKey);
+  const explicitStart = String(
+    template.startDate ||
+    template.dueDate ||
+    template.metadata?.startDate ||
+    template.metadata?.dueDate ||
+    ''
+  ).slice(0, 10);
   const created = String(template.createdAt || '').slice(0, 10);
-  const fromDate = created && created > monthStart ? created : monthStart;
+  const effectiveStart = explicitStart || created;
+  const fromDate = effectiveStart && effectiveStart > monthStart ? effectiveStart : monthStart;
 
   const base = {
     templateId: template.id,
@@ -137,11 +149,12 @@ export function buildMonthPeriodRows(template: MaterializeTemplate, monthKey: st
   }
 
   if (catLower === 'monthly') {
-    if (created && created.slice(0, 7) > monthKey) return [];
+    if (effectiveStart && effectiveStart.slice(0, 7) > monthKey) return [];
     const dueDay = template.dayOfMonth != null && template.dayOfMonth >= 1
       ? Math.min(Number(template.dayOfMonth), monthBounds(monthKey).lastDay)
       : monthBounds(monthKey).lastDay;
     const dueDate = `${monthKey}-${String(dueDay).padStart(2, '0')}`;
+    if (effectiveStart && effectiveStart > dueDate) return [];
     return [{
       ...base,
       periodKey: monthKey,

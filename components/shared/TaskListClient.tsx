@@ -38,7 +38,7 @@ interface Props {
   readLimitReached?: boolean;
 }
 
-const STATUS_OPTIONS = ['all', 'Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Dead', 'Completed', 'Verified'];
+const STATUS_OPTIONS = ['all', 'Pending Accept', 'In Progress', 'Delay Requested', 'Dead Requested', 'Overdue', 'Dead', 'Completed', 'Verified'];
 const CATEGORY_OPTIONS = ['all', 'Daily', 'Weekly', 'Monthly', 'One Time'];
 const CATEGORY_LABELS: Record<string, string> = {
   Daily: 'Daily Task',
@@ -49,7 +49,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   'one-time': 'One Time Task',
 };
 const RECURRING_CATEGORIES = new Set(['Daily', 'Weekly', 'Monthly']);
-const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Dead']);
+const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Dead Requested', 'Overdue', 'Dead']);
 const NEW_ASSIGNMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RISK_STYLES = {
   blocked: 'bg-red-600 text-white',
@@ -497,7 +497,9 @@ export default function TaskListClient({
 
   const openTask = (task: TaskSerialized) => {
     if (RECURRING_CATEGORIES.has(task.category)) {
+      const taskDate = (task.endDate || task.dayKey || task.startDate || '').slice(0, 10);
       const params = new URLSearchParams({ category: task.category, taskId: task.taskId });
+      if (taskDate) params.set('date', taskDate);
       window.location.href = `/${role === 'admin' ? 'admin' : 'portal'}/checklist?${params}`;
       return;
     }

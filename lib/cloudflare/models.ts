@@ -90,6 +90,7 @@ export function cfRevision(row: any): RevisionLog | null {
   if (!row) return null;
   return {
     ...row,
+    type: row.type || 'delay',
     requestedDate: timestamp(row.requestedDate)!,
     decidedAt: timestamp(row.decidedAt),
     createdAt: timestamp(row.createdAt)!,

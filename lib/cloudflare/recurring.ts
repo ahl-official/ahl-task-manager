@@ -31,6 +31,8 @@ export interface RecurringTemplateInput {
   frequency?: string;
   dayOfWeek?: number | null;
   dayOfMonth?: number | null;
+  startDate?: string | null;
+  dueDate?: string | null;
   timeOfDay?: string;
   isActive?: boolean;
   metadata?: Record<string, any>;
@@ -132,7 +134,7 @@ export async function getRecurringTemplates(params?: {
 }
 
 export async function createRecurringTemplate(data: RecurringTemplateInput): Promise<RecurringTemplate> {
-  const templateId = data.id || `rec_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const templateId = data.id || `T-local-${Date.now().toString().slice(-4)}`;
   const now = new Date().toISOString();
 
   const newTemplate: RecurringTemplate = {
@@ -155,15 +157,34 @@ export async function createRecurringTemplate(data: RecurringTemplateInput): Pro
 
   if (hasCloudflareApi()) {
     try {
-      return await cfApi<RecurringTemplate>('/recurring/templates', {
+      const created = await cfApi<RecurringTemplate>('/recurring/templates', {
         method: 'POST',
         body: JSON.stringify(data),
       });
+      // Guarantee period rows are materialized for the current month right now
+      // so today's checklist slot appears in the user's portal immediately!
+      if (created?.id) {
+        await materializeRecurringTemplate(created.id).catch((err) => {
+          console.warn('[Recurring] materialize-month call warning:', err?.message);
+        });
+      }
+      return created;
     } catch (err) { throw err; }
   }
 
   localTemplates.unshift(newTemplate);
   return newTemplate;
+}
+
+export async function materializeRecurringTemplate(
+  templateId: string,
+  monthKey?: string,
+): Promise<{ inserted: number; monthKey: string; count: number } | null> {
+  if (!hasCloudflareApi()) return null;
+  return await cfApi('/recurring/materialize-month', {
+    method: 'POST',
+    body: JSON.stringify({ templateId, monthKey }),
+  });
 }
 
 export async function updateRecurringTemplate(
@@ -203,12 +224,6 @@ export async function getRecurringChecklist(params: {
   userName?: string;
   uid?: string;
 }): Promise<RecurringChecklistItem[]> {
-  const today = indiaTodayKey();
-  const tomorrow = addDaysKey(today, 1);
-  if (params.date && params.date > tomorrow) {
-    return [];
-  }
-
   if (hasCloudflareApi()) {
     const search = new URLSearchParams();
     if (params.category) search.set('category', params.category);

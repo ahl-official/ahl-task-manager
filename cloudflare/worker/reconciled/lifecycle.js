@@ -58,33 +58,55 @@ export async function routeLifecycle(req,env,url,h){
   if(path==='/revisions'&&['POST','PATCH'].includes(req.method)){
     const d=await req.json(),now=new Date().toISOString();
     if(req.method==='POST'){
-      assert(validDate(d.requestedDate),'Valid requested date required');assert(String(d.reason||'').trim().length>0&&String(d.reason).length<=1000,'Reason must contain 1–1000 characters');
+      const isDead = d.type === 'dead';
+      if(!isDead){
+        assert(validDate(d.requestedDate),'Valid requested date required');
+      }
+      assert(String(d.reason||'').trim().length>0&&String(d.reason).length<=1000,'Reason must contain 1–1000 characters');
       const task=await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id=?').bind(d.taskId||'').first();assert(task,'Task not found',404);
-      assert(task.assigned_to===d.requestedBy,'Only assignee can request revision',403);assert(!terminal(task.status)&&!recurring(task.category),'Task cannot be revised',409);
-      assert(!task.start_date||istDay(d.requestedDate)>=istDay(task.start_date),'Revised due date cannot precede start date');
+      if(!isDead){
+        assert(task.assigned_to===d.requestedBy,'Only assignee can request revision',403);assert(!terminal(task.status)&&!recurring(task.category),'Task cannot be revised',409);
+        assert(!task.start_date||istDay(d.requestedDate)>=istDay(task.start_date),'Revised due date cannot precede start date');
+      } else {
+        assert(task.assigned_to===d.requestedBy||task.handoff_uid===d.requestedBy||d.actorRole==='admin','Only assignee, checker, or admin can request Dead',403);
+        assert(!['Completed','Verified'].includes(task.status),'Completed tasks cannot be flagged Dead',409);
+      }
       const revisionId=id('rev_'),condition='EXISTS(SELECT 1 FROM revisions WHERE id=?)';
       const pending=await env.DB.prepare("SELECT id FROM revisions WHERE task_id=? AND status='pending' LIMIT 1").bind(task.task_id).first();assert(!pending,'A revision is already pending',409);
+      const reqDate = isDead ? (task.end_date || now) : d.requestedDate;
+      const targetStatus = isDead ? 'Dead Requested' : 'Delay Requested';
+      const revType = isDead ? 'dead' : 'delay';
       const statements=[
-        env.DB.prepare("INSERT INTO revisions(id,task_id,requested_by,requested_by_name,requested_date,reason,status,created_at) SELECT ?,?,?,?,?,?,'pending',? FROM tasks_current WHERE task_id=? AND status=? AND COALESCE(updated_at,'')=? AND NOT EXISTS(SELECT 1 FROM revisions WHERE task_id=? AND status='pending')").bind(revisionId,task.task_id,d.requestedBy,d.requestedByName||'',d.requestedDate,String(d.reason).trim(),now,task.task_id,task.status,task.updated_at||'',task.task_id),
-        env.DB.prepare("UPDATE tasks_current SET status='Delay Requested',revision_status='requested',updated_at=? WHERE task_id=? AND "+condition).bind(now,task.task_id,revisionId),
-        ...await parentUpdate(env,task,'Delay Requested',{revision_status:'requested'},condition,[revisionId])
+        env.DB.prepare("INSERT INTO revisions(id,task_id,requested_by,requested_by_name,requested_date,reason,status,created_at,type) SELECT ?,?,?,?,?,?,'pending',?,? FROM tasks_current WHERE task_id=? AND status=? AND COALESCE(updated_at,'')=? AND NOT EXISTS(SELECT 1 FROM revisions WHERE task_id=? AND status='pending')").bind(revisionId,task.task_id,d.requestedBy,d.requestedByName||'',reqDate,String(d.reason).trim(),now,revType,task.task_id,task.status,task.updated_at||'',task.task_id),
+        env.DB.prepare("UPDATE tasks_current SET status=?,revision_status='requested',delay_reason=?,updated_at=? WHERE task_id=? AND "+condition).bind(targetStatus,String(d.reason).trim(),now,task.task_id,revisionId),
+        ...await parentUpdate(env,task,targetStatus,{revision_status:'requested'},condition,[revisionId])
       ];await env.DB.batch(statements);
       const rev=await env.DB.prepare('SELECT * FROM revisions WHERE id=?').bind(revisionId).first();assert(rev,'Task changed; refresh before requesting revision',409);
       await syncTaskCountChange(env,h,task,await env.DB.prepare('SELECT assigned_to,department,status FROM tasks_current WHERE task_id=?').bind(task.task_id).first());
       return response(h.revisionFromRow(rev),201);
     }
     assert(['approved','rejected'].includes(d.decision),'Invalid decision');assert(d.revisionId&&d.taskId,'Task and revision ID required');
-    const rev=await env.DB.prepare('SELECT * FROM revisions WHERE id=?').bind(d.revisionId).first();assert(rev,'Revision not found',404);assert(rev.task_id===d.taskId,'Revision does not belong to task',409);assert(rev.status==='pending','Revision already decided',409);assert(validDate(rev.requested_date),'Revision has invalid date');
-    const task=await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id=?').bind(d.taskId).first();assert(task,'Task not found',404);assert(d.actorRole==='admin'||d.decidedBy===task.handoff_uid,'Only checker or admin can decide',403);assert(task.status==='Delay Requested'&&task.revision_status==='requested','Task is no longer awaiting a revision',409);
+    const rev=await env.DB.prepare('SELECT * FROM revisions WHERE id=?').bind(d.revisionId).first();assert(rev,'Revision not found',404);assert(rev.task_id===d.taskId,'Revision does not belong to task',409);assert(rev.status==='pending','Revision already decided',409);
+    const isDead = rev.type === 'dead';
+    if(!isDead){
+      assert(validDate(rev.requested_date),'Revision has invalid date');
+    }
+    const task=await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id=?').bind(d.taskId).first();assert(task,'Task not found',404);
+    if(isDead){
+      assert(d.actorRole==='admin','Only admin can decide Dead task requests',403);
+    } else {
+      assert(d.actorRole==='admin'||d.decidedBy===task.handoff_uid,'Only checker or admin can decide',403);
+    }
+    assert(task.revision_status==='requested','Task is no longer awaiting a revision',409);
     const approved=d.decision==='approved',token=id('decision_');
-    // Unique decision token prevents a competing decision from applying task changes twice.
     const decisionAt=now+'|'+token,condition='EXISTS(SELECT 1 FROM revisions WHERE id=? AND decided_at=?)',binds=[rev.id,decisionAt];
-    const extra={revision_status:approved?'accepted':'rejected',...(approved?{end_date:rev.requested_date,delayed_date:rev.requested_date,delay_reason:rev.reason}:{})};
+    const targetStatus = isDead ? (approved ? 'Dead' : 'In Progress') : 'In Progress';
+    const extra={revision_status:approved?'accepted':'rejected',...(isDead ? {delay_reason:null} : (approved?{end_date:rev.requested_date,delayed_date:rev.requested_date,delay_reason:rev.reason}:{}))};
     const cols=Object.keys(extra);
     await env.DB.batch([
-      env.DB.prepare("UPDATE revisions SET status=?,decided_by=?,decided_by_name=?,decided_at=? WHERE id=? AND status='pending' AND EXISTS(SELECT 1 FROM tasks_current WHERE task_id=? AND status='Delay Requested' AND revision_status='requested')").bind(d.decision,d.decidedBy,d.decidedByName||'',decisionAt,rev.id,task.task_id),
-      env.DB.prepare(`UPDATE tasks_current SET status='In Progress',updated_at=?,${cols.map(k=>k+'=?').join(',')} WHERE task_id=? AND ${condition}`).bind(now,...cols.map(k=>extra[k]),task.task_id,...binds),
-      ...await parentUpdate(env,task,'In Progress',extra,condition,binds),
+      env.DB.prepare("UPDATE revisions SET status=?,decided_by=?,decided_by_name=?,decided_at=? WHERE id=? AND status='pending' AND EXISTS(SELECT 1 FROM tasks_current WHERE task_id=? AND revision_status='requested')").bind(d.decision,d.decidedBy,d.decidedByName||'',decisionAt,rev.id,task.task_id),
+      env.DB.prepare(`UPDATE tasks_current SET status=?,updated_at=?,${cols.map(k=>k+'=?').join(',')} WHERE task_id=? AND ${condition}`).bind(targetStatus,now,...cols.map(k=>extra[k]),task.task_id,...binds),
+      ...await parentUpdate(env,task,targetStatus,extra,condition,binds),
       env.DB.prepare('UPDATE revisions SET decided_at=? WHERE id=? AND decided_at=?').bind(now,rev.id,decisionAt)
     ]);
     const updated=await env.DB.prepare('SELECT * FROM revisions WHERE id=?').bind(rev.id).first();assert(updated.status===d.decision&&updated.decided_by===d.decidedBy&&updated.decided_at===now,'Revision changed; refresh',409);

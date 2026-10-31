@@ -1,4 +1,6 @@
 import { adminLog } from '@/lib/firebase/scores';
+import { VINITT_UID } from '@/lib/utils/names';
+import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 
 const WAHA_URL     = process.env.WAHA_URL!;
 const WAHA_SESSION = process.env.WAHA_SESSION ?? 'default';
@@ -104,11 +106,32 @@ function enqueueSend<T>(fn: () => Promise<T>): Promise<T> {
   });
 }
 
-const VINITT_PHONE_LAST10 = (process.env.VINITT_WA || '9820188505').replace(/\D/g, '').slice(-10);
+let cachedVinittWa: string | null = null;
+let lastVinittWaFetch = 0;
 
-export function isVinittWa(waNumber: unknown): boolean {
+export async function getVinittWa(): Promise<string | null> {
+  const now = Date.now();
+  if (cachedVinittWa && now - lastVinittWaFetch < 300_000) {
+    return cachedVinittWa;
+  }
+  try {
+    if (hasCloudflareApi()) {
+      const u = await cfApi<{ waNumber?: string; wa_number?: string }>(`/users/${encodeURIComponent(VINITT_UID)}`).catch(() => null);
+      if (u) {
+        cachedVinittWa = String(u.waNumber || u.wa_number || '').replace(/\D/g, '');
+        lastVinittWaFetch = now;
+        return cachedVinittWa;
+      }
+    }
+  } catch {}
+  return cachedVinittWa;
+}
+
+export function isVinittWa(waNumber: unknown, recipientUid?: string): boolean {
+  if (recipientUid === VINITT_UID || recipientUid === 'user-vinitt') return true;
   const digits = String(waNumber ?? '').replace(/\D/g, '');
-  return digits.endsWith(VINITT_PHONE_LAST10);
+  if (cachedVinittWa && digits.length >= 10 && cachedVinittWa.endsWith(digits.slice(-10))) return true;
+  return false;
 }
 
 export function isOtpMessage(text: string): boolean {
@@ -144,12 +167,15 @@ export async function sendWhatsApp(
   waNumber: string,
   text: string,
   taskId?: string,
-  options?: { bypassDisable?: boolean },
+  options?: { bypassDisable?: boolean; recipientUid?: string },
 ): Promise<SendWhatsAppResult> {
   return enqueueSend(async () => {
     if (!process.env.WAHA_URL) {
       return { ok: true, chatId: formatWaId(waNumber) };
     }
+
+    // Ensure Vinitt's WA number is dynamically loaded by user-vinitt
+    await getVinittWa().catch(() => {});
 
     // DISABLE_WHATSAPP=true only suppresses background triggers/reminders/crons.
     // OTP sending and Task Creation notifications always send.
@@ -158,9 +184,9 @@ export async function sendWhatsApp(
       return { ok: true, chatId: formatWaId(waNumber) };
     }
 
-    // Exception: Vinitt Sir must ONLY receive Task Creation messages (and Login OTP)
-    if (isVinittWa(waNumber) && !isTaskCreationMessage(text) && !isOtpMessage(text)) {
-      console.log(`[WAHA] Suppressed message for Vinitt Sir (${waNumber}) — only task creation allowed`);
+    // Exception: Vinitt Sir (identified by UID user-vinitt) must ONLY receive Task Creation messages (and Login OTP)
+    if (isVinittWa(waNumber, options?.recipientUid) && !isTaskCreationMessage(text) && !isOtpMessage(text)) {
+      console.log(`[WAHA] Suppressed message for Vinitt Sir (${waNumber}, UID: ${options?.recipientUid || VINITT_UID}) — only task creation allowed`);
       return { ok: true, chatId: formatWaId(waNumber) };
     }
 
@@ -219,8 +245,10 @@ export async function sendWhatsAppFile(input: {
   data: Buffer | Uint8Array;
   caption?: string;
   taskId?: string;
+  recipientUid?: string;
 }): Promise<SendWhatsAppResult> {
-  if (automatedWhatsAppDisabled() || !process.env.WAHA_URL || isVinittWa(input.waNumber)) {
+  await getVinittWa().catch(() => {});
+  if (automatedWhatsAppDisabled() || !process.env.WAHA_URL || isVinittWa(input.waNumber, input.recipientUid)) {
     return { ok: true, chatId: formatWaId(input.waNumber) };
   }
 
@@ -274,8 +302,10 @@ export async function sendWhatsAppPdfFromDriveLink(
   driveUrl: string,
   _processName: string,
   message: string,
+  recipientUid?: string,
 ): Promise<SendWhatsAppResult> {
-  if (automatedWhatsAppDisabled() || !process.env.WAHA_URL || isVinittWa(waNumber)) {
+  await getVinittWa().catch(() => {});
+  if (automatedWhatsAppDisabled() || !process.env.WAHA_URL || isVinittWa(waNumber, recipientUid)) {
     return { ok: true, chatId: formatWaId(waNumber) };
   }
 

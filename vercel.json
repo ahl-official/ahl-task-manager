@@ -54,6 +54,14 @@
     {
       "path": "/api/cron/sheet-sync?phase=delegation",
       "schedule": "35 17 * * *"
+    },
+    {
+      "path": "/api/cron/recurring-materialize",
+      "schedule": "0 18 28 * *"
+    },
+    {
+      "path": "/api/cron/recurring-materialize",
+      "schedule": "0 18 1 * *"
     }
   ]
 }

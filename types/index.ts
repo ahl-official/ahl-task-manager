@@ -28,6 +28,7 @@ export type TaskStatus =
   | 'Pending Accept'
   | 'In Progress'
   | 'Delay Requested'
+  | 'Dead Requested'
   | 'Overdue'
   | 'Dead'
   | 'Completed'
@@ -36,6 +37,7 @@ export type TaskStatus =
   | 'Shifted (Pending Accept)'
   | 'Shifted (In Progress)'
   | 'Shifted (Delay Requested)'
+  | 'Shifted (Dead Requested)'
   | 'Shifted (Overdue)'
   | 'Shifted (Completed)'
   | 'Shifted (Verified)';
@@ -129,6 +131,7 @@ export interface CreateTaskInput {
 // ─── Revision ───────────────────────────────────────────────────────────────
 
 export type RevisionDecision = 'pending' | 'approved' | 'rejected';
+export type RevisionType = 'delay' | 'dead';
 
 export interface RevisionLog {
   id: string;
@@ -138,6 +141,7 @@ export interface RevisionLog {
   requestedDate: FirestoreTimestamp;
   reason: string;
   status: RevisionDecision;
+  type?: RevisionType;
   decidedBy: string | null;
   decidedByName: string | null;
   decidedAt: FirestoreTimestamp | null;
@@ -150,6 +154,7 @@ export interface RevisionLogSerialized extends Omit<RevisionLog,
   requestedDate: string;
   decidedAt: string | null;
   createdAt: string;
+  type?: RevisionType;
 }
 
 // ─── Score ──────────────────────────────────────────────────────────────────

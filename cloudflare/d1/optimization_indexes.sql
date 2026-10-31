@@ -6,3 +6,7 @@ CREATE INDEX IF NOT EXISTS idx_revisions_status_task_created ON revisions (statu
 CREATE INDEX IF NOT EXISTS idx_checklist_completions_task_period ON checklist_completions (uid, task_id, period_key);
 CREATE INDEX IF NOT EXISTS idx_logs_type_created ON logs (type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_crm_owner_updated ON crm_leads (owner_uid, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_period_rows_due ON recurring_period_rows (due_date, category, is_deleted, status);
+CREATE INDEX IF NOT EXISTS idx_period_rows_due_filter ON recurring_period_rows (due_date, is_deleted, status);
+CREATE INDEX IF NOT EXISTS idx_period_rows_month_filter ON recurring_period_rows (month_key, is_deleted, status);
+CREATE INDEX IF NOT EXISTS idx_period_rows_user_date ON recurring_period_rows (assigned_to, category, due_date, is_deleted, status);

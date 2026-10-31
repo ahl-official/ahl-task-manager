@@ -197,18 +197,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       });
     }
 
-    else if (action === 'dead' || action === 'remark' || action === 'revive') {
+    else if (action === 'dead') {
       const cleanRemark = String(remark).trim();
       if (!cleanRemark) {
-        return NextResponse.json({ success: false, error: 'A remark is required' }, { status: 400 });
+        return NextResponse.json({ success: false, error: 'A remark explaining why the task is dead is required' }, { status: 400 });
       }
       if (cleanRemark.length > 1000) {
         return NextResponse.json({ success: false, error: 'Remark must be 1000 characters or fewer' }, { status: 400 });
       }
-      if ((action === 'dead' || action === 'revive') && !actorIsAssignee && !actorIsHandoff && !isAdmin) {
-        return NextResponse.json({ success: false, error: 'Only the assignee, checker, or admin can change the Dead state' }, { status: 403 });
+      if (!actorIsAssignee && !actorIsHandoff && !isAdmin) {
+        return NextResponse.json({ success: false, error: 'Only the assignee, checker, or admin can flag a task Dead' }, { status: 403 });
       }
-      if (action === 'dead' && (task.status === 'Completed' || task.status === 'Verified')) {
+      if (task.status === 'Completed' || task.status === 'Verified') {
         return NextResponse.json({ success: false, error: 'Completed tasks cannot be flagged Dead' }, { status: 400 });
       }
       const timestamp = new Intl.DateTimeFormat('en-IN', {
@@ -216,11 +216,74 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         timeStyle: 'short',
         timeZone: 'Asia/Kolkata',
       }).format(new Date());
-      const marker = action === 'dead' ? 'DEAD' : action === 'revive' ? 'REVIVED' : 'REMARK';
+
+      if (!isAdmin) {
+        // Non-admin requires admin approval: submit revision request of type 'dead'
+        const entry = `[DEAD REQUESTED - ${timestamp}] ${session.name}: ${cleanRemark}`;
+        const notes = task.notes ? `${task.notes}\n${entry}` : entry;
+
+        if (hasCloudflareApi()) {
+          await cfApi('/revisions', {
+            method: 'POST',
+            body: JSON.stringify({
+              taskId: params.id,
+              requestedBy: session.uid,
+              requestedByName: session.name,
+              requestedDate: task.endDate ? task.endDate.toDate().toISOString() : new Date().toISOString(),
+              reason: cleanRemark,
+              type: 'dead',
+              actorRole: session.role,
+            }),
+          }).catch(err => console.error('Failed to create dead revision in CF:', err));
+        }
+
+        updatedTask = await adminUpdateTaskStatus(params.id, 'Dead Requested', {
+          notes,
+          revisionStatus: 'requested',
+          delayReason: cleanRemark,
+        });
+
+        await adminLog('TASK_UPDATED', `${params.id} dead status requested by ${session.name}`, {
+          taskId: params.id, uid: session.uid, meta: { action: 'dead_requested', reason: cleanRemark },
+        });
+
+        return NextResponse.json({
+          success: true,
+          data: updatedTask ? serializeTask(updatedTask) : null,
+          message: 'Dead status request submitted to admin for approval',
+        });
+      } else {
+        // Admin direct flag
+        const entry = `[DEAD - ${timestamp}] ${session.name}: ${cleanRemark}`;
+        const notes = task.notes ? `${task.notes}\n${entry}` : entry;
+        updatedTask = await adminUpdateTaskStatus(params.id, 'Dead', { notes, revisionStatus: 'none', delayReason: null });
+        await adminLog('TASK_UPDATED', `${params.id} flagged dead by admin ${session.name}`, {
+          taskId: params.id, uid: session.uid, meta: { action: 'dead' },
+        });
+      }
+    }
+
+    else if (action === 'remark' || action === 'revive') {
+      const cleanRemark = String(remark).trim();
+      if (!cleanRemark) {
+        return NextResponse.json({ success: false, error: 'A remark is required' }, { status: 400 });
+      }
+      if (cleanRemark.length > 1000) {
+        return NextResponse.json({ success: false, error: 'Remark must be 1000 characters or fewer' }, { status: 400 });
+      }
+      if (action === 'revive' && !actorIsAssignee && !actorIsHandoff && !isAdmin) {
+        return NextResponse.json({ success: false, error: 'Only the assignee, checker, or admin can revive the task' }, { status: 403 });
+      }
+      const timestamp = new Intl.DateTimeFormat('en-IN', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+        timeZone: 'Asia/Kolkata',
+      }).format(new Date());
+      const marker = action === 'revive' ? 'REVIVED' : 'REMARK';
       const entry = `[${marker} - ${timestamp}] ${session.name}: ${cleanRemark}`;
       const notes = task.notes ? `${task.notes}\n${entry}` : entry;
-      const status: TaskStatus = action === 'dead' ? 'Dead' : action === 'revive' ? 'In Progress' : task.status;
-      updatedTask = await adminUpdateTaskStatus(params.id, status, { notes });
+      const status: TaskStatus = action === 'revive' ? 'In Progress' : task.status;
+      updatedTask = await adminUpdateTaskStatus(params.id, status, { notes, revisionStatus: 'none', delayReason: null });
       await adminLog('TASK_UPDATED', `${params.id} ${marker.toLowerCase()} by ${session.name}`, {
         taskId: params.id, uid: session.uid, meta: { action },
       });

@@ -41,7 +41,26 @@ interface ChecklistRow {
 
 const CATEGORY_OPTIONS: ChecklistCategory[] = ['Daily', 'Weekly', 'Monthly'];
 
-export default function ChecklistClient({ initialCategory = 'Daily', initialTaskId = '' }: { initialCategory?: ChecklistCategory; initialTaskId?: string }) {
+function getWeekMonday(dateStr: string) {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return dateStr.slice(0, 10);
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  const dow = dt.getUTCDay();
+  const diff = (dow === 0 ? -6 : 1) - dow;
+  dt.setUTCDate(dt.getUTCDate() + diff);
+  return dt.toISOString().slice(0, 10);
+}
+
+export default function ChecklistClient({
+  initialCategory = 'Daily',
+  initialTaskId = '',
+  initialDate = '',
+}: {
+  initialCategory?: ChecklistCategory;
+  initialTaskId?: string;
+  initialDate?: string;
+}) {
   const [category, setCategory] = useState<ChecklistCategory>(initialCategory);
   const [rows, setRows] = useState<ChecklistRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,7 +75,7 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
   const [elevated, setElevated] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [currentUserName, setCurrentUserName] = useState('');
-  const [date, setDate] = useState('');
+  const [date, setDate] = useState(initialDate);
   const [activeRemarkRow, setActiveRemarkRow] = useState<string | null>(null);
   const [remark, setRemark] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<ChecklistRow | null>(null);
@@ -116,9 +135,24 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
   }, [allUsers, rows, department]);
   const visibleRows = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const isTargetTask = (taskId: string) => Boolean(initialTaskId && taskId.toLowerCase() === initialTaskId.toLowerCase());
+
     return rows.filter(row => {
       const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
-      const matchesDate = !date || rowDate === date;
+      let matchesDate = !date || rowDate === date;
+      if (date && category === 'Weekly') {
+        const rowWeek = getWeekMonday(row.periodKey || row.dueDate || '');
+        const targetWeek = getWeekMonday(date);
+        matchesDate = matchesDate || Boolean(rowWeek && targetWeek && rowWeek === targetWeek);
+      } else if (date && category === 'Monthly') {
+        matchesDate = matchesDate || (row.periodKey || row.dueDate || '').slice(0, 7) === date.slice(0, 7);
+      }
+
+      // If this row is the targeted recurring task passed via initialTaskId, always match date
+      if (isTargetTask(row.taskId)) {
+        matchesDate = true;
+      }
+
       const matchesMine = !mineOnly || Boolean(row.mine) || namesEqual(row.userName, currentUserName);
       const matchesDept = !department || namesEqual(row.department, department);
       const matchesIndiv = !individual || namesEqual(row.userName, individual);
@@ -135,7 +169,7 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
 
       return matchesMine && matchesDept && matchesIndiv && Boolean(matchesDate) && matchesSearch;
     });
-  }, [rows, department, individual, date, mineOnly, currentUserName, search]);
+  }, [rows, department, individual, date, mineOnly, currentUserName, search, category, initialTaskId]);
   const completedCount = useMemo(() => visibleRows.filter(row => row.completed).length, [visibleRows]);
 
   useEffect(() => {
@@ -146,6 +180,33 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
     selectedTaskRow.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     selectedTaskRow.current?.focus({ preventScroll: true });
   }, [loading, visibleRows, initialTaskId, search]);
+
+  useEffect(() => {
+    if (!initialTaskId || loading) return;
+    const found = rows.some(r => r.taskId.toLowerCase() === initialTaskId.toLowerCase());
+    if (found) return;
+
+    let active = true;
+    const fetchTarget = async () => {
+      try {
+        const qs = new URLSearchParams({ category, search: initialTaskId });
+        if (date) qs.set('date', date);
+        const res = await fetch(`/api/checklist?${qs.toString()}`);
+        const data = await res.json();
+        if (active && data.success && Array.isArray(data.data) && data.data.length > 0) {
+          setRows(current => {
+            const ids = new Set(current.map(r => r.id));
+            const fresh = data.data.filter((r: ChecklistRow) => !ids.has(r.id));
+            return [...fresh, ...current];
+          });
+        }
+      } catch (e) {
+        console.error('Failed to load initial targeted task:', e);
+      }
+    };
+    void fetchTarget();
+    return () => { active = false; };
+  }, [initialTaskId, loading, category, date, rows]);
 
   async function loadRows(nextCategory = category, nextDate = date, forceRefresh = false) {
     const cacheKey = `${nextCategory}:${nextDate || 'today'}`;
@@ -230,10 +291,21 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
   }
 
   async function tick(row: ChecklistRow) {
+    if (row.dead) return;
+    const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
+    const today = indiaTodayKey();
+    if (rowDate && rowDate > today) {
+      toast.error('Cannot complete future checklist tasks before their scheduled date');
+      return;
+    }
+    const isVerifying = row.completed && row.status !== 'Verified' && elevated;
+    const action = isVerifying ? 'verify' : 'complete';
+    const nextStatus = isVerifying ? ('Verified' as const) : (elevated ? ('Verified' as const) : ('Completed' as const));
+
     // Optimistic UI update for 0ms instant feedback
     const prevRows = rows;
     const updatedRows = (list: ChecklistRow[]) => list.map(item => item.id === row.id
-      ? { ...item, completed: true, completedAt: new Date().toISOString(), status: 'Completed' as const, canComplete: false, canUncomplete: true }
+      ? { ...item, completed: true, completedAt: item.completedAt || new Date().toISOString(), status: nextStatus, canComplete: false, canUncomplete: !isVerifying }
       : item);
 
     setRows(updatedRows);
@@ -256,20 +328,20 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
           assignedToName: row.userName,
           category: row.category,
           periodKey: row.periodKey,
-          action: 'complete',
+          action,
         }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
-      const nextStatus = data.data.status || (elevated ? 'Verified' : 'Completed');
+      const serverStatus = data.data.status || nextStatus;
       const serverUpdated = (list: ChecklistRow[]) => list.map(item => item.id === row.id
-        ? { ...item, completed: true, completedAt: data.data.completedAt, status: nextStatus, canComplete: false, canUncomplete: true }
+        ? { ...item, completed: true, completedAt: data.data.completedAt, status: serverStatus, canComplete: false, canUncomplete: serverStatus !== 'Verified' }
         : item);
       setRows(serverUpdated);
       if (categoryCache.current[row.category]) {
         categoryCache.current[row.category].rows = serverUpdated(categoryCache.current[row.category].rows);
       }
-      toast.success(nextStatus === 'Verified' ? 'Checklist task marked verified' : 'Checklist task marked complete');
+      toast.success(serverStatus === 'Verified' ? 'Checklist task marked verified' : 'Checklist task marked complete');
     } catch (err: any) {
       setRows(prevRows); // Rollback on failure
       if (categoryCache.current[row.category]) {
@@ -659,16 +731,7 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
               <input
                 type="date"
                 value={date}
-                max={indiaTodayKey()}
-                onChange={event => {
-                  const val = event.target.value;
-                  const today = indiaTodayKey();
-                  if (val && val > today) {
-                    toast.error('Cannot select future dates for checklist');
-                    return;
-                  }
-                  setDate(val);
-                }}
+                onChange={event => setDate(event.target.value)}
                 className="input min-w-0 flex-1 py-2 text-sm"
               />
               {date && (
@@ -779,22 +842,29 @@ export default function ChecklistClient({ initialCategory = 'Daily', initialTask
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => tick(row)}
-                      disabled={row.completed || row.dead || !row.canComplete || ticking === row.id}
-                      title={!row.completed && !row.canComplete ? 'Past date tasks cannot be completed by members. Contact an admin.' : undefined}
-                      className={cn(
-                        'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors',
-                        row.status === 'Verified' ? 'bg-brand-100 text-brand-700 border border-brand-200' :
-                        row.completed ? 'bg-green-100 text-green-700' :
-                        row.dead || !row.canComplete ? 'bg-gray-100 text-gray-500 cursor-not-allowed' :
-                        'bg-brand-600 text-white hover:bg-brand-700'
-                      )}
-                    >
-                      {ticking === row.id ? <Loader2 size={15} className="animate-spin" /> : row.completed ? <CheckCircle2 size={16} /> : <Circle size={16} />}
-                      {row.status === 'Verified' ? 'Verified' : row.completed ? 'Completed' : row.dead ? 'Revive first' : row.canComplete ? 'Mark Complete' : (row as any).isPast ? 'Past Due (Locked)' : row.userName}
-                    </button>
+                    {!row.dead && (
+                      <button
+                        type="button"
+                        onClick={() => tick(row)}
+                        disabled={row.status === 'Verified' || (!row.completed && !row.canComplete) || (row.completed && !elevated) || ticking === row.id}
+                        title={!row.completed && !row.canComplete ? 'Past date tasks cannot be completed by members. Contact an admin.' : undefined}
+                        className={cn(
+                          'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors',
+                          row.status === 'Verified' ? 'bg-brand-100 text-brand-700 border border-brand-200 cursor-default' :
+                          row.completed ? (elevated ? 'bg-brand-600 text-white hover:bg-brand-700 cursor-pointer shadow-xs' : 'bg-green-100 text-green-700 cursor-default') :
+                          !row.canComplete ? 'bg-gray-100 text-gray-500 cursor-not-allowed' :
+                          'bg-brand-600 text-white hover:bg-brand-700 cursor-pointer'
+                        )}
+                      >
+                        {ticking === row.id ? <Loader2 size={15} className="animate-spin" /> :
+                         row.status === 'Verified' ? <CheckCircle2 size={16} /> :
+                         row.completed ? <CheckCircle2 size={16} /> :
+                         <Circle size={16} />}
+                        {row.status === 'Verified' ? 'Verified' :
+                         row.completed ? (elevated ? 'Verify' : 'Completed') :
+                         row.canComplete ? 'Mark Complete' : (row as any).isPast ? 'Past Due (Locked)' : row.userName}
+                      </button>
+                    )}
                     {row.completed && !row.dead && row.canUncomplete && (
                       <button
                         type="button"

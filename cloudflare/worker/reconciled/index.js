@@ -100,8 +100,16 @@ function buildMonthPeriodRows(template, monthKey) {
   const cat = String(template.category || "Daily");
   const catLower = cat.toLowerCase();
   const { start: monthStart, end: monthEnd } = monthBounds(monthKey);
+  const explicitStart = String(
+    template.startDate ||
+    template.dueDate ||
+    template.metadata?.startDate ||
+    template.metadata?.dueDate ||
+    ""
+  ).slice(0, 10);
   const created = String(template.createdAt || "").slice(0, 10);
-  const fromDate = created && created > monthStart ? created : monthStart;
+  const effectiveStart = explicitStart || created;
+  const fromDate = effectiveStart && effectiveStart > monthStart ? effectiveStart : monthStart;
   const base = {
     templateId: template.id,
     monthKey,
@@ -152,9 +160,10 @@ function buildMonthPeriodRows(template, monthKey) {
     return rows;
   }
   if (catLower === "monthly") {
-    if (created && created.slice(0, 7) > monthKey) return [];
+    if (effectiveStart && effectiveStart.slice(0, 7) > monthKey) return [];
     const dueDay = template.dayOfMonth != null && template.dayOfMonth >= 1 ? Math.min(Number(template.dayOfMonth), monthBounds(monthKey).lastDay) : monthBounds(monthKey).lastDay;
     const dueDate = `${monthKey}-${String(dueDay).padStart(2, "0")}`;
+    if (effectiveStart && effectiveStart > dueDate) return [];
     return [{
       ...base,
       periodKey: monthKey,
@@ -1189,14 +1198,21 @@ async function routeRevisions(req, env, url) {
     const id = randomId("rev_");
     const now = nowIso();
     const taskId = data.taskId || "";
+    const type = data.type || "delay";
     await env.DB.prepare(
-      "INSERT INTO revisions (id, task_id, requested_by, requested_by_name, requested_date, reason, status, decided_by, decided_by_name, decided_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)"
-    ).bind(id, taskId, data.requestedBy || "", data.requestedByName || "", data.requestedDate || now, data.reason || "", "pending", now).run();
+      "INSERT INTO revisions (id, task_id, requested_by, requested_by_name, requested_date, reason, status, decided_by, decided_by_name, decided_at, created_at, type) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)"
+    ).bind(id, taskId, data.requestedBy || "", data.requestedByName || "", data.requestedDate || now, data.reason || "", "pending", now, type).run();
     if (taskId) {
-      const requestedDateStr = (data.requestedDate || '').slice(0, 10);
-      await env.DB.prepare(
-        "UPDATE tasks_current SET revision_status = 'requested', delayed_date = ?, delay_reason = ?, status = CASE WHEN status = 'In Progress' THEN 'Delay Requested' ELSE status END, updated_at = ? WHERE task_id = ?"
-      ).bind(requestedDateStr || null, data.reason || null, now, taskId).run();
+      if (type === "dead") {
+        await env.DB.prepare(
+          "UPDATE tasks_current SET revision_status = 'requested', delay_reason = ?, status = 'Dead Requested', updated_at = ? WHERE task_id = ?"
+        ).bind(data.reason || null, now, taskId).run();
+      } else {
+        const requestedDateStr = (data.requestedDate || '').slice(0, 10);
+        await env.DB.prepare(
+          "UPDATE tasks_current SET revision_status = 'requested', delayed_date = ?, delay_reason = ?, status = CASE WHEN status = 'In Progress' THEN 'Delay Requested' ELSE status END, updated_at = ?"
+        ).bind(requestedDateStr || null, data.reason || null, now, taskId).run();
+      }
     }
     return json({ success: true, data: revisionFromRow(await env.DB.prepare("SELECT * FROM revisions WHERE id = ?").bind(id).first()) }, { status: 201 });
   }
@@ -1205,23 +1221,44 @@ async function routeRevisions(req, env, url) {
     if (!data.revisionId) return json({ success: false, error: "revisionId is required" }, { status: 400 });
     const decision = data.decision || "approved";
     const now = nowIso();
-    await env.DB.prepare("UPDATE revisions SET status = ?, decided_by = ?, decided_by_name = ?, decided_at = ? WHERE id = ?").bind(decision, data.decidedBy || null, data.decidedByName || null, now, data.revisionId).run();
     const revRow = await env.DB.prepare("SELECT * FROM revisions WHERE id = ?").bind(data.revisionId).first();
-    if (revRow?.task_id) {
-      if (decision === 'approved' && revRow.requested_date) {
-        const newEndDate = revRow.requested_date.slice(0, 10);
-        const dayKey = newEndDate;
-        const monthKey = newEndDate.slice(0, 7);
-        await env.DB.prepare(
-          "UPDATE tasks_current SET end_date = ?, day_key = ?, month_key = ?, revision_status = 'accepted', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ? WHERE task_id = ?"
-        ).bind(newEndDate, dayKey, monthKey, now, revRow.task_id).run();
+    if (!revRow) return json({ success: false, error: "Revision not found" }, { status: 404 });
+
+    const isDead = revRow.type === "dead";
+    if (isDead && data.actorRole !== "admin") {
+      return json({ success: false, error: "Only admin can approve or reject dead task requests" }, { status: 403 });
+    }
+
+    await env.DB.prepare("UPDATE revisions SET status = ?, decided_by = ?, decided_by_name = ?, decided_at = ? WHERE id = ?").bind(decision, data.decidedBy || null, data.decidedByName || null, now, data.revisionId).run();
+
+    if (revRow.task_id) {
+      if (isDead) {
+        if (decision === "approved") {
+          await env.DB.prepare(
+            "UPDATE tasks_current SET status = 'Dead', revision_status = 'accepted', delay_reason = NULL, updated_at = ? WHERE task_id = ?"
+          ).bind(now, revRow.task_id).run();
+        } else {
+          await env.DB.prepare(
+            "UPDATE tasks_current SET status = 'In Progress', revision_status = 'rejected', delay_reason = NULL, updated_at = ? WHERE task_id = ?"
+          ).bind(now, revRow.task_id).run();
+        }
       } else {
-        await env.DB.prepare(
-          "UPDATE tasks_current SET revision_status = 'rejected', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ? WHERE task_id = ?"
-        ).bind(now, revRow.task_id).run();
+        if (decision === "approved" && revRow.requested_date) {
+          const newEndDate = revRow.requested_date.slice(0, 10);
+          const dayKey = newEndDate;
+          const monthKey = newEndDate.slice(0, 7);
+          await env.DB.prepare(
+            "UPDATE tasks_current SET end_date = ?, day_key = ?, month_key = ?, revision_status = 'accepted', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ? WHERE task_id = ?"
+          ).bind(newEndDate, dayKey, monthKey, now, revRow.task_id).run();
+        } else {
+          await env.DB.prepare(
+            "UPDATE tasks_current SET revision_status = 'rejected', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ?"
+          ).bind(now, revRow.task_id).run();
+        }
       }
     }
-    return json({ success: true, data: revisionFromRow(revRow) });
+    const updated = await env.DB.prepare("SELECT * FROM revisions WHERE id = ?").bind(data.revisionId).first();
+    return json({ success: true, data: revisionFromRow(updated) });
   }
   return null;
 }
@@ -1623,6 +1660,12 @@ async function ensurePeriodRowsTable(env) {
     "CREATE INDEX IF NOT EXISTS idx_period_rows_due ON recurring_period_rows(due_date, category, is_deleted, status)"
   ).run().catch(() => null);
   await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_period_rows_due_filter ON recurring_period_rows(due_date, is_deleted, status)"
+  ).run().catch(() => null);
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_period_rows_month_filter ON recurring_period_rows(month_key, is_deleted, status)"
+  ).run().catch(() => null);
+  await env.DB.prepare(
     "CREATE INDEX IF NOT EXISTS idx_period_rows_name_due ON recurring_period_rows(assigned_to_name, due_date, is_deleted, status)"
   ).run().catch(() => null);
   await env.DB.prepare(
@@ -1957,7 +2000,7 @@ async function routeRecurring(req, env, url) {
       return json({ success: false, error: "title and assignedToName are required" }, { status: 400 });
     }
     const now = nowIso();
-    const id = String(data.id || randomId("rec_"));
+    const id = (data.id && !String(data.id).startsWith("rec_") && !String(data.id).startsWith("rec_sheet_")) ? String(data.id) : (await nextTaskId(env));
     const category = String(data.category || data.frequency || "Daily");
     const title = String(data.title).trim();
     const description = String(data.description || "").trim();
@@ -2111,6 +2154,23 @@ async function routeRecurring(req, env, url) {
       }
     }
     return json({ success: true, data: { monthKey, templates: withRows.size, periodSlots: total } });
+  }
+  if (path === "/recurring/fix-rec-ids" && req.method === "POST") {
+    const recTemplates = await env.DB.prepare(
+      "SELECT id FROM recurring_templates WHERE id LIKE 'rec_%' ORDER BY created_at ASC"
+    ).all();
+    const results = [];
+    for (const row of recTemplates.results || []) {
+      const oldId = String(row.id);
+      const newId = await nextTaskId(env);
+      await env.DB.prepare("UPDATE recurring_templates SET id = ? WHERE id = ?").bind(newId, oldId).run();
+      await env.DB.prepare(
+        "UPDATE recurring_period_rows SET template_id = ?, id = ? || substr(id, length(?) + 1) WHERE template_id = ?"
+      ).bind(newId, newId, oldId, oldId).run().catch(() => null);
+      await env.DB.prepare("UPDATE recurring_completions SET template_id = ? WHERE template_id = ?").bind(newId, oldId).run().catch(() => null);
+      results.push({ oldId, newId });
+    }
+    return json({ success: true, count: results.length, migrated: results });
   }
   if (path === "/recurring/migrate-to-period-rows" && req.method === "POST") {
     const data = await body(req);
@@ -2335,9 +2395,12 @@ async function routeRecurring(req, env, url) {
     return row?json({success:true,data:periodRowFromDb(row)}):json({success:false,error:'Checklist period not found'},{status:404});
   }
   if (path === "/recurring/checklist" && req.method === "GET") {
+    try {
     const tomorrowStr = addDaysDateStr(getIstDateParts().dateStr, 1);
     const startDate = url.searchParams.get('startDate'), endDate = url.searchParams.get('endDate');
-    const due="COALESCE(NULLIF(due_date,''),SUBSTR(period_key,1,10))";
+    const category = url.searchParams.get('category') || 'Daily';
+    const date = url.searchParams.get('date') || getIstDateParts().dateStr;
+    const due="due_date";
     const clauses=["is_deleted=0","status!='Deleted'"],binds=[];
     const paged=url.searchParams.has('limit');
     const scopeUid=url.searchParams.get('scopeUid')||url.searchParams.get('uid');
@@ -2357,13 +2420,11 @@ async function routeRecurring(req, env, url) {
       const months = [startMonth];
       if (endMonth !== startMonth) months.push(endMonth);
       clauses.push('month_key IN ('+months.map(()=>'?').join(',')+')');binds.push(...months);
-      clauses.push(due+'>=? AND '+due+'<=?');binds.push(startDate, cappedEnd);
-      const category=url.searchParams.get('category');
-      if (category && category.toLowerCase() !== 'all') { clauses.push('category=?'); binds.push(category); }
+      clauses.push('due_date>=? AND due_date<=?');binds.push(startDate, cappedEnd);
+      const catParam = url.searchParams.get('category');
+      if (catParam && catParam.toLowerCase() !== 'all') { clauses.push('category=?'); binds.push(catParam); }
     } else {
-      const category=url.searchParams.get('category')||'Daily',date=url.searchParams.get('date')||getIstDateParts().dateStr;
       if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!['Daily','Weekly','Monthly','All','all'].includes(category))return json({success:false,error:'Invalid checklist date or category'},{status:400});
-      if(date>tomorrowStr)return json({success:true,data:[]});
       const months=[date.slice(0,7)];
       if(category==='Weekly'){
         const from=weekStartMonday(date),end=new Date(from+'T12:00:00Z');end.setUTCDate(end.getUTCDate()+6);
@@ -2372,11 +2433,15 @@ async function routeRecurring(req, env, url) {
       }
       clauses.push('month_key IN ('+months.map(()=>'?').join(',')+')');binds.push(...months);
       if(category.toLowerCase()!=='all'){clauses.push('category=?');binds.push(category);}
-      const exactDate = url.searchParams.get('exactDate') === 'true' || url.searchParams.has('date');
-      if(exactDate){clauses.push(due+'=?');binds.push(date);}
-      else if(category==='Daily'){clauses.push(due+'=?');binds.push(date);}
-      else if(category==='Weekly'){const from=weekStartMonday(date),to=new Date(from+'T12:00:00Z');to.setUTCDate(to.getUTCDate()+6);clauses.push(due+'>=? AND '+due+'<=?');binds.push(from,to.toISOString().slice(0,10));}
-      else {clauses.push('SUBSTR('+due+',1,7)=?');binds.push(date.slice(0,7));}
+      const exactDate = url.searchParams.get('exactDate') === 'true';
+      if(category==='Weekly'){
+        const from=weekStartMonday(date),to=new Date(from+'T12:00:00Z');to.setUTCDate(to.getUTCDate()+6);
+        clauses.push('due_date>=? AND due_date<=?');binds.push(from,to.toISOString().slice(0,10));
+      } else if(category==='Monthly'){
+        clauses.push('month_key=?');binds.push(date.slice(0,7));
+      } else if(category==='Daily' || exactDate){
+        clauses.push('due_date=?');binds.push(date);
+      }
     }
     if(paged){
       const cursor=url.searchParams.get('cursor');
@@ -2387,15 +2452,20 @@ async function routeRecurring(req, env, url) {
         clauses.push("(LOWER(template_id) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(title,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(description,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(assigned_to_name,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(department,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(period_key,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(status,'')) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(remark,'')) LIKE ? ESCAPE '\\')");
         binds.push(...Array(8).fill(pattern));
       }
-      const limit=Math.min(100,Math.max(1,Number(url.searchParams.get('limit'))||100));
+      const requestedLimit=Number(url.searchParams.get('limit'));
+      const defaultLimit=['Weekly','Monthly'].includes(category)?300:100;
+      const limit=Math.min(300,Math.max(1,requestedLimit||defaultLimit));
       const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY id LIMIT ?').bind(...binds,limit+1).all();
       const found=result.results||[],hasMore=found.length>limit,selected=found.slice(0,limit);
       const items=selected.map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
       return json({success:true,data:{items,hasMore,nextCursor:hasMore?selected[selected.length-1].id:null}});
     }
-    const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY due_date,id LIMIT 200').bind(...binds).all();
-    const data=(result.results||[]).slice(0,200).map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
-    return json({success:true,data,meta:{istDate:date,count:data.length,hasMore:(result.results||[]).length>=200,readOnly:true}});
+    const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY due_date,id LIMIT 300').bind(...binds).all();
+    const data=(result.results||[]).slice(0,300).map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
+    return json({success:true,data,meta:{istDate:date,count:data.length,hasMore:(result.results||[]).length>=300,readOnly:true}});
+    } catch (err) {
+      return json({ success: false, error: String(err?.message || err), stack: String(err?.stack || '') }, { status: 500 });
+    }
   }
   if (path === "/sheet-sync/period-status" && req.method === "PATCH") {
     const data = await body(req);

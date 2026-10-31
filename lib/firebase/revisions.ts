@@ -19,6 +19,7 @@ export async function adminCreateRevision(data: {
   requestedByName: string;
   requestedDate: string; // ISO
   reason: string;
+  type?: 'delay' | 'dead';
 }): Promise<RevisionLog> {
   if (hasCloudflareApi()) {
     return cfRevision(await cfApi('/revisions', {
@@ -38,6 +39,7 @@ export async function adminCreateRevision(data: {
     requestedDate:    Timestamp.fromDate(new Date(data.requestedDate)),
     reason:           data.reason,
     status:           'pending',
+    type:             data.type || 'delay',
     decidedBy:        null,
     decidedByName:    null,
     decidedAt:        null,
@@ -186,6 +188,7 @@ export function serializeRevision(r: RevisionLog): Record<string, unknown> {
   const tsToIso = (ts: any) => ts ? ts.toDate().toISOString() : null;
   return {
     ...r,
+    type:          r.type || 'delay',
     requestedDate: tsToIso(r.requestedDate),
     decidedAt:     tsToIso(r.decidedAt),
     createdAt:     tsToIso(r.createdAt),

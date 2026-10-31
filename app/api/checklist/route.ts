@@ -12,6 +12,17 @@ import { addDaysKey } from '@/lib/mis/week';
 
 const CATEGORIES = ['Daily', 'Weekly', 'Monthly'];
 
+function getWeekMonday(dateStr: string) {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return dateStr.slice(0, 10);
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  const dow = dt.getUTCDay();
+  const diff = (dow === 0 ? -6 : 1) - dow;
+  dt.setUTCDate(dt.getUTCDate() + diff);
+  return dt.toISOString().slice(0, 10);
+}
+
 export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
@@ -31,22 +42,7 @@ export async function GET(req: NextRequest) {
   const search = rawSearch.replace(/[^a-zA-Z0-9\s\-_.:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
   const userNameParam = searchParams.get('userName') || searchParams.get('assignedToName') || searchParams.get('individual') || undefined;
   const mineParam = searchParams.get('mine') === 'true';
-
   const today = indiaTodayKey();
-  const tomorrow = addDaysKey(today, 1);
-  if (dateParam && dateParam > tomorrow) {
-    return NextResponse.json({
-      success: true,
-      meta: {
-        currentUserName: session.name,
-        currentUserId: session.uid,
-        elevated,
-        isAdmin,
-        source: 'cloudflare_d1',
-      },
-      data: [],
-    });
-  }
 
   if (!hasCloudflareApi()) {
     return NextResponse.json({
@@ -74,15 +70,27 @@ export async function GET(req: NextRequest) {
       .filter(row => {
         if (!dateParam) return true;
         const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
-        return rowDate === dateParam;
+        if (rowDate === dateParam) return true;
+        if (category === 'Weekly') {
+          const rowWeek = getWeekMonday(row.periodKey || row.dueDate || '');
+          const targetWeek = getWeekMonday(dateParam);
+          return Boolean(rowWeek && targetWeek && rowWeek === targetWeek);
+        }
+        if (category === 'Monthly') {
+          return (row.periodKey || row.dueDate || '').slice(0, 7) === dateParam.slice(0, 7);
+        }
+        return false;
       })
       .map(row => {
         const permissions = checklistPermissions(session, row);
+        const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
+        const isFuture = Boolean(rowDate && rowDate > today);
         return {
           ...row,
           mine: permissions.mine,
           isPast: permissions.isPast,
-          canComplete: !row.completed && !row.dead && permissions.canChange,
+          isFuture,
+          canComplete: !row.completed && !row.dead && !isFuture && permissions.canChange,
           canUncomplete: row.completed && !row.dead && permissions.canChange,
           canManage: isAdmin,
         };

@@ -133,12 +133,12 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
         complete: isAdmin ? 'Task completed and verified successfully' : 'Task completed successfully',
         verify: 'Task verified successfully',
         uncomplete: 'Completion undone',
-        dead: 'Task flagged Dead',
+        dead: isAdmin ? 'Task flagged Dead' : 'Dead status request submitted to admin for approval',
         remark: 'Remark added',
         revive: 'Task revived',
         'update-priority': 'Priority updated and schedule recalculated',
       };
-      toast.success(successMessage[action] ?? 'Task updated successfully');
+      toast.success(data.message || successMessage[action] || 'Task updated successfully');
       if (['dead', 'remark', 'revive'].includes(action)) setRemark('');
       onUpdate(data.data);
       window.dispatchEvent(new CustomEvent('task-status-updated', { detail: data.data }));
@@ -220,14 +220,16 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
-      toast.success(`Revision ${decision}`);
+      toast.success(decision === 'approved' ? 'Request approved successfully' : 'Request rejected');
       const updatedTask: TaskSerialized = data.task || {
         ...task,
         revisionStatus: decision === 'approved' ? 'accepted' : 'rejected',
         endDate: decision === 'approved' && task.delayedDate ? task.delayedDate : task.endDate,
         delayedDate: null,
         delayReason: null,
-        status: task.status === 'Delay Requested' ? 'In Progress' : task.status,
+        status: task.status === 'Dead Requested'
+          ? (decision === 'approved' ? 'Dead' : 'In Progress')
+          : (task.status === 'Delay Requested' ? 'In Progress' : task.status),
       };
       onUpdate(updatedTask);
       window.dispatchEvent(new CustomEvent('task-status-updated', { detail: updatedTask }));
@@ -249,15 +251,18 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             <span className="text-xs font-mono font-medium text-brand-600 bg-brand-50 px-2 py-0.5 rounded-md shrink-0">{task.taskId}</span>
             <span className={cn('badge text-[11px]', STATUS_COLORS[displayStatus])}>{displayStatus}</span>
             <span className={cn('badge text-[11px]', PRIORITY_COLORS[task.priority])}>{task.priority}</span>
-            {['Daily', 'Weekly', 'Monthly'].includes(task.category) && (
-              <a
-                href={`/${isAdmin ? 'admin' : 'portal'}/checklist?category=${encodeURIComponent(task.category)}&taskId=${encodeURIComponent(task.taskId)}`}
-                className="inline-flex items-center gap-1 rounded-md bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-700 hover:bg-brand-100 border border-brand-200 transition"
-              >
-                <span>View in Checklist</span>
-                <ArrowRight size={11} />
-              </a>
-            )}
+            {['Daily', 'Weekly', 'Monthly'].includes(task.category) && (() => {
+              const taskDate = (task.endDate || task.dayKey || task.startDate || '').slice(0, 10);
+              return (
+                <a
+                  href={`/${isAdmin ? 'admin' : 'portal'}/checklist?category=${encodeURIComponent(task.category)}&taskId=${encodeURIComponent(task.taskId)}${taskDate ? `&date=${encodeURIComponent(taskDate)}` : ''}`}
+                  className="inline-flex items-center gap-1 rounded-md bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-700 hover:bg-brand-100 border border-brand-200 transition"
+                >
+                  <span>View in Checklist</span>
+                  <ArrowRight size={11} />
+                </a>
+              );
+            })()}
           </div>
           <button
             type="button"
@@ -485,6 +490,19 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             </div>
           )}
 
+          {task.status === 'Dead Requested' && (
+            <div className="flex gap-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-rose-800">
+              <AlertOctagon size={18} className="mt-0.5 shrink-0 text-rose-600" />
+              <div>
+                <p className="text-sm font-semibold">Dead Status Requested (Awaiting Admin Approval)</p>
+                <p className="text-xs">
+                  {task.delayReason ? `Remark: "${task.delayReason}". ` : ''}
+                  Admin review is required before this task is officially marked Dead.
+                </p>
+              </div>
+            </div>
+          )}
+
           {task.status === 'Dead' && (
             <div className="flex gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-red-800">
               <AlertOctagon size={18} className="mt-0.5 shrink-0" />
@@ -526,11 +544,11 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                     loading={loading === 'remark'}
                     color="blue"
                   />
-                  {canChangeDead && task.status !== 'Dead' && !isDone && (
+                  {canChangeDead && task.status !== 'Dead' && task.status !== 'Dead Requested' && !isDone && (
                     <ActionButton
-                      label="Flag Dead"
+                      label={isAdmin ? 'Flag Dead' : 'Request Dead'}
                       onClick={() => {
-                        if (!remark.trim()) return toast.error('Explain why the task is Dead');
+                        if (!remark.trim()) return toast.error('A remark explaining why the task is Dead is required');
                         doAction('dead', { remark });
                       }}
                       loading={loading === 'dead'}
@@ -723,36 +741,41 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
               </div>
             )}
 
-            {/* Revision decision for handoff */}
-            {!isTimelySheet && (isHandoff || isAdmin) && task.revisionStatus === 'requested' && (
-              <div className="bg-yellow-50 rounded-xl p-3 border border-yellow-200">
-                <p className="text-xs font-semibold text-yellow-800 mb-2 flex items-center gap-1.5">
-                  <RefreshCw size={13} /> Revision Decision Required
+            {/* Revision / Dead decision */}
+            {!isTimelySheet && task.revisionStatus === 'requested' && (
+              <div className={cn('rounded-xl p-3 border', task.status === 'Dead Requested' ? 'bg-rose-50 border-rose-200' : 'bg-yellow-50 border-yellow-200')}>
+                <p className={cn('text-xs font-semibold mb-2 flex items-center gap-1.5', task.status === 'Dead Requested' ? 'text-rose-900' : 'text-yellow-800')}>
+                  {task.status === 'Dead Requested' ? <AlertOctagon size={13} className="text-rose-600" /> : <RefreshCw size={13} />}
+                  {task.status === 'Dead Requested' ? 'Dead Approval Required (Admin Only)' : 'Revision Decision Required'}
                 </p>
-                {task.delayedDate && (
+                {task.status !== 'Dead Requested' && task.delayedDate && (
                   <p className="text-xs text-yellow-900 mb-1">
                     <span className="font-medium">Requested Date:</span> {formatDate(task.delayedDate)}
                   </p>
                 )}
                 {task.delayReason && (
-                  <p className="text-xs text-yellow-800 mb-3">
-                    <span className="font-medium">Reason:</span> {task.delayReason}
+                  <p className={cn('text-xs mb-3', task.status === 'Dead Requested' ? 'text-rose-800' : 'text-yellow-800')}>
+                    <span className="font-medium">{task.status === 'Dead Requested' ? 'Remark / Blocker:' : 'Reason:'}</span> {task.delayReason}
                   </p>
                 )}
-                <div className="flex gap-2">
-                  <ActionButton
-                    label="Approve"
-                    onClick={() => decideRevision('approved', task.taskId)}
-                    loading={loading === 'revision-approved'}
-                    color="green"
-                  />
-                  <ActionButton
-                    label="Reject"
-                    onClick={() => decideRevision('rejected', task.taskId)}
-                    loading={loading === 'revision-rejected'}
-                    color="red"
-                  />
-                </div>
+                {(task.status === 'Dead Requested' ? isAdmin : (isHandoff || isAdmin)) ? (
+                  <div className="flex gap-2">
+                    <ActionButton
+                      label={task.status === 'Dead Requested' ? 'Approve Dead' : 'Approve'}
+                      onClick={() => decideRevision('approved', task.taskId)}
+                      loading={loading === 'revision-approved'}
+                      color={task.status === 'Dead Requested' ? 'red' : 'green'}
+                    />
+                    <ActionButton
+                      label={task.status === 'Dead Requested' ? 'Reject Request' : 'Reject'}
+                      onClick={() => decideRevision('rejected', task.taskId)}
+                      loading={loading === 'revision-rejected'}
+                      color={task.status === 'Dead Requested' ? 'gray' : 'red'}
+                    />
+                  </div>
+                ) : (
+                  <p className="text-xs text-amber-700 italic">Awaiting Admin decision</p>
+                )}
               </div>
             )}
 

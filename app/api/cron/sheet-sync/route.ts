@@ -234,13 +234,12 @@ export async function GET(req: NextRequest) {
         const startDate = dateKey(row[4]);
         if (!user || !startDate) { skippedAmbiguous++; continue; }
         if (!mayWrite(1)) { deferredTemplates++; continue; }
-        const id = `rec_sheet_${createHash('sha256').update(key).digest('hex').slice(0, 24)}`;
         const date = new Date(`${startDate}T12:00:00Z`);
         const isoDow = date.getUTCDay() || 7;
         await cfApi('/recurring/templates', {
           method: 'POST',
           body: JSON.stringify({
-            id, category, frequency: category, title: taskText.split(/\r?\n/)[0].slice(0, 100),
+            category, frequency: category, title: taskText.split(/\r?\n/)[0].slice(0, 100),
             description: taskText, assignedTo: user.uid, assignedToName: user.name,
             department: user.department || String(row[2] || ''),
             dayOfWeek: category === 'Weekly' ? isoDow : null,

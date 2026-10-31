@@ -241,7 +241,6 @@ export async function aggregatePeriods(env,start,end){
   return promise;
 }
 async function loadPeriodAggregates(env,start,end){
-  const due="COALESCE(NULLIF(p.due_date,''),substr(p.period_key,1,10))";
-  const result=await env.DB.prepare(`SELECT p.assigned_to_name AS name,p.department,p.category,s.source_kind,COUNT(*) AS planned,SUM(CASE WHEN p.status IN ('Completed','Verified') THEN 1 ELSE 0 END) AS done,SUM(CASE WHEN p.status IN ('Completed','Verified') AND COALESCE(p.is_on_time,1)=1 THEN 1 ELSE 0 END) AS onTime FROM recurring_period_rows p LEFT JOIN (SELECT period_row_id,MIN(source_kind) AS source_kind FROM recurring_period_sources GROUP BY period_row_id) s ON s.period_row_id=p.id WHERE p.is_deleted=0 AND p.status!='Deleted' AND ${due}>=? AND ${due}<=? GROUP BY p.assigned_to_name,p.department,p.category,s.source_kind`).bind(start,end).all();
+  const result=await env.DB.prepare(`SELECT p.assigned_to_name AS name,p.department,p.category,s.source_kind,COUNT(*) AS planned,SUM(CASE WHEN p.status IN ('Completed','Verified') THEN 1 ELSE 0 END) AS done,SUM(CASE WHEN p.status IN ('Completed','Verified') AND COALESCE(p.is_on_time,1)=1 THEN 1 ELSE 0 END) AS onTime FROM recurring_period_rows p LEFT JOIN (SELECT period_row_id,MIN(source_kind) AS source_kind FROM recurring_period_sources GROUP BY period_row_id) s ON s.period_row_id=p.id WHERE p.is_deleted=0 AND p.status!='Deleted' AND p.due_date>=? AND p.due_date<=? GROUP BY p.assigned_to_name,p.department,p.category,s.source_kind`).bind(start,end).all();
   return result.results||[];
 }

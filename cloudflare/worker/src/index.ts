@@ -198,6 +198,7 @@ function revisionFromRow(row: any) {
     requestedDate: row.requested_date,
     reason: row.reason,
     status: row.status,
+    type: row.type || 'delay',
     decidedBy: row.decided_by,
     decidedByName: row.decided_by_name,
     decidedAt: row.decided_at,
@@ -702,14 +703,21 @@ async function routeRevisions(req: Request, env: Env, url: URL) {
     const id = randomId('rev_');
     const now = nowIso();
     const taskId = data.taskId || '';
+    const type = data.type || 'delay';
     await env.DB.prepare(
-      'INSERT INTO revisions (id, task_id, requested_by, requested_by_name, requested_date, reason, status, decided_by, decided_by_name, decided_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)'
-    ).bind(id, taskId, data.requestedBy || '', data.requestedByName || '', data.requestedDate || now, data.reason || '', 'pending', now).run();
+      'INSERT INTO revisions (id, task_id, requested_by, requested_by_name, requested_date, reason, status, decided_by, decided_by_name, decided_at, created_at, type) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)'
+    ).bind(id, taskId, data.requestedBy || '', data.requestedByName || '', data.requestedDate || now, data.reason || '', 'pending', now, type).run();
     if (taskId) {
-      const requestedDateStr = (data.requestedDate || '').slice(0, 10);
-      await env.DB.prepare(
-        "UPDATE tasks_current SET revision_status = 'requested', delayed_date = ?, delay_reason = ?, status = CASE WHEN status = 'In Progress' THEN 'Delay Requested' ELSE status END, updated_at = ? WHERE task_id = ?"
-      ).bind(requestedDateStr || null, data.reason || null, now, taskId).run();
+      if (type === 'dead') {
+        await env.DB.prepare(
+          "UPDATE tasks_current SET revision_status = 'requested', delay_reason = ?, status = 'Dead Requested', updated_at = ? WHERE task_id = ?"
+        ).bind(data.reason || null, now, taskId).run();
+      } else {
+        const requestedDateStr = (data.requestedDate || '').slice(0, 10);
+        await env.DB.prepare(
+          "UPDATE tasks_current SET revision_status = 'requested', delayed_date = ?, delay_reason = ?, status = CASE WHEN status = 'In Progress' THEN 'Delay Requested' ELSE status END, updated_at = ?"
+        ).bind(requestedDateStr || null, data.reason || null, now, taskId).run();
+      }
     }
     return json({ success: true, data: revisionFromRow(await env.DB.prepare('SELECT * FROM revisions WHERE id = ?').bind(id).first()) }, { status: 201 });
   }
@@ -719,25 +727,46 @@ async function routeRevisions(req: Request, env: Env, url: URL) {
     if (!data.revisionId) return json({ success: false, error: 'revisionId is required' }, { status: 400 });
     const decision = data.decision || 'approved';
     const now = nowIso();
+    const revRow = await env.DB.prepare('SELECT * FROM revisions WHERE id = ?').bind(data.revisionId).first<any>();
+    if (!revRow) return json({ success: false, error: 'Revision not found' }, { status: 404 });
+
+    const isDead = revRow.type === 'dead';
+    if (isDead && data.actorRole !== 'admin') {
+      return json({ success: false, error: 'Only admin can approve or reject dead task requests' }, { status: 403 });
+    }
+
     await env.DB.prepare('UPDATE revisions SET status = ?, decided_by = ?, decided_by_name = ?, decided_at = ? WHERE id = ?')
       .bind(decision, data.decidedBy || null, data.decidedByName || null, now, data.revisionId)
       .run();
-    const revRow = await env.DB.prepare('SELECT * FROM revisions WHERE id = ?').bind(data.revisionId).first<any>();
-    if (revRow?.task_id) {
-      if (decision === 'approved' && revRow.requested_date) {
-        const newEndDate = revRow.requested_date.slice(0, 10);
-        const dayKey = newEndDate;
-        const monthKey = newEndDate.slice(0, 7);
-        await env.DB.prepare(
-          "UPDATE tasks_current SET end_date = ?, day_key = ?, month_key = ?, revision_status = 'accepted', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ? WHERE task_id = ?"
-        ).bind(newEndDate, dayKey, monthKey, now, revRow.task_id).run();
+
+    if (revRow.task_id) {
+      if (isDead) {
+        if (decision === 'approved') {
+          await env.DB.prepare(
+            "UPDATE tasks_current SET status = 'Dead', revision_status = 'accepted', delay_reason = NULL, updated_at = ? WHERE task_id = ?"
+          ).bind(now, revRow.task_id).run();
+        } else {
+          await env.DB.prepare(
+            "UPDATE tasks_current SET status = 'In Progress', revision_status = 'rejected', delay_reason = NULL, updated_at = ? WHERE task_id = ?"
+          ).bind(now, revRow.task_id).run();
+        }
       } else {
-        await env.DB.prepare(
-          "UPDATE tasks_current SET revision_status = 'rejected', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ? WHERE task_id = ?"
-        ).bind(now, revRow.task_id).run();
+        if (decision === 'approved' && revRow.requested_date) {
+          const newEndDate = revRow.requested_date.slice(0, 10);
+          const dayKey = newEndDate;
+          const monthKey = newEndDate.slice(0, 7);
+          await env.DB.prepare(
+            "UPDATE tasks_current SET end_date = ?, day_key = ?, month_key = ?, revision_status = 'accepted', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ? WHERE task_id = ?"
+          ).bind(newEndDate, dayKey, monthKey, now, revRow.task_id).run();
+        } else {
+          await env.DB.prepare(
+            "UPDATE tasks_current SET revision_status = 'rejected', delayed_date = NULL, delay_reason = NULL, status = CASE WHEN status = 'Delay Requested' THEN 'In Progress' ELSE status END, updated_at = ?"
+          ).bind(now, revRow.task_id).run();
+        }
       }
     }
-    return json({ success: true, data: revisionFromRow(revRow) });
+    const updated = await env.DB.prepare('SELECT * FROM revisions WHERE id = ?').bind(data.revisionId).first<any>();
+    return json({ success: true, data: revisionFromRow(updated) });
   }
 
   return null;
@@ -1221,9 +1250,6 @@ async function routeRecurring(req: Request, env: Env, url: URL) {
     const categoryParam = url.searchParams.get('category') || 'Daily';
     const dateParam = url.searchParams.get('date');
     const todayIst = getIstDateParts();
-    if (dateParam && dateParam > todayIst.dateStr) {
-      return json({ success: true, data: [], meta: { istDate: todayIst.dateStr } });
-    }
     const ist = dateParam ? getIstPartsForDateStr(dateParam) : todayIst;
     const userName = url.searchParams.get('userName');
 
@@ -1260,9 +1286,9 @@ async function routeRecurring(req: Request, env: Env, url: URL) {
       const cat = (t.category || '').toLowerCase();
       if (cat === 'daily') return true;
       if (cat === 'weekly') {
-        if (dateParam) return t.dayOfWeek == null || t.dayOfWeek === ist.dayOfWeekIso;
-        if (categoryParam.toLowerCase() === 'weekly') return true;
-        return t.dayOfWeek == null || t.dayOfWeek === ist.dayOfWeekIso;
+        const exactDateParam = url.searchParams.get('exactDate') === 'true';
+        if (dateParam && exactDateParam) return t.dayOfWeek == null || t.dayOfWeek === ist.dayOfWeekIso;
+        return true;
       }
       if (cat === 'monthly') {
         if (dateParam) {

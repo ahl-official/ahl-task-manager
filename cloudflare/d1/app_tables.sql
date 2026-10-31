@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS revisions (
   requested_date TEXT NOT NULL,
   reason TEXT NOT NULL,
   status TEXT NOT NULL,
+  type TEXT DEFAULT 'delay',
   decided_by TEXT,
   decided_by_name TEXT,
   decided_at TEXT,
@@ -61,6 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_revisions_status_created ON revisions (status, cr
 CREATE INDEX IF NOT EXISTS idx_revisions_requested_by_created ON revisions (requested_by, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_revisions_task_created ON revisions (task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_revisions_status_task_created ON revisions (status, task_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_revisions_type ON revisions (type);
 
 CREATE TABLE IF NOT EXISTS automations (
   id TEXT PRIMARY KEY,

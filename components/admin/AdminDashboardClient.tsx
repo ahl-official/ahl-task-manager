@@ -15,7 +15,7 @@ import {
 import type { TaskSerialized } from '@/types';
 
 type TaskFilter = 'all' | 'Pending Accept' | 'In Progress' | 'Completed' | 'Verified' | 'Overdue';
-const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Dead']);
+const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Dead Requested', 'Overdue', 'Dead']);
 const NEW_ASSIGNMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 type TaskCounts = {
@@ -177,7 +177,9 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
 
   function handleTaskClick(task: TaskSerialized) {
     if (['Daily', 'Weekly', 'Monthly'].includes(task.category)) {
+      const taskDate = (task.endDate || task.dayKey || task.startDate || '').slice(0, 10);
       const params = new URLSearchParams({ category: task.category, taskId: task.taskId });
+      if (taskDate) params.set('date', taskDate);
       window.location.href = `/admin/checklist?${params.toString()}`;
       return;
     }
