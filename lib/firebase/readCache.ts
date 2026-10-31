@@ -64,13 +64,21 @@ export async function cachedFirestoreRead<T>(
       }
       // No cached value in THIS instance's memory (e.g. a cold start right after deploy).
       // Degrade to a safe empty value instead of throwing and crashing the page, when the
-      // caller has given us one to use.
+      // caller has given us one to use. Still hold it for the full TTL like the real-value
+      // branch above — otherwise every subsequent request during an outage would retry
+      // Cloudflare immediately with no backoff at all, hammering it instead of backing off.
       if (emptyFallback !== undefined) {
         console.warn(
-          `[Read Limit Hit / No Cache] Database read for "${key}" failed with nothing cached yet, returning empty fallback:`,
+          `[Read Limit Hit / No Cache] Database read for "${key}" failed with nothing cached yet, holding empty fallback for ${ttlMs}ms:`,
           error?.message || error
         );
-        cache.delete(key);
+        const entry = cache.get(key);
+        if (entry) {
+          entry.expiresAt = Date.now() + ttlMs;
+          entry.value = emptyFallback;
+          entry.lastKnownValue = emptyFallback;
+          entry.promise = Promise.resolve(emptyFallback);
+        }
         return emptyFallback;
       }
       cache.delete(key);
