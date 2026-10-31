@@ -4,6 +4,7 @@ import type { RevisionLog, RevisionDecision } from '@/types';
 import { cachedFirestoreRead, clearFirestoreReadCache, LONG_READ_CACHE_TTL_MS } from './readCache';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { cfRevision } from '@/lib/cloudflare/models';
+import { handleFirestoreReadError } from './errors';
 
 const COL = 'revisionLog';
 const DEFAULT_REVISION_READ_LIMIT = 300;
@@ -82,8 +83,13 @@ export async function adminDecideRevision(
 
 export async function adminGetRevisionsByTask(taskId: string, limitCount = DEFAULT_REVISION_READ_LIMIT): Promise<RevisionLog[]> {
   if (hasCloudflareApi()) {
-    const revisions = await cfApi<any[]>(`/revisions?taskId=${encodeURIComponent(taskId)}&limit=${encodeURIComponent(String(clampRevisionLimit(limitCount)))}`);
-    return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
+    try {
+      const revisions = await cfApi<any[]>(`/revisions?taskId=${encodeURIComponent(taskId)}&limit=${encodeURIComponent(String(clampRevisionLimit(limitCount)))}`);
+      return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
+    } catch (err) {
+      handleFirestoreReadError('adminGetRevisionsByTask_cf', err);
+      return [];
+    }
   }
 
   const readLimit = clampRevisionLimit(limitCount);
@@ -108,8 +114,13 @@ export async function adminGetAllRevisions(options?: {
     if (options?.status) params.set('status', options.status);
     if (options?.department) params.set('department', options.department);
     params.set('limit', options?.limit === null ? 'all' : String(options?.limit ?? DEFAULT_REVISION_READ_LIMIT));
-    const revisions = await cfApi<any[]>(`/revisions?${params.toString()}`);
-    return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
+    try {
+      const revisions = await cfApi<any[]>(`/revisions?${params.toString()}`);
+      return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
+    } catch (err) {
+      handleFirestoreReadError('adminGetAllRevisions_cf', err);
+      return [];
+    }
   }
 
   if (options?.department) throw new Error('Department-scoped revisions require Cloudflare API');
@@ -135,8 +146,13 @@ export async function adminGetPendingRevisionsByHandoff(handoffUid: string): Pro
       handoffUid,
       limit: String(MAX_REVISION_READ_LIMIT),
     });
-    const revisions = await cfApi<any[]>(`/revisions?${params.toString()}`);
-    return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
+    try {
+      const revisions = await cfApi<any[]>(`/revisions?${params.toString()}`);
+      return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
+    } catch (err) {
+      handleFirestoreReadError('adminGetPendingRevisionsByHandoff_cf', err);
+      return [];
+    }
   }
 
   const revisions = await adminGetAllRevisions({ status: 'pending', limit: MAX_REVISION_READ_LIMIT });
@@ -163,8 +179,13 @@ export async function adminGetRevisionsForUser(uid: string): Promise<RevisionLog
       visibleForUid: uid,
       limit: String(MAX_REVISION_READ_LIMIT),
     });
-    const revisions = await cfApi<any[]>(`/revisions?${params.toString()}`);
-    return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
+    try {
+      const revisions = await cfApi<any[]>(`/revisions?${params.toString()}`);
+      return revisions.map(cfRevision).filter(Boolean) as RevisionLog[];
+    } catch (err) {
+      handleFirestoreReadError('adminGetRevisionsForUser_cf', err);
+      return [];
+    }
   }
 
   const revisions = await adminGetAllRevisions({ limit: MAX_REVISION_READ_LIMIT });

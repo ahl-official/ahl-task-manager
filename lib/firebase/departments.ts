@@ -28,8 +28,13 @@ export interface Department {
 export async function adminGetDepartments(): Promise<Department[]> {
   return cachedFirestoreRead('departments:all', LONG_READ_CACHE_TTL_MS, async () => {
     if (hasCloudflareApi()) {
-      const departments = await cfApi<any[]>('/departments');
-      return departments.map(cfDepartment).filter(Boolean) as Department[];
+      try {
+        const departments = await cfApi<any[]>('/departments');
+        return departments.map(cfDepartment).filter(Boolean) as Department[];
+      } catch (err) {
+        handleFirestoreReadError('adminGetDepartments_cf', err);
+        return [];
+      }
     }
 
     try {

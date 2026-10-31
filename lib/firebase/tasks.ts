@@ -729,8 +729,13 @@ export async function adminGetReminderTasks(mode: 'due' | 'recent' | 'high' | 'p
 
 export async function adminGetOverdueTasks(): Promise<Task[]> {
   if (hasCloudflareApi()) {
-    const tasks = await cfApi<any[]>('/tasks/overdue');
-    return tasks.map(cfTask).filter(Boolean) as Task[];
+    try {
+      const tasks = await cfApi<any[]>('/tasks/overdue');
+      return tasks.map(cfTask).filter(Boolean) as Task[];
+    } catch (err) {
+      handleFirestoreReadError('adminGetOverdueTasks_cf', err);
+      return [];
+    }
   }
 
   const now = AdminTimestamp.now();
@@ -754,8 +759,13 @@ export async function adminGetOverdueTasks(): Promise<Task[]> {
 
 export async function adminGetTasksDueWithinHours(hours: number): Promise<Task[]> {
   if (hasCloudflareApi()) {
-    const tasks = await cfApi<any[]>(`/tasks/due-within?hours=${encodeURIComponent(String(hours))}`);
-    return tasks.map(cfTask).filter(Boolean) as Task[];
+    try {
+      const tasks = await cfApi<any[]>(`/tasks/due-within?hours=${encodeURIComponent(String(hours))}`);
+      return tasks.map(cfTask).filter(Boolean) as Task[];
+    } catch (err) {
+      handleFirestoreReadError('adminGetTasksDueWithinHours_cf', err);
+      return [];
+    }
   }
 
   const now  = new Date();
@@ -784,8 +794,13 @@ export async function adminGetTasksDueWithinHours(hours: number): Promise<Task[]
 export async function adminGetActiveTasks(limitCount = DEFAULT_TASK_READ_LIMIT): Promise<Task[]> {
   if (hasCloudflareApi()) {
     const readLimit = Math.min(Math.max(limitCount, 1), MAX_TASK_READ_LIMIT);
-    const tasks = await cfApi<any[]>(`/tasks/active?limit=${readLimit}`);
-    return tasks.map(cfTask).filter(Boolean) as Task[];
+    try {
+      const tasks = await cfApi<any[]>(`/tasks/active?limit=${readLimit}`);
+      return tasks.map(cfTask).filter(Boolean) as Task[];
+    } catch (err) {
+      handleFirestoreReadError('adminGetActiveTasks_cf', err);
+      return [];
+    }
   }
 
   const readLimit = Math.min(Math.max(limitCount, 1), MAX_TASK_READ_LIMIT);
