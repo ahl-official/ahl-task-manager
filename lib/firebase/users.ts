@@ -124,8 +124,8 @@ export async function adminGetAllUsers(): Promise<AHLUser[]> {
         const users = await cfApi<any[]>('/users');
         return users.map(cfUser).filter(Boolean) as AHLUser[];
       } catch (err) {
-        console.warn('[adminGetAllUsers] Cloudflare read failed (possibly read limit):', err);
-        return [];
+        handleFirestoreReadError('adminGetAllUsers_cf', err);
+        throw err; // let cachedFirestoreRead decide: serve last-known-good cache, else []
       }
     }
 
@@ -136,7 +136,7 @@ export async function adminGetAllUsers(): Promise<AHLUser[]> {
       handleFirestoreReadError('adminGetAllUsers', err);
       return [];
     }
-  });
+  }, []);
 }
 
 export async function adminCreateUser(user: Omit<AHLUser, 'createdAt' | 'updatedAt'>): Promise<void> {

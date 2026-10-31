@@ -33,7 +33,7 @@ export async function adminGetDepartments(): Promise<Department[]> {
         return departments.map(cfDepartment).filter(Boolean) as Department[];
       } catch (err) {
         handleFirestoreReadError('adminGetDepartments_cf', err);
-        return [];
+        throw err; // let cachedFirestoreRead decide: serve last-known-good cache, else []
       }
     }
 
@@ -48,7 +48,7 @@ export async function adminGetDepartments(): Promise<Department[]> {
       handleFirestoreReadError('adminGetDepartments', err);
       return [];
     }
-  });
+  }, []);
 }
 
 export async function adminCreateDepartment(name: string): Promise<Department> {

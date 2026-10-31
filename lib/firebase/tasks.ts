@@ -595,9 +595,9 @@ export async function adminGetAllTasks(filters?: {
         return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
       } catch (err) {
         handleFirestoreReadError('adminGetAllTasks_cf', err);
-        return [];
+        throw err; // let cachedFirestoreRead decide: serve last-known-good cache, else []
       }
-    });
+    }, []);
   }
 
   try {
@@ -671,26 +671,28 @@ export async function adminGetTaskCounts(department?: string, options: TaskReadS
   const params = taskScopeParams(department, scope);
   const requestParams = new URLSearchParams(params);
   if (fresh) requestParams.set('fresh', 'true');
+  const zeroCounts: TaskAggregateCounts = {
+    total: 0,
+    pending: 0,
+    inProgress: 0,
+    delayRequested: 0,
+    overdue: 0,
+    completed: 0,
+    verified: 0,
+    dead: 0,
+    active: 0,
+  };
   return cachedFirestoreRead('tasks:counts:' + params.toString(), LONG_READ_CACHE_TTL_MS, async () => {
     if (hasCloudflareApi()) {
       try {
         return await cfApi<TaskAggregateCounts>('/tasks/counts?' + requestParams);
       } catch (err) {
-        console.warn('[Read budget] Cloudflare task counts failed or quota reached, showing loaded metrics without scanning DB', err);
+        handleFirestoreReadError('adminGetTaskCounts_cf', err);
+        throw err; // let cachedFirestoreRead decide: serve last-known-good cache, else zero counts
       }
     }
-    return {
-      total: 0,
-      pending: 0,
-      inProgress: 0,
-      delayRequested: 0,
-      overdue: 0,
-      completed: 0,
-      verified: 0,
-      dead: 0,
-      active: 0,
-    };
-  });
+    return zeroCounts;
+  }, zeroCounts);
 }
 
 export async function adminSearchTasks(queryText: string, options: TaskReadScope & { department?: string; limit?: number } = {}): Promise<Task[]> {

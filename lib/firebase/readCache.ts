@@ -29,6 +29,7 @@ export async function cachedFirestoreRead<T>(
   key: string,
   ttlMs: number = LONG_READ_CACHE_TTL_MS,
   loader: () => Promise<T>,
+  emptyFallback?: T,
 ): Promise<T> {
   const now = Date.now();
   const cached = cache.get(key) as CacheEntry<T> | undefined;
@@ -60,6 +61,17 @@ export async function cachedFirestoreRead<T>(
           entry.promise = Promise.resolve(fallbackValue);
         }
         return fallbackValue;
+      }
+      // No cached value in THIS instance's memory (e.g. a cold start right after deploy).
+      // Degrade to a safe empty value instead of throwing and crashing the page, when the
+      // caller has given us one to use.
+      if (emptyFallback !== undefined) {
+        console.warn(
+          `[Read Limit Hit / No Cache] Database read for "${key}" failed with nothing cached yet, returning empty fallback:`,
+          error?.message || error
+        );
+        cache.delete(key);
+        return emptyFallback;
       }
       cache.delete(key);
       throw error;

@@ -125,7 +125,7 @@ export async function adminGetAllScores(): Promise<UserScore[]> {
         return scores.map(cfScore).filter(Boolean) as UserScore[];
       } catch (err) {
         handleFirestoreReadError('adminGetAllScores_cf', err);
-        return [];
+        throw err; // let cachedFirestoreRead decide: serve last-known-good cache, else []
       }
     }
 
@@ -150,7 +150,7 @@ export async function adminGetAllScores(): Promise<UserScore[]> {
       handleFirestoreReadError('adminGetAllScores', err);
       return [];
     }
-  });
+  }, []);
 }
 
 export async function adminGetScore(uid: string): Promise<UserScore | null> {
