@@ -147,17 +147,18 @@ export async function POST(req: NextRequest) {
     // Resolve the persisted assignee; never authorize against client-provided names or IDs.
     const row = await getRecurringPeriod(taskId, periodKey);
     const permissions = checklistPermissions(session, row);
-    if (row.category !== category || !permissions.canChange || (action === 'verify' && !permissions.canVerify)) {
+    if (row.category !== category || !permissions.canChange) {
       return NextResponse.json({ success: false, error: 'Forbidden for this checklist period' }, { status: 403 });
     }
     if (action === 'skip_day' && session.role !== 'admin') {
       return NextResponse.json({ success: false, error: 'Forbidden: Only admin can delete checklist tasks' }, { status: 403 });
     }
+    const resolvedAction = action === 'verify' ? 'complete' : action;
     const result = await completeRecurringTask({
       templateId: row.templateId, periodKey: row.periodKey,
       title: row.title, description: row.description, department: row.department,
       uid: row.userId, userName: row.userName, category: row.category,
-      action, isAdmin: session.role === 'admin',
+      action: resolvedAction, isAdmin: session.role === 'admin',
       remark: String(remark).trim(), remarkBy: session.name,
     });
     return NextResponse.json({ success: true, data: result });

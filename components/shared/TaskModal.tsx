@@ -33,7 +33,8 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const needsDates = !isDone && isAssignee && (task.status === 'In Progress' || task.status === 'Pending Accept') && (!task.startDate || !task.endDate);
   const canChangeDead = !isTimelySheet && (isAssignee || isHandoff || isAdmin);
   const canShift = !isTimelySheet && canUserShiftTask(currentUser ?? { uid: currentUid, role: userRole }, task);
-  const canVerify = !isTimelySheet && (isHandoff || isAdmin || isDelegator) && (task.status === 'Completed' || task.status === 'Shifted (Completed)');
+  const isRecurring = ['daily', 'weekly', 'monthly'].includes(String(task.category || '').toLowerCase());
+  const canVerify = !isRecurring && !isTimelySheet && (isHandoff || isAdmin || isDelegator) && (task.status === 'Completed' || task.status === 'Shifted (Completed)');
   const canEditChecker = isAdmin && !isTimelySheet && !isDone && (task.status === 'Pending Accept' || task.status === 'In Progress' || task.status === 'Shifted (Pending Accept)' || task.status === 'Shifted (In Progress)' || task.status === 'Delay Requested' || task.status === 'Overdue');
 
   const [mounted, setMounted] = useState(false);

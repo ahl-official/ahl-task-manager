@@ -202,8 +202,9 @@ export async function GET(req: NextRequest) {
     const periodUpdates: Array<{ id: string; status: 'Completed' | 'Verified' | 'Dead'; actualDate: string | null; dueDate: string }> = [];
     for (const { period, row, due } of periodMatches) {
       if (periodMatchCounts.get(row) !== 1) { skippedAmbiguous++; continue; }
-      const status = sheetStatus(row[8]);
-      if (!status || status === 'Pending') continue;
+      const rawStatus = sheetStatus(row[8]);
+      if (!rawStatus || rawStatus === 'Pending') continue;
+      const status = rawStatus === 'Dead' ? 'Dead' : 'Completed';
       periodUpdates.push({ id: period.id, status, actualDate: dateKey(row[7]), dueDate: due });
     }
     let periodOffset = 0;

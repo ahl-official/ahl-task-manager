@@ -2518,7 +2518,7 @@ async function routeRecurring(req, env, url) {
     if(!row)return json({success:false,error:'Checklist period not found'},{status:404});
     if((row.is_deleted||row.status==='Deleted')&&!['revive','remark'].includes(action))return json({success:false,error:'Revive this period before changing it'},{status:409});
     const now=nowIso(),deleted=action==='skip_day'||action==='dead';
-    const status=deleted?'Deleted':action==='uncomplete'||action==='revive'?'Pending':action==='remark'?row.status:(action==='verify'||data.isAdmin)?'Verified':'Completed';
+    const status=deleted?'Deleted':action==='uncomplete'||action==='revive'?'Pending':action==='remark'?row.status:'Completed';
     const completed=status==='Completed'||status==='Verified';
     const due=String(row.due_date||periodKey).slice(0,10);
     const completedAt=action==='remark'?row.completed_at:completed?(row.completed_at||now):null;

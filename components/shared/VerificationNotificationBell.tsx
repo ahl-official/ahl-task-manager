@@ -44,6 +44,7 @@ export default function VerificationNotificationBell({
           task.status === 'Completed'
           && !task.verifiedAt
           && isPortalTask(task)
+          && !['daily', 'weekly', 'monthly'].includes(String(task.category || '').toLowerCase())
           && (isAdmin || task.handoffUid === currentUid)
         )
         .sort((a, b) => new Date(b.completedAt || b.updatedAt).getTime() - new Date(a.completedAt || a.updatedAt).getTime());

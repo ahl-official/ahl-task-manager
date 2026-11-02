@@ -298,14 +298,13 @@ export default function ChecklistClient({
       toast.error('Cannot complete future checklist tasks before their scheduled date');
       return;
     }
-    const isVerifying = row.completed && row.status !== 'Verified' && elevated;
-    const action = isVerifying ? 'verify' : 'complete';
-    const nextStatus = isVerifying ? ('Verified' as const) : (elevated ? ('Verified' as const) : ('Completed' as const));
+    const action = 'complete';
+    const nextStatus = 'Completed' as const;
 
     // Optimistic UI update for 0ms instant feedback
     const prevRows = rows;
     const updatedRows = (list: ChecklistRow[]) => list.map(item => item.id === row.id
-      ? { ...item, completed: true, completedAt: item.completedAt || new Date().toISOString(), status: nextStatus, canComplete: false, canUncomplete: !isVerifying }
+      ? { ...item, completed: true, completedAt: item.completedAt || new Date().toISOString(), status: nextStatus, canComplete: false, canUncomplete: true }
       : item);
 
     setRows(updatedRows);
@@ -333,15 +332,15 @@ export default function ChecklistClient({
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
-      const serverStatus = data.data.status || nextStatus;
+      const serverStatus = (data.data.status === 'Verified' ? 'Completed' : data.data.status) || nextStatus;
       const serverUpdated = (list: ChecklistRow[]) => list.map(item => item.id === row.id
-        ? { ...item, completed: true, completedAt: data.data.completedAt, status: serverStatus, canComplete: false, canUncomplete: serverStatus !== 'Verified' }
+        ? { ...item, completed: true, completedAt: data.data.completedAt, status: serverStatus, canComplete: false, canUncomplete: true }
         : item);
       setRows(serverUpdated);
       if (categoryCache.current[row.category]) {
         categoryCache.current[row.category].rows = serverUpdated(categoryCache.current[row.category].rows);
       }
-      toast.success(serverStatus === 'Verified' ? 'Checklist task marked verified' : 'Checklist task marked complete');
+      toast.success('Checklist task marked complete');
     } catch (err: any) {
       setRows(prevRows); // Rollback on failure
       if (categoryCache.current[row.category]) {
@@ -823,12 +822,11 @@ export default function ChecklistClient({
                       <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">{row.label}</span>
                       <span className={cn(
                         'badge text-[10px]',
-                        row.status === 'Verified' ? 'bg-brand-100 text-brand-700 font-semibold' :
-                        row.completed ? 'bg-green-100 text-green-700' :
+                        (row.completed || row.status === 'Verified') ? 'bg-green-100 text-green-700' :
                         row.dead ? 'bg-red-600 text-white' :
                         'bg-amber-100 text-amber-700'
                       )}>
-                        {row.status}
+                        {row.status === 'Verified' ? 'Completed' : row.status}
                       </span>
                       {row.mine && <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-700">Mine</span>}
                     </div>
@@ -851,22 +849,19 @@ export default function ChecklistClient({
                       <button
                         type="button"
                         onClick={() => tick(row)}
-                        disabled={row.status === 'Verified' || (!row.completed && !row.canComplete) || (row.completed && !elevated) || ticking === row.id}
+                        disabled={row.completed || !row.canComplete || ticking === row.id}
                         title={!row.completed && !row.canComplete ? 'Past date tasks cannot be completed by members. Contact an admin.' : undefined}
                         className={cn(
                           'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors',
-                          row.status === 'Verified' ? 'bg-brand-100 text-brand-700 border border-brand-200 cursor-default' :
-                          row.completed ? (elevated ? 'bg-brand-600 text-white hover:bg-brand-700 cursor-pointer shadow-xs' : 'bg-green-100 text-green-700 cursor-default') :
+                          row.completed ? 'bg-green-100 text-green-700 border border-green-200 cursor-default' :
                           !row.canComplete ? 'bg-gray-100 text-gray-500 cursor-not-allowed' :
                           'bg-brand-600 text-white hover:bg-brand-700 cursor-pointer'
                         )}
                       >
                         {ticking === row.id ? <Loader2 size={15} className="animate-spin" /> :
-                         row.status === 'Verified' ? <CheckCircle2 size={16} /> :
                          row.completed ? <CheckCircle2 size={16} /> :
                          <Circle size={16} />}
-                        {row.status === 'Verified' ? 'Verified' :
-                         row.completed ? (elevated ? 'Verify' : 'Completed') :
+                        {row.completed ? 'Completed' :
                          row.canComplete ? 'Mark Complete' : (row as any).isPast ? 'Past Due (Locked)' : row.userName}
                       </button>
                     )}

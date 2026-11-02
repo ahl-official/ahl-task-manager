@@ -120,11 +120,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         return NextResponse.json({ success: false, error: 'Revive this task before completing it' }, { status: 400 });
       }
       const shouldCountCompletion = task.status !== 'Completed' && task.status !== 'Verified';
+      const isRecurring = ['daily', 'weekly', 'monthly'].includes(String(task.category || '').toLowerCase());
+      const nextStatus = (isAdmin && !isRecurring) ? 'Verified' : 'Completed';
 
-      updatedTask = await adminUpdateTaskStatus(params.id, isAdmin ? 'Verified' : 'Completed', {
+      updatedTask = await adminUpdateTaskStatus(params.id, nextStatus, {
         acceptedAt: task.acceptedAt ?? now,
         completedAt: now,
-        verifiedAt: isAdmin ? now : task.verifiedAt,
+        verifiedAt: (isAdmin && !isRecurring) ? now : task.verifiedAt,
       });
       if (shouldCountCompletion) {
         const scoreFields: Parameters<typeof adminIncrementScores>[1] = ['tasksCompleted'];
@@ -137,13 +139,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         await adminIncrementScores(scoreUid, scoreFields);
       }
 
-      if (isAdmin) {
+      if (isAdmin && !isRecurring) {
         await sendWhatsApp(
           task.assignedToWa,
           msgTaskVerified({ taskId: task.taskId, handoffName: session.name }),
           task.taskId,
         );
-      } else if (task.handoffWa && task.handoffWa !== task.assignedToWa) {
+      } else if (!isRecurring && task.handoffWa && task.handoffWa !== task.assignedToWa) {
         // Notify handoff to verify
         await sendWhatsApp(
           task.handoffWa,
@@ -162,6 +164,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     else if (action === 'verify') {
+      const isRecurring = ['daily', 'weekly', 'monthly'].includes(String(task.category || '').toLowerCase());
+      if (isRecurring) {
+        return NextResponse.json({ success: false, error: 'Verification is not applicable for recurring tasks; completion is the final step' }, { status: 400 });
+      }
       const canVerify = session.role === 'admin' || task.handoffUid === session.uid || task.shiftedByUid === session.uid;
       if (!canVerify) {
         return NextResponse.json({ success: false, error: 'Only checker, delegator, or admin can verify' }, { status: 403 });

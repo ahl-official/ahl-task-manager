@@ -1456,8 +1456,7 @@ async function routeRecurring(req: Request, env: Env, url: URL) {
     const uid = String(data.uid || template?.assigned_to || taskRecord?.assigned_to || '');
     const userName = String(data.userName || template?.assigned_to_name || taskRecord?.assigned_to_name || '');
     const category = String(data.category || template?.category || taskRecord?.category || 'Daily');
-    const isVerify = Boolean(data.isAdmin || data.action === 'verify' || data.status === 'Verified');
-    const status = action === 'dead' ? 'Dead' : isVerify ? 'Verified' : 'Completed';
+    const status = action === 'dead' ? 'Dead' : 'Completed';
     const remark = data.remark ? String(data.remark).trim() : null;
     const remarkBy = data.remarkBy ? String(data.remarkBy).trim() : null;
 
