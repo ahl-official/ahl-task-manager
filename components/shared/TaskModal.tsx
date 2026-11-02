@@ -28,12 +28,12 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const isTimelySheet = task.createdBy === 'timely-sheet' || /^(office|salon|weekly)-/i.test(task.taskId);
   const isDone = task.status === 'Completed' || task.status === 'Verified' || task.status === 'Shifted (Completed)' || task.status === 'Shifted (Verified)';
   const canDelete = isAdmin && !isTimelySheet && !isDone && task.category === 'One Time' && !task.parentTaskId && !task.childTaskId;
-  const displayStatus = task.status;
+  const isRecurring = ['daily', 'weekly', 'monthly', 'recurring'].includes(String(task.category || '').toLowerCase()) || Boolean((task as any).isRecurring);
+  const displayStatus = isRecurring && task.status === 'Verified' ? 'Completed' : task.status;
   const due = getDueBadge(task.endDate, displayStatus);
   const needsDates = !isDone && isAssignee && (task.status === 'In Progress' || task.status === 'Pending Accept') && (!task.startDate || !task.endDate);
   const canChangeDead = !isTimelySheet && (isAssignee || isHandoff || isAdmin);
   const canShift = !isTimelySheet && canUserShiftTask(currentUser ?? { uid: currentUid, role: userRole }, task);
-  const isRecurring = ['daily', 'weekly', 'monthly'].includes(String(task.category || '').toLowerCase());
   const canVerify = !isRecurring && !isTimelySheet && (isHandoff || isAdmin || isDelegator) && (task.status === 'Completed' || task.status === 'Shifted (Completed)');
   const canEditChecker = isAdmin && !isTimelySheet && !isDone && (task.status === 'Pending Accept' || task.status === 'In Progress' || task.status === 'Shifted (Pending Accept)' || task.status === 'Shifted (In Progress)' || task.status === 'Delay Requested' || task.status === 'Overdue');
 
@@ -131,7 +131,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
       const successMessage: Record<string, string> = {
         accept: 'Task accepted successfully',
         'set-dates': 'Task dates saved successfully',
-        complete: isAdmin ? 'Task completed and verified successfully' : 'Task completed successfully',
+        complete: (isAdmin && !isRecurring) ? 'Task completed and verified successfully' : 'Task completed successfully',
         verify: 'Task verified successfully',
         uncomplete: 'Completion undone',
         dead: isAdmin ? 'Task flagged Dead' : 'Dead status request submitted to admin for approval',

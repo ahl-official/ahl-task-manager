@@ -750,14 +750,20 @@ export default function TaskListClient({
           onChange={e => setStatus(e.target.value)}
           className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
-          {STATUS_OPTIONS.map(s => (
+          {(RECURRING_CATEGORIES.has(categoryFilter) ? STATUS_OPTIONS.filter(s => s !== 'Verified') : STATUS_OPTIONS).map(s => (
             <option key={s} value={s}>{s === 'all' ? 'All Statuses' : s}</option>
           ))}
         </select>
 
         <select
           value={categoryFilter}
-          onChange={e => setCategory(e.target.value)}
+          onChange={e => {
+            const nextCat = e.target.value;
+            setCategory(nextCat);
+            if (RECURRING_CATEGORIES.has(nextCat) && statusFilter === 'Verified') {
+              setStatus('all');
+            }
+          }}
           className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
           {CATEGORY_OPTIONS.map(c => (
@@ -850,11 +856,19 @@ export default function TaskListClient({
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={cn('badge', STATUS_COLORS[task.status])}>{task.status}</span>
+                      {(() => {
+                        const isRec = RECURRING_CATEGORIES.has(task.category || '');
+                        const displayStatus = isRec && task.status === 'Verified' ? 'Completed' : task.status;
+                        return <span className={cn('badge', STATUS_COLORS[displayStatus])}>{displayStatus}</span>;
+                      })()}
                     </td>
                     <td className="px-4 py-3">
                       {['Completed', 'Verified'].includes(task.status) ? (
-                        <span className={cn('badge text-[10px]', STATUS_COLORS[task.status])}>{task.status}</span>
+                        (() => {
+                          const isRec = RECURRING_CATEGORIES.has(task.category || '');
+                          const displayStatus = isRec && task.status === 'Verified' ? 'Completed' : task.status;
+                          return <span className={cn('badge text-[10px]', STATUS_COLORS[displayStatus])}>{displayStatus}</span>;
+                        })()
                       ) : scheduled ? (
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className="rounded-full bg-gray-900 px-2 py-0.5 text-[10px] font-semibold text-white">#{scheduled.rank}</span>

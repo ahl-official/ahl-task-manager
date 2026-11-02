@@ -547,7 +547,7 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
                               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                                 <span className="font-mono text-[10px] text-gray-400">{task.taskId}</span>
                                 <span className={cn('badge text-[10px] py-0', STATUS_COLORS[task.status])}>
-                                  {task.status}
+                                  {['daily', 'weekly', 'monthly'].includes(String(task.category || '').toLowerCase()) && task.status === 'Verified' ? 'Completed' : task.status}
                                 </span>
                                 {task.endDate && (
                                   <span className="text-[10px] text-gray-400">
