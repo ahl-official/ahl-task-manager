@@ -52,6 +52,16 @@ function getWeekMonday(dateStr: string) {
   return dt.toISOString().slice(0, 10);
 }
 
+type ChecklistCacheEntry = {
+  rows: ChecklistRow[];
+  elevated: boolean;
+  isAdmin: boolean;
+  currentUserName: string;
+  nextCursor: string | null;
+};
+
+const moduleChecklistCache: Record<string, ChecklistCacheEntry> = {};
+
 export default function ChecklistClient({
   initialCategory = 'Daily',
   initialTaskId = '',
@@ -92,9 +102,27 @@ export default function ChecklistClient({
         }
       })
       .catch(() => {});
+
+    const handleGlobalRefresh = () => {
+      for (const k of Object.keys(moduleChecklistCache)) {
+        delete moduleChecklistCache[k];
+      }
+      fetchedChecklistKeys.current.clear();
+      searchedKeys.current.clear();
+    };
+    window.addEventListener('app-global-refresh', handleGlobalRefresh);
+    return () => window.removeEventListener('app-global-refresh', handleGlobalRefresh);
   }, []);
 
-  const categoryCache = useRef<Record<string, { rows: ChecklistRow[]; elevated: boolean; isAdmin: boolean; currentUserName: string; nextCursor: string | null }>>({});
+  const categoryCache = useRef<Record<string, ChecklistCacheEntry>>(moduleChecklistCache);
+
+  const updateCacheRows = (updater: (list: ChecklistRow[]) => ChecklistRow[], targetCategory?: string) => {
+    for (const [key, entry] of Object.entries(categoryCache.current)) {
+      if (!targetCategory || key.startsWith(`${targetCategory}:`)) {
+        entry.rows = updater(entry.rows);
+      }
+    }
+  };
   const pageSentinel = useRef<HTMLDivElement | null>(null);
   const selectedTaskRow = useRef<HTMLDivElement | null>(null);
   const selectedTaskFocused = useRef(false);
@@ -195,9 +223,31 @@ export default function ChecklistClient({
         const data = await res.json();
         if (active && data.success && Array.isArray(data.data) && data.data.length > 0) {
           setRows(current => {
-            const ids = new Set(current.map(r => r.id));
-            const fresh = data.data.filter((r: ChecklistRow) => !ids.has(r.id));
-            return [...fresh, ...current];
+            const byId = new Map(current.map(r => [r.id, r]));
+            let changed = false;
+            for (const r of data.data) {
+              if (!byId.has(r.id)) {
+                byId.set(r.id, r);
+                changed = true;
+              }
+            }
+            if (changed) {
+              const merged = Array.from(byId.values());
+              const activeCacheKey = `${category}:${date || 'today'}`;
+              if (categoryCache.current[activeCacheKey]) {
+                categoryCache.current[activeCacheKey].rows = merged;
+              } else {
+                categoryCache.current[activeCacheKey] = {
+                  rows: merged,
+                  elevated,
+                  isAdmin,
+                  currentUserName,
+                  nextCursor: null,
+                };
+              }
+              return merged;
+            }
+            return current;
           });
         }
       } catch (e) {
@@ -209,6 +259,24 @@ export default function ChecklistClient({
   }, [initialTaskId, loading, category, date, rows]);
 
   async function loadRows(nextCategory = category, nextDate = date, forceRefresh = false) {
+    // Preserve current active rows into cache before switching tabs or dates
+    const currentKey = `${category}:${date || 'today'}`;
+    if (rows.length > 0) {
+      if (categoryCache.current[currentKey]) {
+        const byId = new Map(categoryCache.current[currentKey].rows.map(r => [r.id, r]));
+        for (const r of rows) byId.set(r.id, r);
+        categoryCache.current[currentKey].rows = Array.from(byId.values());
+      } else {
+        categoryCache.current[currentKey] = {
+          rows,
+          elevated,
+          isAdmin,
+          currentUserName,
+          nextCursor,
+        };
+      }
+    }
+
     const cacheKey = `${nextCategory}:${nextDate || 'today'}`;
     requestKey.current = cacheKey;
     if (forceRefresh) searchedKeys.current.clear();
@@ -308,10 +376,7 @@ export default function ChecklistClient({
       : item);
 
     setRows(updatedRows);
-    const activeCacheKey = `${row.category}:${date || 'today'}`;
-    if (categoryCache.current[activeCacheKey]) {
-      categoryCache.current[activeCacheKey].rows = updatedRows(categoryCache.current[activeCacheKey].rows);
-    }
+    updateCacheRows(updatedRows, row.category);
     setTicking(row.id);
 
     try {
@@ -337,15 +402,11 @@ export default function ChecklistClient({
         ? { ...item, completed: true, completedAt: data.data.completedAt, status: serverStatus, canComplete: false, canUncomplete: true }
         : item);
       setRows(serverUpdated);
-      if (categoryCache.current[row.category]) {
-        categoryCache.current[row.category].rows = serverUpdated(categoryCache.current[row.category].rows);
-      }
+      updateCacheRows(serverUpdated, row.category);
       toast.success('Checklist task marked complete');
     } catch (err: any) {
       setRows(prevRows); // Rollback on failure
-      if (categoryCache.current[row.category]) {
-        categoryCache.current[row.category].rows = prevRows;
-      }
+      updateCacheRows(() => prevRows, row.category);
       toast.error(err.message ?? 'Failed to complete checklist task');
     } finally {
       setTicking(null);
@@ -366,10 +427,7 @@ export default function ChecklistClient({
       : item);
 
     setRows(updatedRows);
-    const activeCacheKey = `${row.category}:${date || 'today'}`;
-    if (categoryCache.current[activeCacheKey]) {
-      categoryCache.current[activeCacheKey].rows = updatedRows(categoryCache.current[activeCacheKey].rows);
-    }
+    updateCacheRows(updatedRows, row.category);
     setTicking(row.id);
 
     try {
@@ -393,9 +451,7 @@ export default function ChecklistClient({
       toast.success('Marked as not completed');
     } catch (err: any) {
       setRows(prevRows);
-      if (categoryCache.current[row.category]) {
-        categoryCache.current[row.category].rows = prevRows;
-      }
+      updateCacheRows(() => prevRows, row.category);
       toast.error(err.message ?? 'Failed to undo completion');
     } finally {
       setTicking(null);
@@ -436,9 +492,7 @@ export default function ChecklistClient({
         status: data.data.dead ? ('Dead' as const) : item.completed ? ('Completed' as const) : ('Pending' as const),
       } : item);
       setRows(updated);
-      if (categoryCache.current[row.category]) {
-        categoryCache.current[row.category].rows = updated(categoryCache.current[row.category].rows);
-      }
+      updateCacheRows(updated, row.category);
       setRemark('');
       setActiveRemarkRow(null);
       toast.success(action === 'dead' ? 'Task flagged Dead' : action === 'revive' ? 'Task revived' : 'Remark added');
@@ -472,10 +526,7 @@ export default function ChecklistClient({
       if (!data.success) throw new Error(data.error);
       // Day skip hides from checklist and drops that day from planned score; past days stay.
       setRows(prev => prev.filter(r => r.id !== row.id));
-      const cacheKey = `${row.category}:${date || 'today'}`;
-      if (categoryCache.current[cacheKey]) {
-        categoryCache.current[cacheKey].rows = categoryCache.current[cacheKey].rows.filter(r => r.id !== row.id);
-      }
+      updateCacheRows(list => list.filter(r => r.id !== row.id), row.category);
       toast.success('Task removed for this period');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to remove this day');
@@ -621,8 +672,31 @@ export default function ChecklistClient({
         if (controller.signal.aborted) return;
         if (requestKey.current !== `${category}:${date || 'today'}`) return;
         setRows(current => {
-          const ids = new Set(current.map(row => row.id));
-          return [...current, ...data.data.filter((row: ChecklistRow) => !ids.has(row.id))];
+          const byId = new Map(current.map(row => [row.id, row]));
+          let changed = false;
+          for (const row of (data.data || [])) {
+            if (!byId.has(row.id)) {
+              byId.set(row.id, row);
+              changed = true;
+            }
+          }
+          if (changed) {
+            const merged = Array.from(byId.values());
+            const activeCacheKey = `${category}:${date || 'today'}`;
+            if (categoryCache.current[activeCacheKey]) {
+              categoryCache.current[activeCacheKey].rows = merged;
+            } else {
+              categoryCache.current[activeCacheKey] = {
+                rows: merged,
+                elevated,
+                isAdmin,
+                currentUserName,
+                nextCursor: null,
+              };
+            }
+            return merged;
+          }
+          return current;
         });
       } catch (err: any) {
         if (err.name !== 'AbortError') {

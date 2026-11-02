@@ -185,8 +185,20 @@ export default function ScoresClient({
     fetch(`/api/tasks?${params}`, { signal: controller.signal })
       .then(response => response.json())
       .then(result => {
-        if (!controller.signal.aborted && result.success && Array.isArray(result.data))
-          setTaskItems(result.data);
+        if (!controller.signal.aborted && result.success && Array.isArray(result.data)) {
+          setTaskItems(current => {
+            const byId = new Map(current.map(t => [t.taskId, t]));
+            let changed = false;
+            for (const t of result.data) {
+              const prev = byId.get(t.taskId);
+              if (!prev || prev.updatedAt !== t.updatedAt) {
+                byId.set(t.taskId, t);
+                changed = true;
+              }
+            }
+            return changed ? Array.from(byId.values()) : current;
+          });
+        }
       })
       .catch(() => {})
       .finally(() => {
