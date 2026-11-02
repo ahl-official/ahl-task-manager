@@ -137,6 +137,7 @@ export default function ScoresClient({
   const [nameQuery, setNameQuery] = useState('');
   const [nameMenuOpen, setNameMenuOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [isFetchingUserTasks, setIsFetchingUserTasks] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -180,13 +181,19 @@ export default function ScoresClient({
     if (!selectedUser) return;
     const controller = new AbortController();
     const params = new URLSearchParams({ scope: 'all', filter: 'true', assignedTo: selectedUser, weekStart: selectedWeekMeta.weekStart, weekEnd: selectedWeekMeta.weekEnd, excludeRecurring: 'true', limit: '100' });
+    setIsFetchingUserTasks(true);
     fetch(`/api/tasks?${params}`, { signal: controller.signal })
       .then(response => response.json())
       .then(result => {
         if (!controller.signal.aborted && result.success && Array.isArray(result.data))
           setTaskItems(result.data);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsFetchingUserTasks(false);
+        }
+      });
     return () => controller.abort();
   }, [selectedUser, selectedWeekMeta.weekStart, selectedWeekMeta.weekEnd]);
 
@@ -550,6 +557,7 @@ export default function ScoresClient({
     onOpenTask: setSelectedTask,
     pdfWeekLabel,
     misLoading,
+    isFetchingTasks: isFetchingUserTasks,
   };
 
   const dateFilterBar = (
@@ -900,6 +908,7 @@ function ScoreList({
   onOpenTask,
   pdfWeekLabel,
   misLoading,
+  isFetchingTasks,
 }: {
   scores: any[];
   onSelectUser: (uid: string) => void;
@@ -911,6 +920,7 @@ function ScoreList({
   onOpenTask: (task: TaskSerialized) => void;
   pdfWeekLabel?: string;
   misLoading?: boolean;
+  isFetchingTasks?: boolean;
 }) {
   if (scores.length === 0) {
     return <div className="card p-10 text-center text-gray-400">No scores yet</div>;
@@ -1005,7 +1015,14 @@ function ScoreList({
 
                   {visibleTasks.length === 0 && (
                     <div className="rounded-lg bg-gray-50 px-4 py-6 text-center text-sm text-gray-400">
-                      No tasks in this category
+                      {isFetchingTasks ? (
+                        <div className="flex items-center justify-center gap-2">
+                          <Loader2 size={14} className="animate-spin text-brand-600" />
+                          <span>Loading tasks from server...</span>
+                        </div>
+                      ) : (
+                        'No tasks in this category'
+                      )}
                     </div>
                   )}
 

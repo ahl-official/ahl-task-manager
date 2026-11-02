@@ -4,7 +4,7 @@ import ServerLimitBanner from '@/components/shared/ServerLimitBanner';
 
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowRight, Building2, Clock3, X } from 'lucide-react';
+import { ArrowRight, Building2, Clock3, Loader2, X } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS, normalizeBaseStatus } from '@/lib/utils';
 import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import TaskModal from '@/components/shared/TaskModal';
@@ -104,6 +104,7 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
   const [selectedTask, setSelectedTask] = useState<TaskSerialized | null>(null);
   const [deptFilter, setDeptFilter]  = useState<string>('all');
   const [mounted, setMounted] = useState(false);
+  const [isFetchingTasks, setIsFetchingTasks] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -132,6 +133,7 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
     if (selectedDepartment) params.set('department', selectedDepartment);
     else if (deptFilter !== 'all') params.set('department', deptFilter);
 
+    setIsFetchingTasks(true);
     fetch('/api/tasks?' + params.toString(), { signal: controller.signal })
       .then(r => r.json())
       .then(json => {
@@ -154,6 +156,11 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
         if (error.name !== 'AbortError') {
           console.error('User/status task lookup failed', error);
           fetchedFilterKeys.current.delete(fetchKey);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsFetchingTasks(false);
         }
       });
 
@@ -557,7 +564,14 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
 
                     {isSelected && userTasks.length === 0 && (
                       <div className="bg-gray-50 px-5 pb-4 text-xs text-gray-400">
-                        No tasks for this filter
+                        {isFetchingTasks ? (
+                          <div className="flex items-center gap-2 py-2">
+                            <Loader2 size={13} className="animate-spin text-brand-600" />
+                            <span>Loading tasks from server...</span>
+                          </div>
+                        ) : (
+                          'No tasks for this filter'
+                        )}
                       </div>
                     )}
                   </div>

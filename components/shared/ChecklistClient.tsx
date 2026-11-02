@@ -793,7 +793,12 @@ export default function ChecklistClient({
 
         {!loading && visibleRows.length === 0 && (
           <div className="px-4 py-12 text-center text-sm text-gray-400">
-            {searching ? 'Searching checklist...' : initialTaskId && search === initialTaskId
+            {searching ? (
+              <div className="flex items-center justify-center gap-2">
+                <Loader2 size={16} className="animate-spin text-brand-600" />
+                <span>Searching checklist on server...</span>
+              </div>
+            ) : initialTaskId && search === initialTaskId
               ? 'This recurring task is not scheduled for the selected date.'
               : `No ${category.toLowerCase()} checklist tasks match these filters.`}
           </div>

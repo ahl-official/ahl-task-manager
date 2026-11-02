@@ -807,8 +807,15 @@ export default function TaskListClient({
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-gray-400">
-                    No tasks found
+                  <td colSpan={8} className="px-4 py-12 text-center text-sm text-gray-400">
+                    {(isFetchingFilter || isSearchingServer) ? (
+                      <div className="flex items-center justify-center gap-2">
+                        <Loader2 size={16} className="animate-spin text-brand-600" />
+                        <span>{isSearchingServer ? 'Searching tasks on server...' : 'Loading tasks from server...'}</span>
+                      </div>
+                    ) : (
+                      'No tasks found'
+                    )}
                   </td>
                 </tr>
               )}

@@ -1721,6 +1721,19 @@ function periodRowFromDb(row) {
 __name(periodRowFromDb, "periodRowFromDb");
 async function materializeMonthForTemplate(env, template, monthKey) {
   await ensurePeriodRowsTable(env);
+  if (template.isActive === false || template.is_active === 0) {
+    return { inserted: 0, monthKey, count: 0, skippedInactive: true };
+  }
+  const assigneeUid = template.assignedTo || template.userId || "";
+  const assigneeName = template.assignedToName || template.userName || "";
+  if (assigneeUid || assigneeName) {
+    const userRow = await env.DB.prepare(
+      "SELECT is_active FROM users WHERE (uid = ? AND uid != '') OR (name != '' AND LOWER(name) = LOWER(?)) LIMIT 1"
+    ).bind(assigneeUid, assigneeName).first();
+    if (userRow && (userRow.is_active === 0 || userRow.is_active === false)) {
+      return { inserted: 0, monthKey, count: 0, skippedDeactivated: true };
+    }
+  }
   const locks = await env.DB.prepare('SELECT week_start, week_end FROM mis_reconciled_people WHERE name_key = ? AND verified = 1').bind(normalizePersonName(template.assignedToName)).all();
   const specs = buildMonthPeriodRows(template, monthKey).filter(spec => !(locks.results || []).some(lock => spec.dueDate >= lock.week_start && spec.dueDate <= lock.week_end));
   if (specs.length === 0) return { inserted: 0, monthKey };
@@ -1848,16 +1861,22 @@ async function listRecurringDefinitionIds(env, offset, limit) {
   const openStatuses = ["Pending Accept", "In Progress", "Delay Requested", "Overdue"];
   const statusPlaceholders = openStatuses.map(() => "?").join(",");
   const standing = await env.DB.prepare(
-    `SELECT task_id AS id FROM tasks_current
-     WHERE LOWER(category) IN ('daily', 'weekly', 'monthly')
-       AND status IN (${statusPlaceholders})
-     ORDER BY task_id ASC
+    `SELECT t.task_id AS id FROM tasks_current t
+     LEFT JOIN users u ON u.uid = t.assigned_to
+     WHERE LOWER(t.category) IN ('daily', 'weekly', 'monthly')
+       AND t.status IN (${statusPlaceholders})
+       AND (u.is_active IS NULL OR u.is_active = 1)
+     ORDER BY t.task_id ASC
      LIMIT ? OFFSET ?`
   ).bind(...openStatuses, limit, offset).all();
   const ids = (standing.results || []).map((r) => String(r.id)).filter(Boolean);
   if (offset === 0) {
     const templates = await env.DB.prepare(
-      `SELECT id FROM recurring_templates WHERE is_active = 1 ORDER BY id ASC LIMIT ?`
+      `SELECT t.id FROM recurring_templates t
+       LEFT JOIN users u ON u.uid = t.assigned_to
+       WHERE t.is_active = 1
+         AND (u.is_active IS NULL OR u.is_active = 1)
+       ORDER BY t.id ASC LIMIT ?`
     ).bind(limit).all();
     for (const row of templates.results || []) {
       const id = String(row.id || "");
@@ -1865,9 +1884,11 @@ async function listRecurringDefinitionIds(env, offset, limit) {
     }
   }
   const countRow = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM tasks_current
-     WHERE LOWER(category) IN ('daily', 'weekly', 'monthly')
-       AND status IN (${statusPlaceholders})`
+    `SELECT COUNT(*) AS n FROM tasks_current t
+     LEFT JOIN users u ON u.uid = t.assigned_to
+     WHERE LOWER(t.category) IN ('daily', 'weekly', 'monthly')
+       AND t.status IN (${statusPlaceholders})
+       AND (u.is_active IS NULL OR u.is_active = 1)`
   ).bind(...openStatuses).first();
   const total = Number(countRow?.n || 0);
   return { ids, total, nextOffset: offset + (standing.results || []).length, done: offset + (standing.results || []).length >= total };
@@ -1914,16 +1935,18 @@ function recurringTitleKey(row) {
 }
 __name(recurringTitleKey, "recurringTitleKey");
 async function loadOpenRecurringTasks(env, category, userName) {
-  let query = `SELECT * FROM tasks_current
-    WHERE LOWER(category) IN ('daily', 'weekly', 'monthly')
-    AND LOWER(status) IN ('in progress','pending','pending accept','delay requested','overdue')`;
+  let query = `SELECT t.* FROM tasks_current t
+    LEFT JOIN users u ON u.uid = t.assigned_to
+    WHERE LOWER(t.category) IN ('daily', 'weekly', 'monthly')
+    AND LOWER(t.status) IN ('in progress','pending','pending accept','delay requested','overdue')
+    AND (u.is_active IS NULL OR u.is_active = 1)`;
   const binds = [];
   if (category && category.toLowerCase() !== "all") {
-    query += " AND LOWER(category) = LOWER(?)";
+    query += " AND LOWER(t.category) = LOWER(?)";
     binds.push(category);
   }
   if (userName) {
-    query += " AND LOWER(assigned_to_name) = LOWER(?)";
+    query += " AND LOWER(t.assigned_to_name) = LOWER(?)";
     binds.push(userName);
   }
   const res = await env.DB.prepare(query).bind(...binds).all();
@@ -2136,7 +2159,12 @@ async function routeRecurring(req, env, url) {
       const result = await materializeMonthForTemplate(env, template, monthKey);
       return json({ success: true, data: result });
     }
-    const templatesRes = await env.DB.prepare("SELECT * FROM recurring_templates WHERE is_active = 1").all();
+    const templatesRes = await env.DB.prepare(
+      `SELECT t.* FROM recurring_templates t
+       LEFT JOIN users u ON u.uid = t.assigned_to
+       WHERE t.is_active = 1
+         AND (u.is_active IS NULL OR u.is_active = 1)`
+    ).all();
     const templates = (templatesRes.results || []).map(recurringTemplateFromRow).filter(Boolean);
     for (const taskTemplate of await loadOpenRecurringTasks(env, null, null)) {
       if (!templates.some((t) => t.id === taskTemplate.id)) {
