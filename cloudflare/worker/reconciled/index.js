@@ -1786,10 +1786,8 @@ async function templatesWithPeriodRows(env, templateIds) {
 }
 __name(templatesWithPeriodRows, "templatesWithPeriodRows");
 async function ensureCurrentMonthRows(env, templates, monthKey) {
-  const ids = templates.map((t) => t.id).filter(Boolean);
-  const withRows = await templatesWithPeriodRows(env, ids);
   for (const t of templates) {
-    if (!withRows.has(t.id)) continue;
+    // Materialize if no row exists for this month (works for both new and existing templates)
     const existing = await env.DB.prepare(
       "SELECT 1 AS ok FROM recurring_period_rows WHERE template_id = ? AND month_key = ? LIMIT 1"
     ).bind(t.id, monthKey).first();
@@ -1860,6 +1858,17 @@ __name(resolveRecurringDefinition, "resolveRecurringDefinition");
 async function listRecurringDefinitionIds(env, offset, limit) {
   const openStatuses = ["Pending Accept", "In Progress", "Delay Requested", "Overdue"];
   const statusPlaceholders = openStatuses.map(() => "?").join(",");
+  // Always fetch ALL active recurring_templates (no LIMIT/OFFSET — there are usually <500)
+  const templatesRes = await env.DB.prepare(
+    `SELECT t.id FROM recurring_templates t
+     LEFT JOIN users u ON u.uid = t.assigned_to
+     WHERE t.is_active = 1
+       AND (u.is_active IS NULL OR u.is_active = 1)
+     ORDER BY t.id ASC`
+  ).all();
+  const templateIds = new Set((templatesRes.results || []).map((r) => String(r.id || "")).filter(Boolean));
+
+  // Also paginate through tasks_current standing tasks
   const standing = await env.DB.prepare(
     `SELECT t.task_id AS id FROM tasks_current t
      LEFT JOIN users u ON u.uid = t.assigned_to
@@ -1869,20 +1878,14 @@ async function listRecurringDefinitionIds(env, offset, limit) {
      ORDER BY t.task_id ASC
      LIMIT ? OFFSET ?`
   ).bind(...openStatuses, limit, offset).all();
-  const ids = (standing.results || []).map((r) => String(r.id)).filter(Boolean);
-  if (offset === 0) {
-    const templates = await env.DB.prepare(
-      `SELECT t.id FROM recurring_templates t
-       LEFT JOIN users u ON u.uid = t.assigned_to
-       WHERE t.is_active = 1
-         AND (u.is_active IS NULL OR u.is_active = 1)
-       ORDER BY t.id ASC LIMIT ?`
-    ).bind(limit).all();
-    for (const row of templates.results || []) {
-      const id = String(row.id || "");
-      if (id && !ids.includes(id)) ids.push(id);
-    }
+  const standingIds = (standing.results || []).map((r) => String(r.id)).filter(Boolean);
+
+  // Merge: standing page + all template IDs not already in standing page
+  const ids = [...standingIds];
+  for (const id of templateIds) {
+    if (!ids.includes(id)) ids.push(id);
   }
+
   const countRow = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM tasks_current t
      LEFT JOIN users u ON u.uid = t.assigned_to
@@ -1890,8 +1893,12 @@ async function listRecurringDefinitionIds(env, offset, limit) {
        AND t.status IN (${statusPlaceholders})
        AND (u.is_active IS NULL OR u.is_active = 1)`
   ).bind(...openStatuses).first();
-  const total = Number(countRow?.n || 0);
-  return { ids, total, nextOffset: offset + (standing.results || []).length, done: offset + (standing.results || []).length >= total };
+  const standingTotal = Number(countRow?.n || 0);
+  // Total is the union of standing tasks + unique template IDs
+  // But since we always return all template IDs on every page, mark done when standing is exhausted
+  const standingPageLen = standingIds.length;
+  const done = offset + standingPageLen >= standingTotal;
+  return { ids, total: standingTotal + templateIds.size, nextOffset: offset + standingPageLen, done };
 }
 __name(listRecurringDefinitionIds, "listRecurringDefinitionIds");
 function taskAsRecurringTemplate(row) {
