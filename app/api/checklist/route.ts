@@ -52,16 +52,19 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    const targetUid = mineParam ? session.uid : (searchParams.get('assignedTo') || (userNameParam ? '' : session.uid));
+    const targetUserName = mineParam ? session.name : (userNameParam || session.name);
+
     const page = await getRecurringChecklistPage({
       category,
       date: dateParam,
       exactDate,
       cursor,
       search: search.length >= 2 ? search : undefined,
-      uid: mineParam ? session.uid : (searchParams.get('assignedTo') || session.uid),
-      userName: mineParam ? session.name : (userNameParam || session.name),
+      uid: targetUid,
+      userName: targetUserName,
       scopeUser: Boolean(mineParam || userNameParam),
-      department: session.role === 'leader' ? session.department : (searchParams.get('department') || undefined),
+      department: mineParam ? undefined : (session.role === 'leader' ? session.department : (searchParams.get('department') || undefined)),
       isAdmin: isAdmin && !mineParam && !userNameParam,
     });
 

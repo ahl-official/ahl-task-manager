@@ -416,8 +416,8 @@ export async function getRecurringChecklistPage(params: {
   if (params.cursor) query.set('cursor', params.cursor);
   if (params.search) query.set('search', params.search);
   if (!params.isAdmin || params.scopeUser) {
-    query.set('scopeUid', params.uid);
-    query.set('scopeName', params.userName);
+    if (params.uid) query.set('scopeUid', params.uid);
+    if (params.userName) query.set('scopeName', params.userName);
     if (params.department) query.set('scopeDepartment', params.department);
   }
   const response = await cfApi<{ items: RecurringChecklistItem[]; nextCursor: string | null; hasMore: boolean } | RecurringChecklistItem[]>(`/recurring/checklist?${query.toString()}`);

@@ -57,6 +57,7 @@ type ChecklistCacheEntry = {
   elevated: boolean;
   isAdmin: boolean;
   currentUserName: string;
+  currentUserId?: string;
   nextCursor: string | null;
 };
 
@@ -77,6 +78,7 @@ export default function ChecklistClient({
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
+  const [fetchingUserRows, setFetchingUserRows] = useState(false);
   const [ticking, setTicking] = useState<string | null>(null);
   const [search, setSearch] = useState(initialTaskId);
   const [department, setDepartment] = useState('');
@@ -85,6 +87,7 @@ export default function ChecklistClient({
   const [elevated, setElevated] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [currentUserName, setCurrentUserName] = useState('');
+  const [currentUserId, setCurrentUserId] = useState('');
   const [date, setDate] = useState(initialDate);
   const [activeRemarkRow, setActiveRemarkRow] = useState<string | null>(null);
   const [remark, setRemark] = useState('');
@@ -161,6 +164,12 @@ export default function ChecklistClient({
     }
     return Array.from(seen.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   }, [allUsers, rows, department]);
+
+  const selectedIndividualUser = useMemo(() => {
+    if (!individual) return null;
+    return allUsers.find(u => namesEqual(u.name, individual) || u.name.toLowerCase() === individual.toLowerCase()) || null;
+  }, [allUsers, individual]);
+
   const visibleRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const isTargetTask = (taskId: string) => Boolean(initialTaskId && taskId.toLowerCase() === initialTaskId.toLowerCase());
@@ -181,9 +190,18 @@ export default function ChecklistClient({
         matchesDate = true;
       }
 
-      const matchesMine = !mineOnly || Boolean(row.mine) || namesEqual(row.userName, currentUserName);
+      const matchesMine = !mineOnly ||
+        Boolean(row.mine) ||
+        (Boolean(currentUserId) && Boolean(row.userId) && row.userId === currentUserId) ||
+        namesEqual(row.userName, currentUserName);
       const matchesDept = !department || namesEqual(row.department, department);
-      const matchesIndiv = !individual || namesEqual(row.userName, individual);
+      const matchesIndiv = !individual ||
+        Boolean(selectedIndividualUser?.uid && row.userId && row.userId === selectedIndividualUser.uid) ||
+        namesEqual(row.userName, individual) ||
+        (Boolean(row.userName) && (
+          row.userName.toLowerCase().startsWith(individual.toLowerCase()) ||
+          individual.toLowerCase().startsWith(row.userName.toLowerCase())
+        ));
       const matchesSearch = !q ||
         (row.taskId && row.taskId.toLowerCase().includes(q)) ||
         (row.description && row.description.toLowerCase().includes(q)) ||
@@ -197,7 +215,7 @@ export default function ChecklistClient({
 
       return matchesMine && matchesDept && matchesIndiv && Boolean(matchesDate) && matchesSearch;
     });
-  }, [rows, department, individual, date, mineOnly, currentUserName, search, category, initialTaskId]);
+  }, [rows, department, individual, selectedIndividualUser, date, mineOnly, currentUserName, currentUserId, search, category, initialTaskId]);
   const completedCount = useMemo(() => visibleRows.filter(row => row.completed).length, [visibleRows]);
 
   useEffect(() => {
@@ -242,6 +260,7 @@ export default function ChecklistClient({
                   elevated,
                   isAdmin,
                   currentUserName,
+                  currentUserId,
                   nextCursor: null,
                 };
               }
@@ -272,6 +291,7 @@ export default function ChecklistClient({
           elevated,
           isAdmin,
           currentUserName,
+          currentUserId,
           nextCursor,
         };
       }
@@ -286,6 +306,7 @@ export default function ChecklistClient({
       setElevated(cached.elevated);
       setIsAdmin(cached.isAdmin);
       setCurrentUserName(cached.currentUserName);
+      if (cached.currentUserId) setCurrentUserId(cached.currentUserId);
       setNextCursor(cached.nextCursor);
       setLoading(false);
       return;
@@ -306,12 +327,14 @@ export default function ChecklistClient({
       const elevatedVal = Boolean(data.meta?.elevated);
       const isAdminVal = Boolean(data.meta?.isAdmin);
       const userNameVal = String(data.meta?.currentUserName ?? '');
+      const userIdVal = String(data.meta?.currentUserId ?? '');
       if (requestKey.current !== cacheKey) return;
       categoryCache.current[cacheKey] = {
         rows: data.data,
         elevated: elevatedVal,
         isAdmin: isAdminVal,
         currentUserName: userNameVal,
+        currentUserId: userIdVal,
         nextCursor: data.meta?.nextCursor || null,
       };
       setRows(data.data);
@@ -319,6 +342,7 @@ export default function ChecklistClient({
       setElevated(elevatedVal);
       setIsAdmin(isAdminVal);
       setCurrentUserName(userNameVal);
+      setCurrentUserId(userIdVal);
     } catch (err: any) {
       if (!cached) toast.error(err.message ?? 'Failed to load checklist');
     } finally {
@@ -583,11 +607,15 @@ export default function ChecklistClient({
   // On-demand fetch recurring tasks for selected individual user or "Show my tasks"
   // and cache along with the currently fetched rows so no matching recurring tasks are missed.
   useEffect(() => {
-    if (!individual && !mineOnly) return;
+    if (!individual && !mineOnly) {
+      setFetchingUserRows(false);
+      return;
+    }
     const fetchKey = `${category}:${date || 'today'}:${mineOnly ? 'mine' : `user:${individual}`}`;
     if (fetchedChecklistKeys.current.has(fetchKey)) return;
-    fetchedChecklistKeys.current.add(fetchKey);
 
+    let active = true;
+    setFetchingUserRows(true);
     const controller = new AbortController();
     (async () => {
       try {
@@ -600,39 +628,61 @@ export default function ChecklistClient({
           qs.set('mine', 'true');
         } else if (individual) {
           qs.set('userName', individual);
+          if (selectedIndividualUser?.uid) {
+            qs.set('assignedTo', selectedIndividualUser.uid);
+          }
         }
         const res = await fetch(`/api/checklist?${qs.toString()}`, { signal: controller.signal });
         const data = await res.json();
-        if (!controller.signal.aborted && data.success && Array.isArray(data.data) && data.data.length) {
-          setRows(current => {
-            const byId = new Map(current.map(r => [r.id, r]));
-            let changed = false;
-            for (const item of data.data) {
-              if (!byId.has(item.id)) {
-                byId.set(item.id, item);
-                changed = true;
+        if (active && !controller.signal.aborted && data.success && Array.isArray(data.data)) {
+          fetchedChecklistKeys.current.add(fetchKey);
+          if (data.data.length > 0) {
+            setRows(current => {
+              const byId = new Map(current.map(r => [r.id, r]));
+              let changed = false;
+              for (const item of data.data) {
+                if (!byId.has(item.id)) {
+                  byId.set(item.id, item);
+                  changed = true;
+                }
               }
-            }
-            if (changed) {
-              const merged = Array.from(byId.values());
-              const activeCacheKey = `${category}:${date || 'today'}`;
-              if (categoryCache.current[activeCacheKey]) {
-                categoryCache.current[activeCacheKey].rows = merged;
+              if (changed) {
+                const merged = Array.from(byId.values());
+                const activeCacheKey = `${category}:${date || 'today'}`;
+                if (categoryCache.current[activeCacheKey]) {
+                  categoryCache.current[activeCacheKey].rows = merged;
+                } else {
+                  categoryCache.current[activeCacheKey] = {
+                    rows: merged,
+                    elevated,
+                    isAdmin,
+                    currentUserName,
+                    currentUserId,
+                    nextCursor: null,
+                  };
+                }
+                return merged;
               }
-              return merged;
-            }
-            return current;
-          });
+              return current;
+            });
+          }
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {
           console.error('Checklist user lookup failed', err);
           fetchedChecklistKeys.current.delete(fetchKey);
         }
+      } finally {
+        if (active) {
+          setFetchingUserRows(false);
+        }
       }
     })();
-    return () => controller.abort();
-  }, [category, date, individual, mineOnly]);
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [category, date, individual, selectedIndividualUser, mineOnly, elevated, isAdmin, currentUserName, currentUserId]);
 
   useEffect(() => {
     if (!nextCursor || loading || loadingMore || search.trim() || !pageSentinel.current) return;
@@ -691,6 +741,7 @@ export default function ChecklistClient({
                 elevated,
                 isAdmin,
                 currentUserName,
+                currentUserId,
                 nextCursor: null,
               };
             }
@@ -731,9 +782,10 @@ export default function ChecklistClient({
                 setMineOnly(current => !current);
                 if (!mineOnly) setIndividual('');
               }}
-              className={cn('btn-secondary py-2', mineOnly && 'bg-brand-50 text-brand-700 border-brand-200')}
+              className={cn('btn-secondary py-2 flex items-center gap-1.5', mineOnly && 'bg-brand-50 text-brand-700 border-brand-200')}
             >
-              {mineOnly ? 'Showing my tasks' : 'Show my tasks'}
+              {fetchingUserRows && mineOnly && <Loader2 size={14} className="animate-spin text-brand-600" />}
+              <span>{mineOnly ? 'Showing my tasks' : 'Show my tasks'}</span>
             </button>
           )}
           <select
@@ -871,8 +923,17 @@ export default function ChecklistClient({
                 <Loader2 size={16} className="animate-spin text-brand-600" />
                 <span>Searching checklist on server...</span>
               </div>
+            ) : fetchingUserRows ? (
+              <div className="flex items-center justify-center gap-2">
+                <Loader2 size={16} className="animate-spin text-brand-600" />
+                <span>{mineOnly ? 'Loading your checklist tasks...' : `Loading checklist tasks for ${individual}...`}</span>
+              </div>
             ) : initialTaskId && search === initialTaskId
               ? 'This recurring task is not scheduled for the selected date.'
+              : mineOnly
+              ? `You have no ${category.toLowerCase()} checklist tasks scheduled${date ? ' for this date' : ''}.`
+              : individual
+              ? `No ${category.toLowerCase()} checklist tasks found for ${individual}${date ? ' on this date' : ''}.`
               : `No ${category.toLowerCase()} checklist tasks match these filters.`}
           </div>
         )}

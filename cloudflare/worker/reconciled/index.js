@@ -2436,9 +2436,26 @@ async function routeRecurring(req, env, url) {
     const scopeDepartment=url.searchParams.get('scopeDepartment');
     if(scopeUid||scopeName||scopeDepartment){
       const scope=[];
-      if(scopeUid){scope.push('assigned_to=?');binds.push(scopeUid);}
-      if(scopeName){scope.push("(COALESCE(assigned_to,'')='' AND LOWER(assigned_to_name)=LOWER(?))");binds.push(scopeName);}
-      if(scopeDepartment){scope.push('department=?');binds.push(scopeDepartment);}
+      if(scopeUid){
+        scope.push('(assigned_to=? OR LOWER(assigned_to)=LOWER(?))');
+        binds.push(scopeUid, scopeUid);
+      }
+      if(scopeName){
+        const cleanName = scopeName.trim();
+        const normName = normalizePersonName(cleanName);
+        if (normName) {
+          scope.push('(TRIM(LOWER(assigned_to_name))=LOWER(?) OR LOWER(assigned_to_name) LIKE ?)');
+          binds.push(cleanName, `%${normName}%`);
+        } else {
+          scope.push('TRIM(LOWER(assigned_to_name))=LOWER(?)');
+          binds.push(cleanName);
+        }
+      }
+      if(scopeDepartment){
+        const cleanDept = scopeDepartment.trim();
+        scope.push('(department=? OR TRIM(LOWER(department))=LOWER(?))');
+        binds.push(cleanDept, cleanDept);
+      }
       clauses.push('('+scope.join(' OR ')+')');
     }
     if (startDate && endDate) {

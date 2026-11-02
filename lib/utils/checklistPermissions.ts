@@ -5,7 +5,7 @@ import { indiaTodayKey } from './indiaDate';
 type Period = { userId: string; userName: string; department: string; category: string; periodKey: string; dueDate?: string | null };
 
 export function checklistPermissions(session: SessionUser, row: Period) {
-  const mine = row.userId ? row.userId === session.uid : namesEqual(row.userName, session.name);
+  const mine = Boolean((row.userId && row.userId === session.uid) || namesEqual(row.userName, session.name));
   const team = session.role === 'leader' && Boolean(session.department?.trim()) &&
     session.department.trim().toLowerCase() === row.department.trim().toLowerCase();
   const elevated = session.role === 'admin' || team;
