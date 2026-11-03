@@ -57,7 +57,7 @@
     },
     {
       "path": "/api/cron/recurring-materialize",
-      "schedule": "0 18 28,29,30,1 * *"
+      "schedule": "0 18 * * *"
     }
   ]
 }

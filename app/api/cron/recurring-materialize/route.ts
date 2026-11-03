@@ -35,6 +35,20 @@ export async function GET(req: NextRequest) {
   const todayKey = indiaTodayKey();
   const dayOfMonth = Number(todayKey.slice(8, 10));
 
+  // On Vercel Free / Hobby plan, crons run daily (0 18 * * *).
+  // On days 2 through 27, exit immediately in 2ms to avoid wasted compute and DB writes.
+  const chunkParam = searchParams.get('chunk');
+  const isTargetDay = [28, 29, 30, 31, 1].includes(dayOfMonth);
+  if (!isTargetDay && chunkParam == null) {
+    return NextResponse.json({
+      success: true,
+      skipped: true,
+      dayOfMonth,
+      message: `Day ${dayOfMonth}: Materialization only runs on month-end (days 28-31) and 1st.`,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   const customMonth = searchParams.get('month');
   const months = customMonth ? [customMonth] : getTargetMonths(todayKey);
 
@@ -43,7 +57,6 @@ export async function GET(req: NextRequest) {
   // Day 29: Chunk 1 (Middle 33%)
   // Day 30-31: Chunk 2 (Final 34%)
   // Day 1: Full reconciliation / catch-up sweep (all templates)
-  const chunkParam = searchParams.get('chunk');
   let chunkIndex = -1; // -1 means all
   if (chunkParam != null) {
     chunkIndex = chunkParam.toLowerCase() === 'all' ? -1 : Math.max(0, Math.min(2, Number(chunkParam)));
