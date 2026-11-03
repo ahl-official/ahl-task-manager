@@ -119,7 +119,7 @@ export async function GET(req: NextRequest) {
           mine: permissions.mine,
           isPast: permissions.isPast,
           isFuture,
-          // Past tasks: visible but not completable by non-elevated members
+          // Past tasks: completable by members (marked late when completed)
           canComplete: !row.completed && !row.dead && !isFuture && permissions.canChange,
           canUncomplete: row.completed && !row.dead && permissions.canChange,
           canManage: isAdmin,

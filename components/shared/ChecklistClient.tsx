@@ -1053,22 +1053,31 @@ export default function ChecklistClient({
                         type="button"
                         onClick={() => tick(row)}
                         disabled={ticking === row.id}
-                        className="inline-flex items-center justify-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 cursor-pointer transition-colors disabled:opacity-50"
+                        className={cn(
+                          'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-white cursor-pointer transition-colors disabled:opacity-50',
+                          row.isPast ? 'bg-amber-600 hover:bg-amber-700' : 'bg-brand-600 hover:bg-brand-700'
+                        )}
+                        title={row.isPast ? 'Complete past task (will be recorded as Late)' : 'Mark task complete'}
                       >
-                        Mark Complete
+                        {row.isPast ? 'Mark Complete (Late)' : 'Mark Complete'}
                       </button>
                     )}
                     {!row.dead && row.completed && (
-                      <span className="inline-flex items-center gap-1.5 rounded-md border border-green-200 bg-green-50 px-3 py-1.5 text-sm font-medium text-green-700">
-                        <CheckCircle2 size={14} /> Completed
+                      <span className={cn(
+                        'inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium',
+                        (row as any).isOnTime === false || ((row as any).isPast && row.completedAt && (row as any).dueDate && row.completedAt.slice(0, 10) > (row as any).dueDate.slice(0, 10))
+                          ? 'border-amber-200 bg-amber-50 text-amber-800'
+                          : 'border-green-200 bg-green-50 text-green-700'
+                      )}>
+                        <CheckCircle2 size={14} />
+                        {(row as any).isOnTime === false ? 'Completed (Late)' : 'Completed'}
                       </span>
                     )}
                     {!row.dead && !row.completed && !row.canComplete && (
                       <span
-                        title="Past date tasks cannot be completed by members. Contact an admin."
                         className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm text-gray-500"
                       >
-                        {(row as any).isPast ? 'Past Due (Locked)' : row.userName}
+                        {(row as any).isFuture ? 'Upcoming' : row.userName}
                       </span>
                     )}
                     {row.completed && !row.dead && row.canUncomplete && (

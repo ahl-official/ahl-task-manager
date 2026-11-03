@@ -12,5 +12,6 @@ export function checklistPermissions(session: SessionUser, row: Period) {
   const date = (row.dueDate || row.periodKey).slice(0, 10);
   const today = indiaTodayKey();
   const isPast = row.category.toLowerCase() === 'monthly' ? date.slice(0, 7) < today.slice(0, 7) : date < today;
-  return { mine, isPast, canView: mine || elevated, canChange: elevated || (mine && !isPast), canVerify: false };
+  // Members can view and complete their own tasks even if past (it will just be marked late)
+  return { mine, isPast, canView: mine || elevated, canChange: elevated || mine, canVerify: false };
 }
