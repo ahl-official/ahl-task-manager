@@ -409,12 +409,18 @@ export async function getRecurringChecklistPage(params: {
   scopeUser?: boolean;
   department?: string;
   isAdmin: boolean;
+  startDate?: string;
+  endDate?: string;
+  includeAllPeriods?: boolean;
 }): Promise<{ items: RecurringChecklistItem[]; nextCursor: string | null; hasMore: boolean }> {
   const query = new URLSearchParams({ category: params.category, limit: '100' });
   if (params.date) query.set('date', params.date);
   if (params.exactDate) query.set('exactDate', 'true');
   if (params.cursor) query.set('cursor', params.cursor);
   if (params.search) query.set('search', params.search);
+  if (params.startDate) query.set('startDate', params.startDate);
+  if (params.endDate) query.set('endDate', params.endDate);
+  if (params.includeAllPeriods) query.set('includeAllPeriods', 'true');
   if (!params.isAdmin || params.scopeUser) {
     if (params.uid) query.set('scopeUid', params.uid);
     if (params.userName) query.set('scopeName', params.userName);

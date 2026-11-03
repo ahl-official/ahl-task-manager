@@ -55,21 +55,47 @@ export async function GET(req: NextRequest) {
     const targetUid = mineParam ? session.uid : (searchParams.get('assignedTo') || (userNameParam ? '' : session.uid));
     const targetUserName = mineParam ? session.name : (userNameParam || session.name);
 
+    // When fetching for a specific user (mine or individual filter), include all periods
+    // (past, current, future) so they can see their full history. Only skip this when
+    // an explicit date filter is applied (in which case exactDate restricts it for them).
+    const isScopedUser = Boolean(mineParam || userNameParam);
+    const includeAllPeriods = isScopedUser && !dateParam;
+
+    // Calculate a broad startDate to fetch past 6 months of history when showing all periods
+    const pastStartDate = includeAllPeriods ? (() => {
+      const d = new Date();
+      d.setMonth(d.getMonth() - 6);
+      return d.toISOString().slice(0, 10);
+    })() : undefined;
+
     const page = await getRecurringChecklistPage({
       category,
       date: dateParam,
-      exactDate,
+      exactDate: Boolean(dateParam), // only exact-filter when date is explicitly chosen
       cursor,
       search: search.length >= 2 ? search : undefined,
       uid: targetUid,
       userName: targetUserName,
-      scopeUser: Boolean(mineParam || userNameParam),
+      scopeUser: isScopedUser,
       department: mineParam ? undefined : (session.role === 'leader' ? session.department : (searchParams.get('department') || undefined)),
       isAdmin: isAdmin && !mineParam && !userNameParam,
+      startDate: pastStartDate,
+      includeAllPeriods,
     });
 
     const rows = page.items
-      .filter(row => checklistPermissions(session, row).canView)
+      .filter(row => {
+        const permissions = checklistPermissions(session, row);
+        // Always show: mine (owner), elevated (admin/leader), or if it belongs to the scoped user
+        if (permissions.canView) return true;
+        // Also show rows belonging to the explicitly requested user even if not "mine" by session
+        if (isScopedUser && userNameParam) {
+          const rowName = (row.userName || '').toLowerCase().trim();
+          const reqName = userNameParam.toLowerCase().trim();
+          if (rowName === reqName || rowName.startsWith(reqName) || reqName.startsWith(rowName)) return true;
+        }
+        return false;
+      })
       .filter(row => {
         if (!dateParam) return true;
         const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
@@ -93,6 +119,7 @@ export async function GET(req: NextRequest) {
           mine: permissions.mine,
           isPast: permissions.isPast,
           isFuture,
+          // Past tasks: visible but not completable by non-elevated members
           canComplete: !row.completed && !row.dead && !isFuture && permissions.canChange,
           canUncomplete: row.completed && !row.dead && permissions.canChange,
           canManage: isAdmin,

@@ -104,7 +104,7 @@ export default function ChecklistClient({
           setAllUsers(json.data.filter((u: any) => u.isActive !== false));
         }
       })
-      .catch(() => {});
+      .catch(() => { });
 
     const handleGlobalRefresh = () => {
       for (const k of Object.keys(moduleChecklistCache)) {
@@ -174,7 +174,7 @@ export default function ChecklistClient({
     const q = search.trim().toLowerCase();
     const isTargetTask = (taskId: string) => Boolean(initialTaskId && taskId.toLowerCase() === initialTaskId.toLowerCase());
 
-    return rows.filter(row => {
+    const filtered = rows.filter(row => {
       const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
       let matchesDate = !date || rowDate === date;
       if (date && category === 'Weekly') {
@@ -215,13 +215,19 @@ export default function ChecklistClient({
 
       return matchesMine && matchesDept && matchesIndiv && Boolean(matchesDate) && matchesSearch;
     });
+
+    // Sort by periodKey descending (newest first) so past completions appear in order
+    if (mineOnly || individual) {
+      return [...filtered].sort((a, b) => (b.periodKey || '').localeCompare(a.periodKey || ''));
+    }
+    return filtered;
   }, [rows, department, individual, selectedIndividualUser, date, mineOnly, currentUserName, currentUserId, search, category, initialTaskId]);
   const completedCount = useMemo(() => visibleRows.filter(row => row.completed).length, [visibleRows]);
 
   useEffect(() => {
     if (loading || selectedTaskFocused.current || !initialTaskId ||
-        search.trim().toLowerCase() !== initialTaskId.toLowerCase() ||
-        !visibleRows.some(row => row.taskId.toLowerCase() === initialTaskId.toLowerCase())) return;
+      search.trim().toLowerCase() !== initialTaskId.toLowerCase() ||
+      !visibleRows.some(row => row.taskId.toLowerCase() === initialTaskId.toLowerCase())) return;
     selectedTaskFocused.current = true;
     selectedTaskRow.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     selectedTaskRow.current?.focus({ preventScroll: true });
@@ -329,15 +335,28 @@ export default function ChecklistClient({
       const userNameVal = String(data.meta?.currentUserName ?? '');
       const userIdVal = String(data.meta?.currentUserId ?? '');
       if (requestKey.current !== cacheKey) return;
+      // Deduplicate: first by taskId+periodKey, then by description+periodKey+userId
+      // to remove server-side duplicates (same task materialized multiple times)
+      const seen = new Map<string, ChecklistRow>();
+      const descSeen = new Map<string, string>(); // desc:period:uid -> taskId already added
+      for (const row of (data.data as ChecklistRow[])) {
+        const dk = `${row.taskId}:${row.periodKey}`;
+        const contentKey = `${(row.description || '').slice(0, 80)}:${row.periodKey}:${row.userId}`;
+        if (!seen.has(dk) && !descSeen.has(contentKey)) {
+          seen.set(dk, row);
+          descSeen.set(contentKey, row.taskId);
+        }
+      }
+      const deduped = Array.from(seen.values());
       categoryCache.current[cacheKey] = {
-        rows: data.data,
+        rows: deduped,
         elevated: elevatedVal,
         isAdmin: isAdminVal,
         currentUserName: userNameVal,
         currentUserId: userIdVal,
         nextCursor: data.meta?.nextCursor || null,
       };
-      setRows(data.data);
+      setRows(deduped);
       setNextCursor(data.meta?.nextCursor || null);
       setElevated(elevatedVal);
       setIsAdmin(isAdminVal);
@@ -369,9 +388,27 @@ export default function ChecklistClient({
       const next = data.meta?.nextCursor || null;
       setNextCursor(next);
       setRows(current => {
-        const ids = new Set(current.map(row => row.id));
-        const merged = [...current, ...data.data.filter((row: ChecklistRow) => !ids.has(row.id))];
-        categoryCache.current[cacheKey] = { rows: merged, elevated, isAdmin, currentUserName, nextCursor: next };
+        // Deduplicate by taskId+periodKey AND description+period+userId across pages
+        const seen = new Map<string, ChecklistRow>();
+        const descSeen = new Map<string, string>();
+        for (const row of current) {
+          seen.set(`${row.taskId}:${row.periodKey}`, row);
+          descSeen.set(`${(row.description || '').slice(0, 80)}:${row.periodKey}:${row.userId}`, row.taskId);
+        }
+        let changed = false;
+        for (const row of (data.data as ChecklistRow[])) {
+          const dk = `${row.taskId}:${row.periodKey}`;
+          const ck = `${(row.description || '').slice(0, 80)}:${row.periodKey}:${row.userId}`;
+          if (!seen.has(dk) && !descSeen.has(ck)) {
+            seen.set(dk, row);
+            descSeen.set(ck, row.taskId);
+            changed = true;
+          }
+        }
+        const merged = Array.from(seen.values());
+        if (changed) {
+          categoryCache.current[cacheKey] = { rows: merged, elevated, isAdmin, currentUserName, nextCursor: next };
+        }
         return merged;
       });
     } catch (err: any) {
@@ -441,13 +478,13 @@ export default function ChecklistClient({
     const prevRows = rows;
     const updatedRows = (list: ChecklistRow[]) => list.map(item => item.id === row.id
       ? {
-          ...item,
-          completed: false,
-          completedAt: null,
-          status: 'Pending' as const,
-          canComplete: true,
-          canUncomplete: false,
-        }
+        ...item,
+        completed: false,
+        completedAt: null,
+        status: 'Pending' as const,
+        canComplete: true,
+        canUncomplete: false,
+      }
       : item);
 
     setRows(updatedRows);
@@ -604,18 +641,20 @@ export default function ChecklistClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category, date]);
 
-  // On-demand fetch recurring tasks for selected individual user or "Show my tasks"
-  // and cache along with the currently fetched rows so no matching recurring tasks are missed.
+  // On-demand fetch recurring tasks for selected individual user or "Show my tasks".
+  // Always re-fetches from server when filter changes; result is cached per key.
   useEffect(() => {
     if (!individual && !mineOnly) {
       setFetchingUserRows(false);
       return;
     }
     const fetchKey = `${category}:${date || 'today'}:${mineOnly ? 'mine' : `user:${individual}`}`;
+    // Always fetch fresh when filter is first applied (clear stale key if date/category changed)
     if (fetchedChecklistKeys.current.has(fetchKey)) return;
 
     let active = true;
     setFetchingUserRows(true);
+    setRows([]); // Clear current rows so loading state shows correctly
     const controller = new AbortController();
     (async () => {
       try {
@@ -636,36 +675,27 @@ export default function ChecklistClient({
         const data = await res.json();
         if (active && !controller.signal.aborted && data.success && Array.isArray(data.data)) {
           fetchedChecklistKeys.current.add(fetchKey);
-          if (data.data.length > 0) {
-            setRows(current => {
-              const byId = new Map(current.map(r => [r.id, r]));
-              let changed = false;
-              for (const item of data.data) {
-                if (!byId.has(item.id)) {
-                  byId.set(item.id, item);
-                  changed = true;
-                }
-              }
-              if (changed) {
-                const merged = Array.from(byId.values());
-                const activeCacheKey = `${category}:${date || 'today'}`;
-                if (categoryCache.current[activeCacheKey]) {
-                  categoryCache.current[activeCacheKey].rows = merged;
-                } else {
-                  categoryCache.current[activeCacheKey] = {
-                    rows: merged,
-                    elevated,
-                    isAdmin,
-                    currentUserName,
-                    currentUserId,
-                    nextCursor: null,
-                  };
-                }
-                return merged;
-              }
-              return current;
-            });
+          // Update meta from this response too
+          if (data.meta?.currentUserName) setCurrentUserName(data.meta.currentUserName);
+          if (data.meta?.currentUserId) setCurrentUserId(data.meta.currentUserId);
+          // Deduplicate by taskId+periodKey to avoid same-date duplicates
+          const seen = new Map<string, ChecklistRow>();
+          for (const item of data.data) {
+            const dedupeKey = `${item.taskId}:${item.periodKey}`;
+            if (!seen.has(dedupeKey)) seen.set(dedupeKey, item);
           }
+          const deduped = Array.from(seen.values());
+          // Replace rows with the filtered result (not merged) so "Show my tasks" only shows mine
+          const activeCacheKey = `${category}:${date || 'today'}`;
+          categoryCache.current[activeCacheKey] = {
+            rows: deduped,
+            elevated,
+            isAdmin,
+            currentUserName: data.meta?.currentUserName || currentUserName,
+            currentUserId: data.meta?.currentUserId || currentUserId,
+            nextCursor: data.meta?.nextCursor || null,
+          };
+          setRows(deduped);
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {
@@ -713,9 +743,9 @@ export default function ChecklistClient({
       try {
         const qs = new URLSearchParams({ category, search: query });
         if (date) {
-        qs.set('date', date);
-        qs.set('exactDate', 'true');
-      }
+          qs.set('date', date);
+          qs.set('exactDate', 'true');
+        }
         const res = await fetch(`/api/checklist?${qs}`, { signal: controller.signal });
         const data = await res.json();
         if (!data.success) throw new Error(data.error);
@@ -779,8 +809,17 @@ export default function ChecklistClient({
             <button
               type="button"
               onClick={() => {
-                setMineOnly(current => !current);
-                if (!mineOnly) setIndividual('');
+                const next = !mineOnly;
+                setMineOnly(next);
+                if (next) {
+                  setIndividual('');
+                  // Clear any cached mine key so a fresh server fetch always happens
+                  const mineKey = `${category}:${date || 'today'}:mine`;
+                  fetchedChecklistKeys.current.delete(mineKey);
+                } else {
+                  // Turning off: force fresh reload since cache was overwritten with mine-only rows
+                  void loadRows(category, date, true);
+                }
               }}
               className={cn('btn-secondary py-2 flex items-center gap-1.5', mineOnly && 'bg-brand-50 text-brand-700 border-brand-200')}
             >
@@ -872,7 +911,16 @@ export default function ChecklistClient({
               <span className="text-xs font-medium text-gray-500">Individual</span>
               <select
                 value={individual}
-                onChange={event => setIndividual(event.target.value)}
+                onChange={event => {
+                  const val = event.target.value;
+                  // Clear cached key for new individual so fresh fetch happens
+                  if (val) {
+                    const key = `${category}:${date || 'today'}:user:${val}`;
+                    fetchedChecklistKeys.current.delete(key);
+                  }
+                  setIndividual(val);
+                  setMineOnly(false);
+                }}
                 className="input w-full py-2 text-sm"
                 disabled={loading || individuals.length === 0}
               >
@@ -931,10 +979,10 @@ export default function ChecklistClient({
             ) : initialTaskId && search === initialTaskId
               ? 'This recurring task is not scheduled for the selected date.'
               : mineOnly
-              ? `You have no ${category.toLowerCase()} checklist tasks scheduled${date ? ' for this date' : ''}.`
-              : individual
-              ? `No ${category.toLowerCase()} checklist tasks found for ${individual}${date ? ' on this date' : ''}.`
-              : `No ${category.toLowerCase()} checklist tasks match these filters.`}
+                ? `You have no ${category.toLowerCase()} checklist tasks scheduled${date ? ' for this date' : ''}.`
+                : individual
+                  ? `No ${category.toLowerCase()} checklist tasks found for ${individual}${date ? ' on this date' : ''}.`
+                  : `No ${category.toLowerCase()} checklist tasks match these filters.`}
           </div>
         )}
 
@@ -958,12 +1006,18 @@ export default function ChecklistClient({
                       <span className={cn(
                         'badge text-[10px]',
                         (row.completed || row.status === 'Verified') ? 'bg-green-100 text-green-700' :
-                        row.dead ? 'bg-red-600 text-white' :
-                        'bg-amber-100 text-amber-700'
+                          row.dead ? 'bg-red-600 text-white' :
+                            'bg-amber-100 text-amber-700'
                       )}>
                         {row.status === 'Verified' ? 'Completed' : row.status}
                       </span>
                       {row.mine && <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-700">Mine</span>}
+                      {row.isPast && !row.completed && !row.dead && (
+                        <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-medium text-gray-600">Past</span>
+                      )}
+                      {(row as any).isFuture && (
+                        <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600">Upcoming</span>
+                      )}
                     </div>
                     <p className="text-sm font-semibold text-gray-900">{row.description}</p>
                     <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-gray-400">
@@ -979,26 +1033,43 @@ export default function ChecklistClient({
                     )}
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
-                    {!row.dead && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Standalone completion indicator always visible */}
+                    <span
+                      title={row.completed ? 'Completed' : 'Not yet completed'}
+                      className={cn(
+                        'flex items-center justify-center rounded-full',
+                        row.completed ? 'text-green-500' : 'text-gray-300'
+                      )}
+                    >
+                      {ticking === row.id
+                        ? <Loader2 size={22} className="animate-spin text-brand-400" />
+                        : row.completed
+                        ? <CheckCircle2 size={22} />
+                        : <Circle size={22} />}
+                    </span>
+                    {!row.dead && !row.completed && row.canComplete && (
                       <button
                         type="button"
                         onClick={() => tick(row)}
-                        disabled={row.completed || !row.canComplete || ticking === row.id}
-                        title={!row.completed && !row.canComplete ? 'Past date tasks cannot be completed by members. Contact an admin.' : undefined}
-                        className={cn(
-                          'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors',
-                          row.completed ? 'bg-green-100 text-green-700 border border-green-200 cursor-default' :
-                          !row.canComplete ? 'bg-gray-100 text-gray-500 cursor-not-allowed' :
-                          'bg-brand-600 text-white hover:bg-brand-700 cursor-pointer'
-                        )}
+                        disabled={ticking === row.id}
+                        className="inline-flex items-center justify-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 cursor-pointer transition-colors disabled:opacity-50"
                       >
-                        {ticking === row.id ? <Loader2 size={15} className="animate-spin" /> :
-                         row.completed ? <CheckCircle2 size={16} /> :
-                         <Circle size={16} />}
-                        {row.completed ? 'Completed' :
-                         row.canComplete ? 'Mark Complete' : (row as any).isPast ? 'Past Due (Locked)' : row.userName}
+                        Mark Complete
                       </button>
+                    )}
+                    {!row.dead && row.completed && (
+                      <span className="inline-flex items-center gap-1.5 rounded-md border border-green-200 bg-green-50 px-3 py-1.5 text-sm font-medium text-green-700">
+                        <CheckCircle2 size={14} /> Completed
+                      </span>
+                    )}
+                    {!row.dead && !row.completed && !row.canComplete && (
+                      <span
+                        title="Past date tasks cannot be completed by members. Contact an admin."
+                        className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm text-gray-500"
+                      >
+                        {(row as any).isPast ? 'Past Due (Locked)' : row.userName}
+                      </span>
                     )}
                     {row.completed && !row.dead && row.canUncomplete && (
                       <button
@@ -1009,7 +1080,7 @@ export default function ChecklistClient({
                         className="inline-flex items-center justify-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
                       >
                         {ticking === row.id ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />}
-                        Mark as not completed
+                        Undo
                       </button>
                     )}
                     {row.canManage && (
