@@ -119,9 +119,9 @@ export async function GET(req: NextRequest) {
           mine: permissions.mine,
           isPast: permissions.isPast,
           isFuture,
-          // Past tasks: completable by members (marked late when completed)
-          canComplete: !row.completed && !row.dead && !isFuture && permissions.canChange,
-          canUncomplete: row.completed && !row.dead && permissions.canChange,
+          // Past tasks: completable by members (marked late when completed). Admin can complete any task.
+          canComplete: !row.completed && !row.dead && (isAdmin || (!isFuture && permissions.canChange)),
+          canUncomplete: row.completed && !row.dead && (isAdmin || permissions.canChange),
           canManage: isAdmin,
         };
       });
@@ -177,7 +177,8 @@ export async function POST(req: NextRequest) {
     // Resolve the persisted assignee; never authorize against client-provided names or IDs.
     const row = await getRecurringPeriod(taskId, periodKey);
     const permissions = checklistPermissions(session, row);
-    if (row.category !== category || !permissions.canChange) {
+    const isAdmin = session.role === 'admin';
+    if (row.category !== category || (!isAdmin && !permissions.canChange)) {
       return NextResponse.json({ success: false, error: 'Forbidden for this checklist period' }, { status: 403 });
     }
     if (action === 'skip_day' && session.role !== 'admin') {

@@ -175,14 +175,18 @@ export default function ChecklistClient({
     const isTargetTask = (taskId: string) => Boolean(initialTaskId && taskId.toLowerCase() === initialTaskId.toLowerCase());
 
     const filtered = rows.filter(row => {
-      const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
-      let matchesDate = !date || rowDate === date;
-      if (date && category === 'Weekly') {
-        const rowWeek = getWeekMonday(row.periodKey || row.dueDate || '');
-        const targetWeek = getWeekMonday(date);
-        matchesDate = matchesDate || Boolean(rowWeek && targetWeek && rowWeek === targetWeek);
-      } else if (date && category === 'Monthly') {
-        matchesDate = matchesDate || (row.periodKey || row.dueDate || '').slice(0, 7) === date.slice(0, 7);
+      let matchesDate = true;
+      if (date) {
+        const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
+        if (category === 'Weekly') {
+          const rowWeek = getWeekMonday(row.periodKey || row.dueDate || '');
+          const targetWeek = getWeekMonday(date);
+          matchesDate = Boolean(rowWeek && targetWeek && rowWeek === targetWeek);
+        } else if (category === 'Monthly') {
+          matchesDate = (row.periodKey || row.dueDate || '').slice(0, 7) === date.slice(0, 7);
+        } else {
+          matchesDate = rowDate === date;
+        }
       }
 
       // If this row is the targeted recurring task passed via initialTaskId, always match date
@@ -283,9 +287,15 @@ export default function ChecklistClient({
     return () => { active = false; };
   }, [initialTaskId, loading, category, date, rows]);
 
-  async function loadRows(nextCategory = category, nextDate = date, forceRefresh = false) {
-    // Preserve current active rows into cache before switching tabs or dates
-    const currentKey = `${category}:${date || 'today'}`;
+  async function loadRows(
+    nextCategory = category,
+    nextDate = date,
+    forceRefresh = false,
+    nextIndividual = individual,
+    nextMineOnly = mineOnly,
+    nextDepartment = department,
+  ) {
+    const currentKey = `${category}:${date || 'all'}:${mineOnly ? 'mine' : (individual || 'all')}:${department || 'all'}`;
     if (rows.length > 0) {
       if (categoryCache.current[currentKey]) {
         const byId = new Map(categoryCache.current[currentKey].rows.map(r => [r.id, r]));
@@ -303,7 +313,7 @@ export default function ChecklistClient({
       }
     }
 
-    const cacheKey = `${nextCategory}:${nextDate || 'today'}`;
+    const cacheKey = `${nextCategory}:${nextDate || 'all'}:${nextMineOnly ? 'mine' : (nextIndividual || 'all')}:${nextDepartment || 'all'}`;
     requestKey.current = cacheKey;
     if (forceRefresh) searchedKeys.current.clear();
     const cached = categoryCache.current[cacheKey];
@@ -326,6 +336,16 @@ export default function ChecklistClient({
       if (nextDate) {
         qs.set('date', nextDate);
         qs.set('exactDate', 'true');
+      }
+      if (nextMineOnly) {
+        qs.set('mine', 'true');
+      } else if (nextIndividual) {
+        qs.set('userName', nextIndividual);
+        const indivUser = allUsers.find(u => namesEqual(u.name, nextIndividual) || u.name.toLowerCase() === nextIndividual.toLowerCase());
+        if (indivUser?.uid) qs.set('assignedTo', indivUser.uid);
+      }
+      if (nextDepartment) {
+        qs.set('department', nextDepartment);
       }
       const res = await fetch(`/api/checklist?${qs.toString()}`);
       const data = await res.json();
@@ -624,95 +644,23 @@ export default function ChecklistClient({
   }
 
   useEffect(() => {
-    loadRows(category, date);
+    void loadRows(category, date, false, individual, mineOnly, department);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, date]);
+  }, [category, date, individual, mineOnly, department]);
 
   useEffect(() => {
     const handleGlobalRefresh = (e: any) => {
       const scope = e?.detail?.scope;
       if (!scope || scope === 'checklist' || scope === 'all') {
-        fetchedChecklistKeys.current.clear();
-        loadRows(category, date, true);
+        categoryCache.current = {};
+        searchedKeys.current.clear();
+        void loadRows(category, date, true, individual, mineOnly, department);
       }
     };
     window.addEventListener('app-global-refresh', handleGlobalRefresh);
     return () => window.removeEventListener('app-global-refresh', handleGlobalRefresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, date]);
-
-  // On-demand fetch recurring tasks for selected individual user or "Show my tasks".
-  // Always re-fetches from server when filter changes; result is cached per key.
-  useEffect(() => {
-    if (!individual && !mineOnly) {
-      setFetchingUserRows(false);
-      return;
-    }
-    const fetchKey = `${category}:${date || 'today'}:${mineOnly ? 'mine' : `user:${individual}`}`;
-    // Always fetch fresh when filter is first applied (clear stale key if date/category changed)
-    if (fetchedChecklistKeys.current.has(fetchKey)) return;
-
-    let active = true;
-    setFetchingUserRows(true);
-    setRows([]); // Clear current rows so loading state shows correctly
-    const controller = new AbortController();
-    (async () => {
-      try {
-        const qs = new URLSearchParams({ category });
-        if (date) {
-          qs.set('date', date);
-          qs.set('exactDate', 'true');
-        }
-        if (mineOnly) {
-          qs.set('mine', 'true');
-        } else if (individual) {
-          qs.set('userName', individual);
-          if (selectedIndividualUser?.uid) {
-            qs.set('assignedTo', selectedIndividualUser.uid);
-          }
-        }
-        const res = await fetch(`/api/checklist?${qs.toString()}`, { signal: controller.signal });
-        const data = await res.json();
-        if (active && !controller.signal.aborted && data.success && Array.isArray(data.data)) {
-          fetchedChecklistKeys.current.add(fetchKey);
-          // Update meta from this response too
-          if (data.meta?.currentUserName) setCurrentUserName(data.meta.currentUserName);
-          if (data.meta?.currentUserId) setCurrentUserId(data.meta.currentUserId);
-          // Deduplicate by taskId+periodKey to avoid same-date duplicates
-          const seen = new Map<string, ChecklistRow>();
-          for (const item of data.data) {
-            const dedupeKey = `${item.taskId}:${item.periodKey}`;
-            if (!seen.has(dedupeKey)) seen.set(dedupeKey, item);
-          }
-          const deduped = Array.from(seen.values());
-          // Replace rows with the filtered result (not merged) so "Show my tasks" only shows mine
-          const activeCacheKey = `${category}:${date || 'today'}`;
-          categoryCache.current[activeCacheKey] = {
-            rows: deduped,
-            elevated,
-            isAdmin,
-            currentUserName: data.meta?.currentUserName || currentUserName,
-            currentUserId: data.meta?.currentUserId || currentUserId,
-            nextCursor: data.meta?.nextCursor || null,
-          };
-          setRows(deduped);
-        }
-      } catch (err: any) {
-        if (err.name !== 'AbortError') {
-          console.error('Checklist user lookup failed', err);
-          fetchedChecklistKeys.current.delete(fetchKey);
-        }
-      } finally {
-        if (active) {
-          setFetchingUserRows(false);
-        }
-      }
-    })();
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, [category, date, individual, selectedIndividualUser, mineOnly, elevated, isAdmin, currentUserName, currentUserId]);
+  }, [category, date, individual, mineOnly, department]);
 
   useEffect(() => {
     if (!nextCursor || loading || loadingMore || search.trim() || !pageSentinel.current) return;
@@ -811,30 +759,20 @@ export default function ChecklistClient({
               onClick={() => {
                 const next = !mineOnly;
                 setMineOnly(next);
-                if (next) {
-                  setIndividual('');
-                  // Clear any cached mine key so a fresh server fetch always happens
-                  const mineKey = `${category}:${date || 'today'}:mine`;
-                  fetchedChecklistKeys.current.delete(mineKey);
-                } else {
-                  // Turning off: force fresh reload since cache was overwritten with mine-only rows
-                  void loadRows(category, date, true);
-                }
+                if (next) setIndividual('');
+                void loadRows(category, date, true, '', next, department);
               }}
               className={cn('btn-secondary py-2 flex items-center gap-1.5', mineOnly && 'bg-brand-50 text-brand-700 border-brand-200')}
             >
-              {fetchingUserRows && mineOnly && <Loader2 size={14} className="animate-spin text-brand-600" />}
               <span>{mineOnly ? 'Showing my tasks' : 'Show my tasks'}</span>
             </button>
           )}
           <select
             value={category}
             onChange={e => {
-              setCategory(e.target.value as ChecklistCategory);
-              setDepartment('');
-              setIndividual('');
-              setDate('');
-              setSearch('');
+              const nextCat = e.target.value as ChecklistCategory;
+              setCategory(nextCat);
+              void loadRows(nextCat, date, true, individual, mineOnly, department);
             }}
             className="input w-auto py-2 text-sm"
           >
@@ -877,8 +815,9 @@ export default function ChecklistClient({
               <select
                 value={department}
                 onChange={event => {
-                  setDepartment(event.target.value);
-                  setIndividual('');
+                  const nextDept = event.target.value;
+                  setDepartment(nextDept);
+                  void loadRows(category, date, true, individual, mineOnly, nextDept);
                 }}
                 className="input w-full py-2 text-sm"
                 disabled={loading || departments.length === 0}
@@ -895,11 +834,23 @@ export default function ChecklistClient({
               <input
                 type="date"
                 value={date}
-                onChange={event => setDate(event.target.value)}
+                onChange={event => {
+                  const nextDate = event.target.value;
+                  setDate(nextDate);
+                  void loadRows(category, nextDate, true, individual, mineOnly, department);
+                }}
                 className="input min-w-0 flex-1 py-2 text-sm"
               />
               {date && (
-                <button type="button" onClick={() => setDate('')} className="btn-secondary px-3" title="Clear date filter">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDate('');
+                    void loadRows(category, '', true, individual, mineOnly, department);
+                  }}
+                  className="btn-secondary px-3"
+                  title="Clear date filter"
+                >
                   <RotateCcw size={14} />
                 </button>
               )}
@@ -913,13 +864,9 @@ export default function ChecklistClient({
                 value={individual}
                 onChange={event => {
                   const val = event.target.value;
-                  // Clear cached key for new individual so fresh fetch happens
-                  if (val) {
-                    const key = `${category}:${date || 'today'}:user:${val}`;
-                    fetchedChecklistKeys.current.delete(key);
-                  }
                   setIndividual(val);
                   setMineOnly(false);
+                  void loadRows(category, date, true, val, false, department);
                 }}
                 className="input w-full py-2 text-sm"
                 disabled={loading || individuals.length === 0}
@@ -1048,7 +995,7 @@ export default function ChecklistClient({
                         ? <CheckCircle2 size={22} />
                         : <Circle size={22} />}
                     </span>
-                    {!row.dead && !row.completed && row.canComplete && (
+                    {!row.dead && !row.completed && (row.canComplete || isAdmin) && (
                       <button
                         type="button"
                         onClick={() => tick(row)}
