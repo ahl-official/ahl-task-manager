@@ -760,7 +760,7 @@ export default function ChecklistClient({
                 const next = !mineOnly;
                 setMineOnly(next);
                 if (next) setIndividual('');
-                void loadRows(category, date, true, '', next, department);
+                void loadRows(category, date, false, '', next, department);
               }}
               className={cn('btn-secondary py-2 flex items-center gap-1.5', mineOnly && 'bg-brand-50 text-brand-700 border-brand-200')}
             >
@@ -772,7 +772,7 @@ export default function ChecklistClient({
             onChange={e => {
               const nextCat = e.target.value as ChecklistCategory;
               setCategory(nextCat);
-              void loadRows(nextCat, date, true, individual, mineOnly, department);
+              void loadRows(nextCat, date, false, individual, mineOnly, department);
             }}
             className="input w-auto py-2 text-sm"
           >
@@ -780,6 +780,15 @@ export default function ChecklistClient({
               <option key={option} value={option}>{option} Tasks</option>
             ))}
           </select>
+          <button
+            type="button"
+            onClick={() => void loadRows(category, date, true, individual, mineOnly, department)}
+            className="btn-secondary py-2 px-3 text-sm flex items-center gap-1"
+            title="Refresh from server"
+          >
+            <RotateCcw size={14} className={cn(loading && 'animate-spin')} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
         </div>
       </div>
 
@@ -817,7 +826,7 @@ export default function ChecklistClient({
                 onChange={event => {
                   const nextDept = event.target.value;
                   setDepartment(nextDept);
-                  void loadRows(category, date, true, individual, mineOnly, nextDept);
+                  void loadRows(category, date, false, individual, mineOnly, nextDept);
                 }}
                 className="input w-full py-2 text-sm"
                 disabled={loading || departments.length === 0}
@@ -837,7 +846,7 @@ export default function ChecklistClient({
                 onChange={event => {
                   const nextDate = event.target.value;
                   setDate(nextDate);
-                  void loadRows(category, nextDate, true, individual, mineOnly, department);
+                  void loadRows(category, nextDate, false, individual, mineOnly, department);
                 }}
                 className="input min-w-0 flex-1 py-2 text-sm"
               />
@@ -846,7 +855,7 @@ export default function ChecklistClient({
                   type="button"
                   onClick={() => {
                     setDate('');
-                    void loadRows(category, '', true, individual, mineOnly, department);
+                    void loadRows(category, '', false, individual, mineOnly, department);
                   }}
                   className="btn-secondary px-3"
                   title="Clear date filter"
@@ -866,7 +875,7 @@ export default function ChecklistClient({
                   const val = event.target.value;
                   setIndividual(val);
                   setMineOnly(false);
-                  void loadRows(category, date, true, val, false, department);
+                  void loadRows(category, date, false, val, false, department);
                 }}
                 className="input w-full py-2 text-sm"
                 disabled={loading || individuals.length === 0}
