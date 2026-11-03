@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isCronOrAdmin } from '@/lib/utils/cronAuth';
-import { cfApi } from '@/lib/cloudflare/api';
+import { getRecurringTemplates, materializeRecurringTemplate } from '@/lib/cloudflare/recurring';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 function getTargetMonths(targetDate: string): string[] {
-  const [y, m] = targetDate.split('-').map(Number);
+  const [y, m, d] = targetDate.split('-').map(Number);
   const currentMonthKey = `${y}-${String(m).padStart(2, '0')}`;
 
   // Next month
@@ -19,6 +19,10 @@ function getTargetMonths(targetDate: string): string[] {
   }
   const nextMonthKey = `${nextYear}-${String(nextMonth).padStart(2, '0')}`;
 
+  // On days 28-31, primary target is the upcoming next month
+  if (d >= 28) {
+    return [nextMonthKey, currentMonthKey];
+  }
   return [currentMonthKey, nextMonthKey];
 }
 
@@ -28,67 +32,92 @@ export async function GET(req: NextRequest) {
   }
 
   const { searchParams } = new URL(req.url);
-  const customMonth = searchParams.get('month');
-  const months = customMonth ? [customMonth] : getTargetMonths(indiaTodayKey());
+  const todayKey = indiaTodayKey();
+  const dayOfMonth = Number(todayKey.slice(8, 10));
 
-  const deadline = Date.now() + 50_000;
+  const customMonth = searchParams.get('month');
+  const months = customMonth ? [customMonth] : getTargetMonths(todayKey);
+
+  // Divide templates across 28th, 29th, 30th (3 chunks):
+  // Day 28: Chunk 0 (First 33%)
+  // Day 29: Chunk 1 (Middle 33%)
+  // Day 30-31: Chunk 2 (Final 34%)
+  // Day 1: Full reconciliation / catch-up sweep (all templates)
+  const chunkParam = searchParams.get('chunk');
+  let chunkIndex = -1; // -1 means all
+  if (chunkParam != null) {
+    chunkIndex = chunkParam.toLowerCase() === 'all' ? -1 : Math.max(0, Math.min(2, Number(chunkParam)));
+  } else if (dayOfMonth === 28) {
+    chunkIndex = 0;
+  } else if (dayOfMonth === 29) {
+    chunkIndex = 1;
+  } else if (dayOfMonth >= 30) {
+    chunkIndex = 2;
+  } else {
+    chunkIndex = -1; // Day 1 or manual sweep: process all
+  }
+
+  const deadline = Date.now() + 270_000; // 4.5 minutes safety buffer for Vercel
   let totalSlots = 0;
-  let offset = 0;
-  const limit = 30;
-  let pages = 0;
+  let processedCount = 0;
+  const errors: string[] = [];
 
   try {
-    for (;;) {
-      if (Date.now() >= deadline) break;
-      pages++;
-      const res = await cfApi<{
-        materialize?: {
-          periodSlots: number;
-          nextOffset: number;
-          done: boolean;
-          totalDefinitions: number;
-        };
-        data?: {
-          materialize?: {
-            periodSlots: number;
-            nextOffset: number;
-            done: boolean;
-            totalDefinitions: number;
-          };
-        };
-      }>('/recurring/migrate-to-period-rows', {
-        method: 'POST',
-        body: JSON.stringify({
-          phase: 'materialize',
-          months,
-          offset,
-          limit,
-        }),
-      });
+    const allTemplates = await getRecurringTemplates({ isActive: true });
+    // Stable sort by ID
+    allTemplates.sort((a, b) => a.id.localeCompare(b.id));
+    const totalTemplates = allTemplates.length;
 
-      const materialize = res?.materialize || res?.data?.materialize;
-      if (!materialize) break;
-
-      totalSlots += materialize.periodSlots || 0;
-      if (materialize.done || !materialize.nextOffset || materialize.nextOffset === offset) {
-        break;
-      }
-      offset = materialize.nextOffset;
+    let targetTemplates = allTemplates;
+    if (chunkIndex >= 0 && totalTemplates > 0) {
+      const chunkSize = Math.ceil(totalTemplates / 3);
+      const start = chunkIndex * chunkSize;
+      const end = Math.min(totalTemplates, start + chunkSize);
+      targetTemplates = allTemplates.slice(start, end);
     }
+
+    // Process templates with a controlled concurrency pool of 6
+    const concurrency = 6;
+    let templateIdx = 0;
+
+    const worker = async () => {
+      while (templateIdx < targetTemplates.length) {
+        if (Date.now() >= deadline) break;
+        const template = targetTemplates[templateIdx++];
+        for (const monthKey of months) {
+          try {
+            const res = await materializeRecurringTemplate(template.id, monthKey);
+            totalSlots += res?.inserted || 0;
+          } catch (err: any) {
+            errors.push(`${template.id} (${monthKey}): ${err.message}`);
+          }
+        }
+        processedCount++;
+      }
+    };
+
+    const workers = Array.from({ length: Math.min(concurrency, targetTemplates.length) }, () => worker());
+    await Promise.all(workers);
 
     const summary = {
       success: true,
+      dayOfMonth,
+      chunkIndex: chunkIndex === -1 ? 'all' : chunkIndex,
+      totalTemplatesInDb: totalTemplates,
+      chunkTemplatesCount: targetTemplates.length,
+      processedCount,
+      totalSlotsMaterialized: totalSlots,
       months,
-      pagesProcessed: pages,
-      totalSlots,
-      complete: offset === 0 || totalSlots >= 0,
+      timedOut: Date.now() >= deadline,
+      errorCount: errors.length,
+      errors: errors.slice(0, 5),
       timestamp: new Date().toISOString(),
     };
-    console.info('[recurring-materialize] Silently completed:', summary);
+
+    console.info('[recurring-materialize] Completed chunk run:', summary);
     return NextResponse.json(summary);
   } catch (err: any) {
     console.error('[recurring-materialize] Error:', err);
     return NextResponse.json({ success: false, error: err.message || 'Failed to materialize period rows' }, { status: 500 });
   }
 }
-
