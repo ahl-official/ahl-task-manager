@@ -48,7 +48,18 @@ const CATEGORY_LABELS: Record<string, string> = {
   'One Time': 'One Time Task',
   Delegation: 'One Time Task',
   'one-time': 'One Time Task',
+  daily: 'Daily Task',
+  weekly: 'Weekly Task',
+  monthly: 'Monthly Task',
 };
+export function normalizeCategory(cat?: string | null): string {
+  if (!cat) return 'One Time';
+  const c = cat.trim().toLowerCase();
+  if (c === 'daily' || c === 'daily task') return 'Daily';
+  if (c === 'weekly' || c === 'weekly task') return 'Weekly';
+  if (c === 'monthly' || c === 'monthly task') return 'Monthly';
+  return 'One Time';
+}
 const RECURRING_CATEGORIES = new Set(['Daily', 'Weekly', 'Monthly']);
 const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Dead Requested', 'Overdue', 'Dead']);
 const NEW_ASSIGNMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -359,7 +370,7 @@ export default function TaskListClient({
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
       const matchDepartmentFilter = departmentFilter === 'all' || matchDepartment(t.department, departmentFilter);
       const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
-      const matchCategory = categoryFilter === 'all' || t.category === categoryFilter;
+      const matchCategory = categoryFilter === 'all' || normalizeCategory(t.category) === normalizeCategory(categoryFilter);
       return matchMine && matchSearch && matchStatus && matchPriority && matchDepartmentFilter && matchUser && matchCategory;
     });
 
@@ -392,7 +403,7 @@ export default function TaskListClient({
       const matchMine = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
       const matchDepartmentFilter = departmentFilter === 'all' || matchDepartment(t.department, departmentFilter);
       const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
-      const matchCategory = categoryFilter === 'all' || t.category === categoryFilter;
+      const matchCategory = categoryFilter === 'all' || normalizeCategory(t.category) === normalizeCategory(categoryFilter);
       const matchSearch = matchesTaskSearch(t, search);
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
       return matchMine && matchDepartmentFilter && matchUser && matchCategory && matchSearch && matchPriority;
@@ -554,7 +565,7 @@ export default function TaskListClient({
         </div>
       )}
 
-      {justAssignedTasks.length > 0 && (
+      {isDefaultView && justAssignedTasks.length > 0 && (
         <section suppressHydrationWarning className="surface-enter mb-5">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
@@ -604,7 +615,7 @@ export default function TaskListClient({
         </section>
       )}
 
-      {recommendedQueue.length > 0 && (
+      {isDefaultView && recommendedQueue.length > 0 && (
         <section suppressHydrationWarning className="surface-enter mb-5">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
@@ -829,9 +840,12 @@ export default function TaskListClient({
               {filtered.map(task => {
                 const due = getDueBadge(task.endDate, task.status);
                 const scheduled = scheduleMap.get(task.taskId);
+                const today = indiaTodayKey();
+                const isOverdue = task.status === 'Overdue' || (Boolean(task.endDate) && indiaDayOffset(today, indiaDateKey(task.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(task.status));
+                const rowKey = `${task.taskId}-${task.dayKey || task.endDate || task.createdAt || ''}`;
                 return (
                   <tr
-                    key={task.taskId}
+                    key={rowKey}
                     className={cn(
                       'cursor-pointer border-b border-gray-50 transition-all duration-150 hover:bg-gray-50',
                       task.status === 'Dead' && 'bg-red-50 hover:bg-red-100',
@@ -844,7 +858,7 @@ export default function TaskListClient({
                     <td className="px-4 py-3 max-w-[240px]">
                       <p className="truncate text-gray-800 font-medium">{task.description}</p>
                       <p className="text-xs text-gray-400">
-                        {CATEGORY_LABELS[task.category]} - {task.department}
+                        {CATEGORY_LABELS[normalizeCategory(task.category)] || 'Task'} - {task.department}
                       </p>
                     </td>
                     <td className="px-4 py-3">
@@ -858,15 +872,15 @@ export default function TaskListClient({
                     </td>
                     <td className="px-4 py-3">
                       {(() => {
-                        const isRec = RECURRING_CATEGORIES.has(task.category || '');
-                        const displayStatus = isRec && task.status === 'Verified' ? 'Completed' : task.status;
-                        return <span className={cn('badge', STATUS_COLORS[displayStatus])}>{displayStatus}</span>;
+                        const isRec = RECURRING_CATEGORIES.has(normalizeCategory(task.category));
+                        const displayStatus = isOverdue ? 'Overdue' : (isRec && task.status === 'Verified' ? 'Completed' : task.status);
+                        return <span className={cn('badge', STATUS_COLORS[displayStatus] || STATUS_COLORS[task.status])}>{displayStatus}</span>;
                       })()}
                     </td>
                     <td className="px-4 py-3">
                       {['Completed', 'Verified'].includes(task.status) ? (
                         (() => {
-                          const isRec = RECURRING_CATEGORIES.has(task.category || '');
+                          const isRec = RECURRING_CATEGORIES.has(normalizeCategory(task.category));
                           const displayStatus = isRec && task.status === 'Verified' ? 'Completed' : task.status;
                           return <span className={cn('badge text-[10px]', STATUS_COLORS[displayStatus])}>{displayStatus}</span>;
                         })()

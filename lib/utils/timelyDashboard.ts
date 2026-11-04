@@ -15,6 +15,7 @@ export async function getPersonalTimelyTasks(session: SessionUser): Promise<Task
       const tomorrow = addDaysKey(today, 1);
 
       const rawItems = await getRecurringChecklist({
+        category: 'all',
         startDate: yesterday,
         endDate: tomorrow,
         userName: session.name,
