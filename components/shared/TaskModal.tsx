@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Calendar, User, Tag, AlertCircle, AlertOctagon, CheckCircle2, Clock, MessageSquare, RefreshCw, RotateCcw, Loader2, Trash2, ArrowRightLeft, ArrowRight, Pencil, Check } from 'lucide-react';
 import { cn, formatDate, formatDateTime, STATUS_COLORS, PRIORITY_COLORS, PRIORITY_DOT, getDueBadge, canUserShiftTask } from '@/lib/utils';
+import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import { toast } from 'sonner';
 import ShiftTaskModal from '@/components/shared/ShiftTaskModal';
 import type { TaskSerialized, UserRole } from '@/types';
@@ -29,7 +30,9 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const isDone = task.status === 'Completed' || task.status === 'Verified' || task.status === 'Shifted (Completed)' || task.status === 'Shifted (Verified)';
   const canDelete = isAdmin && !isTimelySheet && !isDone && task.category === 'One Time' && !task.parentTaskId && !task.childTaskId;
   const isRecurring = ['daily', 'weekly', 'monthly', 'recurring'].includes(String(task.category || '').toLowerCase()) || Boolean((task as any).isRecurring);
-  const displayStatus = isRecurring && task.status === 'Verified' ? 'Completed' : task.status;
+  const today = indiaTodayKey();
+  const isOverdue = task.status === 'Overdue' || (Boolean(task.endDate) && indiaDayOffset(today, indiaDateKey(task.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(task.status));
+  const displayStatus = isOverdue ? 'Overdue' : (isRecurring && task.status === 'Verified' ? 'Completed' : task.status);
   const due = getDueBadge(task.endDate, displayStatus);
   const needsDates = !isDone && isAssignee && (task.status === 'In Progress' || task.status === 'Pending Accept') && (!task.startDate || !task.endDate);
   const canChangeDead = !isTimelySheet && (isAssignee || isHandoff || isAdmin);

@@ -366,7 +366,7 @@ export default function TaskListClient({
           ? isOverdueTask
           : statusFilter === 'Completed'
             ? ['Completed', 'Verified'].includes(t.status)
-            : (t.status === statusFilter || normalizeBaseStatus(t.status) === statusFilter));
+            : (!isOverdueTask && (t.status === statusFilter || normalizeBaseStatus(t.status) === statusFilter)));
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
       const matchDepartmentFilter = departmentFilter === 'all' || matchDepartment(t.department, departmentFilter);
       const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
@@ -409,9 +409,10 @@ export default function TaskListClient({
       return matchMine && matchDepartmentFilter && matchUser && matchCategory && matchSearch && matchPriority;
     });
 
-    const pending = rows.filter(t => t.status === 'Pending Accept').length;
-    const inProgress = rows.filter(t => t.status === 'In Progress' || t.status === 'Delay Requested').length;
-    const overdue = rows.filter(t => t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(today, indiaDateKey(t.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status))).length;
+    const isOverdue = (t: TaskSerialized) => t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(today, indiaDateKey(t.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status));
+    const pending = rows.filter(t => t.status === 'Pending Accept' && !isOverdue(t)).length;
+    const inProgress = rows.filter(t => (t.status === 'In Progress' || t.status === 'Delay Requested') && !isOverdue(t)).length;
+    const overdue = rows.filter(t => isOverdue(t)).length;
     const completed = rows.filter(t => ['Completed', 'Verified'].includes(t.status)).length;
 
     return { pending, inProgress, overdue, completed, total: rows.length };
