@@ -14,6 +14,7 @@ import {
 } from '@/lib/utils/pendingCreatedTask';
 import type { TaskSerialized } from '@/types';
 import ServerLimitBanner from './ServerLimitBanner';
+import { deduplicateDepartments, matchDepartment } from '@/lib/utils/departments';
 
 interface Props {
   headerTitle?: string;
@@ -326,16 +327,16 @@ export default function TaskListClient({
   }, [statusFilter, mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, currentUid]);
 
   const departments = useMemo(() =>
-    Array.from(new Set([
-      ...users.map(user => user.department).filter(Boolean),
-      ...taskItems.map(task => task.department).filter(Boolean),
-    ])).sort((a, b) => a.localeCompare(b)),
+    deduplicateDepartments([
+      ...users.map(user => user.department),
+      ...taskItems.map(task => task.department),
+    ]),
     [taskItems, users]
   );
 
   const visibleUsers = useMemo(() =>
     users
-      .filter(user => user.isActive !== false && (departmentFilter === 'all' || user.department === departmentFilter))
+      .filter(user => user.isActive !== false && (departmentFilter === 'all' || matchDepartment(user.department, departmentFilter)))
       .sort((a, b) => a.name.localeCompare(b.name)),
     [departmentFilter, users]
   );
@@ -356,10 +357,10 @@ export default function TaskListClient({
             ? ['Completed', 'Verified'].includes(t.status)
             : (t.status === statusFilter || normalizeBaseStatus(t.status) === statusFilter));
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
-      const matchDepartment = departmentFilter === 'all' || t.department === departmentFilter;
+      const matchDepartmentFilter = departmentFilter === 'all' || matchDepartment(t.department, departmentFilter);
       const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
       const matchCategory = categoryFilter === 'all' || t.category === categoryFilter;
-      return matchMine && matchSearch && matchStatus && matchPriority && matchDepartment && matchUser && matchCategory;
+      return matchMine && matchSearch && matchStatus && matchPriority && matchDepartmentFilter && matchUser && matchCategory;
     });
 
     if (sortMode === 'recommended') {
@@ -389,12 +390,12 @@ export default function TaskListClient({
     const today = indiaTodayKey();
     const rows = taskItems.filter(t => {
       const matchMine = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
-      const matchDepartment = departmentFilter === 'all' || t.department === departmentFilter;
+      const matchDepartmentFilter = departmentFilter === 'all' || matchDepartment(t.department, departmentFilter);
       const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
       const matchCategory = categoryFilter === 'all' || t.category === categoryFilter;
       const matchSearch = matchesTaskSearch(t, search);
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
-      return matchMine && matchDepartment && matchUser && matchCategory && matchSearch && matchPriority;
+      return matchMine && matchDepartmentFilter && matchUser && matchCategory && matchSearch && matchPriority;
     });
 
     const pending = rows.filter(t => t.status === 'Pending Accept').length;

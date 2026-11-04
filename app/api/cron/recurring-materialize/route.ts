@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isCronOrAdmin } from '@/lib/utils/cronAuth';
 import { getRecurringTemplates, materializeRecurringTemplate } from '@/lib/cloudflare/recurring';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
+import { checkD1RecurringBudget, D1_READ_SOFT_LIMIT, D1_WRITE_SOFT_LIMIT } from '@/lib/cloudflare/d1Usage';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -51,6 +52,29 @@ export async function GET(req: NextRequest) {
 
   const customMonth = searchParams.get('month');
   const months = customMonth ? [customMonth] : getTargetMonths(todayKey);
+
+  // D1 Usage Quota Guard:
+  // If writes have reached 80k or reads have reached 4.5M, don't run the trigger today.
+  // The trigger is postponed to the next day's cron run (0 18 * * *).
+  const budget = await checkD1RecurringBudget();
+  if (!budget.allowed) {
+    console.warn('[recurring-materialize] Postponed due to D1 quota threshold:', budget.reason);
+    return NextResponse.json({
+      success: true,
+      skipped: true,
+      postponedToNextDay: true,
+      reason: budget.reason,
+      usage: {
+        rowsRead: budget.rowsRead,
+        rowsWritten: budget.rowsWritten,
+        limitRead: D1_READ_SOFT_LIMIT,
+        limitWrite: D1_WRITE_SOFT_LIMIT,
+      },
+      message: 'Usage reached daily threshold. Trigger postponed to next day cron run.',
+      nextScheduledRun: 'Next daily cron at 0 18 * * * (11:30 PM IST)',
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   // Divide templates across 28th, 29th, 30th (3 chunks):
   // Day 28: Chunk 0 (First 33%)

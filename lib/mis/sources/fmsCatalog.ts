@@ -14,6 +14,12 @@ export interface FmsStepDef {
   dateCol: number;
   endCol?: number;
   doneStatuses?: string[];
+  spreadsheetId?: string;
+  statusCol?: number;
+  onTimeCol?: number;
+  nameCol?: number;
+  delayCol?: number;
+  actualCol?: number;
 }
 
 function step(
@@ -22,7 +28,16 @@ function step(
   label: string,
   sheet: string,
   dateCol: number,
-  opts?: { endCol?: number; doneStatuses?: string[] },
+  opts?: {
+    endCol?: number;
+    doneStatuses?: string[];
+    spreadsheetId?: string;
+    statusCol?: number;
+    onTimeCol?: number;
+    nameCol?: number;
+    delayCol?: number;
+    actualCol?: number;
+  },
 ): FmsStepDef {
   return {
     id,
@@ -32,6 +47,12 @@ function step(
     dateCol,
     endCol: opts?.endCol,
     doneStatuses: opts?.doneStatuses,
+    spreadsheetId: opts?.spreadsheetId,
+    statusCol: opts?.statusCol,
+    onTimeCol: opts?.onTimeCol,
+    nameCol: opts?.nameCol,
+    delayCol: opts?.delayCol,
+    actualCol: opts?.actualCol,
   };
 }
 
@@ -220,4 +241,30 @@ export const FMS_STEP_CATALOG: FmsStepDef[] = [
   // 2-block layout; status values are "Completed"/"Delayed", not "Done".
   step("customer-support-automation-system-0", "Step 1", "Step 1", "Customer Support Automation System", 0, { doneStatuses: ["Completed"] }),
   step("customer-support-automation-system-7", "Step 2", "Step 2", "Customer Support Automation System", 7, { doneStatuses: ["Completed"] }),
+
+  // Upload FMS (dedicated spreadsheet) - Includes Azhar's Website & Landing Page integration tasks
+  step("upload-fms-stage-1", "Upload FMS", "Upload Video", "Upload FMS", 13, {
+    spreadsheetId: "10URWCazGNO7ChsGQW0vM2Z9VgoyvDMeLLrwNd-LvWME",
+    actualCol: 14,
+    statusCol: 15,
+    delayCol: 20,
+    nameCol: 8,
+    doneStatuses: ["Done", "Completed"],
+  }),
+  step("upload-fms-stage-2", "Upload FMS", "Download & Upload Ad", "Upload FMS", 21, {
+    spreadsheetId: "10URWCazGNO7ChsGQW0vM2Z9VgoyvDMeLLrwNd-LvWME",
+    actualCol: 22,
+    statusCol: 23,
+    delayCol: 25,
+    nameCol: 8,
+    doneStatuses: ["Done", "Completed"],
+  }),
+  step("upload-fms-stage-3", "Upload FMS", "Website / Landing Page Upload", "Upload FMS", 32, {
+    spreadsheetId: "10URWCazGNO7ChsGQW0vM2Z9VgoyvDMeLLrwNd-LvWME",
+    actualCol: 33,
+    statusCol: 34,
+    delayCol: 37,
+    nameCol: 8,
+    doneStatuses: ["Done", "Completed"],
+  }),
 ];

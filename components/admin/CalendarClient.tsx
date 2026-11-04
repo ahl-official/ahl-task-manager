@@ -9,6 +9,7 @@ import { Building2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn, PRIORITY_DOT, STATUS_COLORS } from '@/lib/utils';
 import TaskModal from '@/components/shared/TaskModal';
 import type { TaskSerialized } from '@/types';
+import { deduplicateDepartments, matchDepartment } from '@/lib/utils/departments';
 
 interface Props {
   tasks: TaskSerialized[];
@@ -59,16 +60,16 @@ export default function CalendarClient({ tasks, users }: Props) {
   }, [currentDate]);
 
   const departments = useMemo(() =>
-    Array.from(new Set([
-      ...users.map(user => user.department).filter(Boolean),
-      ...taskItems.map(task => task.department).filter(Boolean),
-    ])).sort((a, b) => a.localeCompare(b)),
+    deduplicateDepartments([
+      ...users.map(user => user.department),
+      ...taskItems.map(task => task.department),
+    ]),
     [taskItems, users],
   );
 
   const departmentUsers = useMemo(() =>
     users
-      .filter(user => user.isActive !== false && user.department === departmentFilter)
+      .filter(user => user.isActive !== false && matchDepartment(user.department, departmentFilter))
       .sort((a, b) => a.name.localeCompare(b.name)),
     [departmentFilter, users],
   );
@@ -76,7 +77,7 @@ export default function CalendarClient({ tasks, users }: Props) {
   const filteredTasks = useMemo(() => {
     if (!departmentFilter) return [];
 
-    const departmentTasks = taskItems.filter(task => task.department === departmentFilter);
+    const departmentTasks = taskItems.filter(task => matchDepartment(task.department, departmentFilter));
     return userFilter === 'all'
       ? departmentTasks
       : departmentTasks.filter(task => task.assignedTo === userFilter);

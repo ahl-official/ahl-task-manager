@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Clock, Search, RefreshCw,
   Layers,
@@ -476,7 +476,49 @@ export default function FmsClient({ currentUser, role }: FmsClientProps) {
     }
   }, [isAdmin]);
 
-  const fetchTasks = async (workflow: WorkflowType = activeWorkflow, showLoading = true) => {
+  const workflowCache = useRef<Record<string, any[]>>({});
+
+  const applyTasksToState = (workflow: WorkflowType, tasks: any[]) => {
+    if (workflow === 'consultation') {
+      setConsultationTasks(tasks);
+    } else if (workflow === 'idea-to-shoot' || workflow === 'shoot-to-edit') {
+      setVideoProductionTasks(tasks);
+    } else if (workflow === 'influencer-fms') {
+      setInfluencerTasks(tasks);
+    } else if (workflow === 'smp-session') {
+      setSmpSessionTasks(tasks);
+    } else if (workflow === 'order-delivery') {
+      setOrderDeliveryTasks(tasks);
+    } else if (workflow === 'order-management') {
+      setOrderManagementTasks(tasks);
+    } else if (workflow === 'crr-servicing') {
+      setCrrServicingTasks(tasks);
+    } else if (workflow === 'hr-recruitment') {
+      setHrRecruitmentTasks(tasks);
+    } else if (workflow === 'product-launch') {
+      setProductLaunchTasks(tasks);
+    } else if (workflow === 'blog-posting') {
+      setBlogPostingTasks(tasks);
+    } else if (workflow === 'hair-refilling') {
+      setHairRefillingTasks(tasks);
+    } else if (workflow === 'tejal-fms') {
+      setTejalTasks(tasks);
+    } else if (workflow === 'sejal-fms') {
+      setSejalTasks(tasks);
+    } else {
+      setUploadTasks(tasks);
+    }
+  };
+
+  const fetchTasks = async (workflow: WorkflowType = activeWorkflow, showLoading = true, forceRefresh = false) => {
+    // If not forcing refresh and workflow tasks already in memory cache, avoid unnecessary refetching
+    if (!forceRefresh && workflowCache.current[workflow]) {
+      applyTasksToState(workflow, workflowCache.current[workflow]);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
     if (showLoading) setLoading(true);
     else setRefreshing(true);
 
@@ -492,35 +534,9 @@ export default function FmsClient({ currentUser, role }: FmsClientProps) {
         throw new Error(data.error || 'Failed to fetch tasks');
       }
 
-      if (workflow === 'consultation') {
-        setConsultationTasks(data.tasks || []);
-      } else if (workflow === 'idea-to-shoot' || workflow === 'shoot-to-edit') {
-        setVideoProductionTasks(data.tasks || []);
-      } else if (workflow === 'influencer-fms') {
-        setInfluencerTasks(data.tasks || []);
-      } else if (workflow === 'smp-session') {
-        setSmpSessionTasks(data.tasks || []);
-      } else if (workflow === 'order-delivery') {
-        setOrderDeliveryTasks(data.tasks || []);
-      } else if (workflow === 'order-management') {
-        setOrderManagementTasks(data.tasks || []);
-      } else if (workflow === 'crr-servicing') {
-        setCrrServicingTasks(data.tasks || []);
-      } else if (workflow === 'hr-recruitment') {
-        setHrRecruitmentTasks(data.tasks || []);
-      } else if (workflow === 'product-launch') {
-        setProductLaunchTasks(data.tasks || []);
-      } else if (workflow === 'blog-posting') {
-        setBlogPostingTasks(data.tasks || []);
-      } else if (workflow === 'hair-refilling') {
-        setHairRefillingTasks(data.tasks || []);
-      } else if (workflow === 'tejal-fms') {
-        setTejalTasks(data.tasks || []);
-      } else if (workflow === 'sejal-fms') {
-        setSejalTasks(data.tasks || []);
-      } else {
-        setUploadTasks(data.tasks || []);
-      }
+      const tasks = data.tasks || [];
+      workflowCache.current[workflow] = tasks;
+      applyTasksToState(workflow, tasks);
     } catch (err: any) {
       toast.error(err.message || 'Failed to load FMS tasks');
     } finally {
@@ -537,7 +553,8 @@ export default function FmsClient({ currentUser, role }: FmsClientProps) {
     const handleGlobalRefresh = (e: any) => {
       const scope = e?.detail?.scope;
       if (!scope || scope === 'fms' || scope === 'all') {
-        fetchTasks(activeWorkflow, false);
+        workflowCache.current = {};
+        fetchTasks(activeWorkflow, false, true);
       }
     };
     window.addEventListener('app-global-refresh', handleGlobalRefresh);

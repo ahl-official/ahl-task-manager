@@ -4,6 +4,7 @@ import { FMS_STEP_CATALOG, type FmsStepDef } from '@/lib/mis/sources/fmsCatalog'
 import { dateKeyInRange } from '@/lib/mis/week';
 import { parseSheetDate } from '@/lib/utils/indiaDate';
 import { normalizePersonName } from '@/lib/utils/names';
+import { mapFmsNameToSystemUser } from '@/lib/fms/userMapping';
 
 const DEFAULT_MIS_REPORT_ID = '1seVqJ5xPqva1Si6CXDpuZSePvP40PDO2fzJSJfss8GU';
 
@@ -31,11 +32,12 @@ export interface FmsStepPersonCount {
 }
 
 function ensureRow(map: Map<string, FmsPersonBucket>, name: string) {
-  const key = normalizePersonName(name);
+  const mapped = mapFmsNameToSystemUser(name) || name;
+  const key = normalizePersonName(mapped);
   if (!key) return null;
   const existing = map.get(key);
   if (existing) return existing;
-  const created: FmsPersonBucket = { name, department: '', ...emptyBucket() };
+  const created: FmsPersonBucket = { name: mapped, department: '', ...emptyBucket() };
   map.set(key, created);
   return created;
 }
@@ -107,61 +109,107 @@ export async function getFmsDetailedCounts(
     return { byName, stepCounts };
   }
 
-  const catalogSheetNames = Array.from(new Set(FMS_STEP_CATALOG.map(step => step.sheet)));
-  const availableSheets = await getSpreadsheetSheetTitles(misReportSpreadsheetId());
+  const defaultSpreadsheetId = misReportSpreadsheetId();
 
-  // Map catalog sheet name -> actual matching sheet title in workbook
-  const validSheetMap = new Map<string, string>();
-  for (const name of catalogSheetNames) {
-    if (availableSheets.has(name)) {
-      validSheetMap.set(name, name);
-    } else {
-      const match = Array.from(availableSheets).find(
-        actual => actual.toLowerCase() === name.toLowerCase() ||
-                  actual.replace(/\s+/g, '').toLowerCase() === name.replace(/\s+/g, '').toLowerCase()
-      );
-      if (match) {
-        validSheetMap.set(name, match);
-      }
+  // Group steps by spreadsheet ID
+  const stepsBySpreadsheet = new Map<string, FmsStepDef[]>();
+  for (const step of FMS_STEP_CATALOG) {
+    const sId = step.spreadsheetId || defaultSpreadsheetId;
+    if (!stepsBySpreadsheet.has(sId)) {
+      stepsBySpreadsheet.set(sId, []);
     }
+    stepsBySpreadsheet.get(sId)!.push(step);
   }
 
+  // Map of `${sId}:${actualSheetTitle}` -> rows
   const sheetRows = new Map<string, unknown[][]>();
-  const sheetsToQuery = Array.from(new Set(validSheetMap.values()));
+  // Map of `${sId}:${catalogSheetName}` -> actual sheet title
+  const validSheetMap = new Map<string, string>();
 
-  if (sheetsToQuery.length > 0) {
+  for (const [sId, stepsForSheet] of Array.from(stepsBySpreadsheet.entries())) {
     try {
-      // Name columns sit as far right as CG. A2:AZ stopped before them, so those steps never counted.
-      const ranges = sheetsToQuery.map(name => `${quoteSheet(name)}!A2:CZ`);
-      const allResults = await readSpreadsheetValues(misReportSpreadsheetId(), ranges, 'FORMATTED_VALUE');
-      sheetsToQuery.forEach((name, idx) => {
-        sheetRows.set(name, allResults[idx] || []);
-      });
+      const availableSheets = await getSpreadsheetSheetTitles(sId);
+      const catalogNames = Array.from(new Set(stepsForSheet.map(s => s.sheet)));
+      const resolvedNames: string[] = [];
+
+      for (const name of catalogNames) {
+        let actual = name;
+        if (availableSheets.has(name)) {
+          actual = name;
+        } else {
+          const match = Array.from(availableSheets).find(
+            a => a.toLowerCase() === name.toLowerCase() ||
+                 a.replace(/\s+/g, '').toLowerCase() === name.replace(/\s+/g, '').toLowerCase()
+          );
+          if (match) actual = match;
+        }
+        validSheetMap.set(`${sId}:${name}`, actual);
+        resolvedNames.push(actual);
+      }
+
+      const uniqueResolved = Array.from(new Set(resolvedNames));
+      if (uniqueResolved.length > 0) {
+        const ranges = uniqueResolved.map(name => `${quoteSheet(name)}!A2:CZ`);
+        const allResults = await readSpreadsheetValues(sId, ranges, 'FORMATTED_VALUE');
+        uniqueResolved.forEach((name, idx) => {
+          sheetRows.set(`${sId}:${name}`, allResults[idx] || []);
+        });
+      }
     } catch (err) {
-      console.error('Failed to batch read FMS sheets from Google Sheets', err);
-      throw err;
+      console.error(`Failed to batch read FMS sheets from spreadsheet ${sId}`, err);
     }
   }
 
   for (let i = 0; i < FMS_STEP_CATALOG.length; i++) {
     const step = FMS_STEP_CATALOG[i];
-    const actualSheetName = validSheetMap.get(step.sheet) || step.sheet;
+    const sId = step.spreadsheetId || defaultSpreadsheetId;
+    const actualSheetName = validSheetMap.get(`${sId}:${step.sheet}`) || step.sheet;
     const entry = includeSteps ? stepCounts[i] : null;
-    const rows = sheetRows.get(actualSheetName) ?? [];
+    const rows = sheetRows.get(`${sId}:${actualSheetName}`) ?? [];
     const dateCol = step.dateCol;
-    const statusCol = dateCol + 2;
-    const onTimeCol = dateCol + 4;
-    const nameCol = dateCol + 5;
+    const statusCol = step.statusCol ?? (dateCol + 2);
+    const onTimeCol = step.onTimeCol ?? (dateCol + 4);
+    const nameCol = step.nameCol ?? (dateCol + 5);
 
     for (const row of rows) {
-      const name = cell(row, nameCol);
+      let name = cell(row, nameCol);
+      // For Upload FMS Stage 3, check if handed over to Azhar
+      if (step.id === 'upload-fms-stage-3') {
+        const col19 = cell(row, 19).toLowerCase();
+        if (col19.includes('azhar')) {
+          name = 'Azhar';
+        }
+      }
       if (!name) continue;
       if (!rowInWeek(row, step, weekStart, weekEnd)) continue;
 
       const status = cell(row, statusCol);
-      const onTimeFlag = cell(row, onTimeCol);
-      const done = isDoneStatus(status, step);
-      const onTime = done && isOnTimeStatus(onTimeFlag);
+      let done = isDoneStatus(status, step);
+      if (!done && step.actualCol !== undefined) {
+        const actual = cell(row, step.actualCol);
+        if (actual && actual.trim() !== '') {
+          done = true;
+        }
+      }
+
+      let onTime = false;
+      if (done) {
+        if (step.delayCol !== undefined) {
+          const delayStr = cell(row, step.delayCol);
+          if (!delayStr || delayStr.startsWith('-') || delayStr === '0' || delayStr === '00:00:00' || delayStr.toLowerCase() === 'on-time') {
+            onTime = true;
+          } else if (step.actualCol !== undefined) {
+            const pDate = parseSheetDate(cell(row, dateCol));
+            const aDate = parseSheetDate(cell(row, step.actualCol));
+            if (pDate && aDate && aDate <= pDate) {
+              onTime = true;
+            }
+          }
+        } else {
+          const onTimeFlag = cell(row, onTimeCol);
+          onTime = isOnTimeStatus(onTimeFlag);
+        }
+      }
 
       const totalBucket = ensureRow(byName, name);
       if (!totalBucket) continue;

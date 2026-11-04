@@ -127,9 +127,11 @@ export async function buildDailyPendingTasksPdf(data: PendingTasksPdfData): Prom
     page.drawLine({ start: { x: colX.targetDate, y }, end: { x: colX.targetDate, y: bottomY }, color: black, thickness: 1 });
 
     // Text in headers
-    // Sr No (multiline: Sr \n No)
-    page.drawText('Sr', { x: colX.srNo + cellPaddingX, y: y - 16, size: fontSizeHeader, font: fontBold, color: black });
-    page.drawText('No', { x: colX.srNo + cellPaddingX, y: y - 29, size: fontSizeHeader, font: fontBold, color: black });
+    // Sr No (single clean line, horizontally centered)
+    const srHeaderText = 'Sr. No.';
+    const srHeaderWidth = fontBold.widthOfTextAtSize(srHeaderText, fontSizeHeader);
+    const srHeaderX = colX.srNo + Math.max(0, (colWidths.srNo - srHeaderWidth) / 2);
+    page.drawText(srHeaderText, { x: srHeaderX, y: y - 22, size: fontSizeHeader, font: fontBold, color: black });
 
     // Task Description
     page.drawText('Task Description', { x: colX.desc + cellPaddingX, y: y - 22, size: fontSizeHeader, font: fontBold, color: black });
@@ -187,10 +189,13 @@ export async function buildDailyPendingTasksPdf(data: PendingTasksPdfData): Prom
       currentPage.drawLine({ start: { x: colX.remarks, y: curY }, end: { x: colX.remarks, y: rowBottomY }, color: black, thickness: 1 });
       currentPage.drawLine({ start: { x: colX.targetDate, y: curY }, end: { x: colX.targetDate, y: rowBottomY }, color: black, thickness: 1 });
 
-      // If first chunk of task, print Sr No
+      // If first chunk of task, print Sr No centered horizontally
       if (lineIdx === 0) {
-        currentPage.drawText(String(task.srNo), {
-          x: colX.srNo + cellPaddingX,
+        const srStr = String(task.srNo);
+        const srWidth = fontRegular.widthOfTextAtSize(srStr, fontSizeBody);
+        const srX = colX.srNo + Math.max(0, (colWidths.srNo - srWidth) / 2);
+        currentPage.drawText(srStr, {
+          x: srX,
           y: curY - cellPaddingY - 10,
           size: fontSizeBody,
           font: fontRegular,

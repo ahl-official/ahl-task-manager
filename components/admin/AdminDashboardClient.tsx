@@ -13,6 +13,7 @@ import {
   takePendingCreatedTask,
 } from '@/lib/utils/pendingCreatedTask';
 import type { TaskSerialized } from '@/types';
+import { deduplicateDepartments, matchDepartment, canonicalDepartment } from '@/lib/utils/departments';
 
 type TaskFilter = 'all' | 'Pending Accept' | 'In Progress' | 'Completed' | 'Verified' | 'Overdue';
 const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Dead Requested', 'Overdue', 'Dead']);
@@ -194,10 +195,12 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
   }
 
   const departments = useMemo(() => {
-    const userDepartments = users.map((u: any) => u.department).filter(Boolean);
-    const savedDepartments = initialDepartments.map(d => d.name).filter(Boolean);
-    const taskDepartments = taskItems.map(task => task.department).filter(Boolean);
-    return ['all', ...Array.from(new Set([...savedDepartments, ...userDepartments, ...taskDepartments])).sort((a, b) => a.localeCompare(b))];
+    const rawDepartments = [
+      ...initialDepartments.map(d => d.name),
+      ...users.map((u: any) => u.department),
+      ...taskItems.map(task => task.department),
+    ];
+    return ['all', ...deduplicateDepartments(rawDepartments)];
   }, [initialDepartments, taskItems, users]);
 
   const activeUsers = useMemo(() => users.filter((u: any) => u.isActive), [users]);
@@ -213,7 +216,7 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
       const userCounts = byUser.get(task.assignedTo) ?? emptyCounts();
       addTaskToCounts(userCounts, task);
       byUser.set(task.assignedTo, userCounts);
-      const department = task.department || 'Unassigned';
+      const department = canonicalDepartment(task.department) || 'Unassigned';
       const departmentCounts = byDepartment.get(department) ?? emptyCounts();
       addTaskToCounts(departmentCounts, task);
       byDepartment.set(department, departmentCounts);
@@ -241,9 +244,9 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
 
   const departmentBlocks = useMemo(() => departments
     .filter(department => department !== 'all')
-    .filter(department => deptFilter === 'all' || department === deptFilter)
+    .filter(department => deptFilter === 'all' || matchDepartment(department, deptFilter))
     .map(department => {
-      const departmentUsers = activeUsers.filter((u: any) => u.department === department);
+      const departmentUsers = activeUsers.filter((u: any) => matchDepartment(u.department, department));
       const visibleUsers = departmentUsers.filter((u: any) =>
         filter === 'all' || (() => { const counts = taskMetrics.byUser.get(u.uid) || emptyCounts();
           return filter === 'Completed' ? counts.completed + counts.verified > 0 : counts[({ 'Pending Accept': 'pending', 'In Progress': 'inProgress', 'Verified': 'verified', 'Overdue': 'overdue' } as const)[filter]] > 0; })()

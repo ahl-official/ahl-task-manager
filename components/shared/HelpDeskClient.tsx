@@ -22,14 +22,14 @@ import {
   Send,
   MessageSquare,
   FileSpreadsheet,
+  Loader2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import type { SessionUser } from '@/types';
 
 interface Props {
   session?: SessionUser | null;
 }
-
-type TabType = 'admin' | 'member';
 
 export default function HelpDeskClient({ session }: Props) {
   const role = session?.role || 'member';
@@ -38,14 +38,16 @@ export default function HelpDeskClient({ session }: Props) {
   const userName = session?.name || 'Team Member';
   const department = session?.department || '';
 
-  // Mode: Default to admin if user is admin, else member
-  const [activeTab, setActiveTab] = useState<TabType>(isActualAdmin ? 'admin' : 'member');
+  // Mode: strictly determined by the logged-in user's role (no switcher toggle)
+  const isAdmin = isActualAdmin;
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
   const [ticketSubject, setTicketSubject] = useState('');
   const [ticketMessage, setTicketMessage] = useState('');
   const [ticketCategory, setTicketCategory] = useState('Task Issue');
   const [ticketPriority, setTicketPriority] = useState('Medium');
   const [ticketSent, setTicketSent] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [lastTicketUrl, setLastTicketUrl] = useState<string | null>(null);
 
   // ---------------------------------------------------------
   // ADMIN-LEVEL HELP DESK DATA
@@ -248,29 +250,55 @@ export default function HelpDeskClient({ session }: Props) {
     { name: 'Overdue', desc: 'Due date has passed without completion.', badge: 'bg-red-50 text-red-800 border-red-200' },
   ];
 
-  const handleSendTicket = (e: React.FormEvent) => {
+  const handleSendTicket = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ticketSubject.trim() || !ticketMessage.trim()) return;
-    // Format WhatsApp message to support or admin
+    if (!ticketSubject.trim() || !ticketMessage.trim() || submitting) return;
+
+    setSubmitting(true);
     const adminPhone = '919967716945';
-    const text = encodeURIComponent(
+    const waText =
       `*AHL Help Desk Issue Report*\n\n` +
       `*From:* ${userName} (${role.toUpperCase()})\n` +
       `*Department:* ${department || 'General'}\n` +
-      `*Level View:* ${activeTab === 'admin' ? 'Admin Level' : 'Member Level'}\n` +
       `*Category:* ${ticketCategory}\n` +
       `*Priority:* ${ticketPriority}\n` +
-      `*Subject:* ${ticketSubject}\n\n` +
-      `*Details:*\n${ticketMessage}`
-    );
-    window.open(`https://wa.me/${adminPhone}?text=${text}`, '_blank');
-    setTicketSent(true);
-    setTimeout(() => setTicketSent(false), 5000);
+      `*Subject:* ${ticketSubject.trim()}\n\n` +
+      `*Details:*\n${ticketMessage.trim()}`;
+    const directWaUrl = `https://wa.me/${adminPhone}?text=${encodeURIComponent(waText)}`;
+    setLastTicketUrl(directWaUrl);
+
+    try {
+      const res = await fetch('/api/help/ticket', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: ticketCategory,
+          priority: ticketPriority,
+          subject: ticketSubject.trim(),
+          message: ticketMessage.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to submit ticket');
+
+      setTicketSent(true);
+      toast.success('Help desk ticket dispatched directly to AHL Support via WhatsApp!');
+      setTicketSubject('');
+      setTicketMessage('');
+    } catch (err: any) {
+      console.error('Ticket submit error:', err);
+      window.open(directWaUrl, '_blank');
+      setTicketSent(true);
+      toast.info('Opened ticket directly in WhatsApp for you!');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const currentSteps = activeTab === 'admin' ? adminQuickSteps : memberQuickSteps;
-  const currentFeatures = activeTab === 'admin' ? adminFeatures : memberFeatures;
-  const currentFaqs = activeTab === 'admin' ? adminFaqs : memberFaqs;
+  const currentSteps = isAdmin ? adminQuickSteps : memberQuickSteps;
+  const currentFeatures = isAdmin ? adminFeatures : memberFeatures;
+  const currentFaqs = isAdmin ? adminFaqs : memberFaqs;
 
   return (
     <div className="space-y-6 p-4 sm:p-6 max-w-6xl mx-auto">
@@ -281,18 +309,18 @@ export default function HelpDeskClient({ session }: Props) {
             <div className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-0.5 text-xs font-medium text-brand-200 backdrop-blur-sm mb-2">
               <Sparkles size={13} className="text-amber-300" />
               <span>
-                {activeTab === 'admin'
+                {isAdmin
                   ? 'Administrator & Management Help Desk'
                   : `Team Member & Staff Help Desk • ${department || 'General'}`}
               </span>
             </div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
-              {activeTab === 'admin'
+              {isAdmin
                 ? 'AHL Help Desk — Admin Level'
                 : `AHL Help Desk — Member Level, ${userName}`}
             </h1>
             <p className="mt-1 text-xs sm:text-sm text-gray-200 max-w-2xl">
-              {activeTab === 'admin'
+              {isAdmin
                 ? 'Comprehensive guide for administrators covering notification bell sign-offs, date extension decisions, user management, and recurring templates.'
                 : 'Step-by-step instructions for team members to manage daily tasks, checklists, deadline extensions, and complete work on time.'}
             </p>
@@ -307,64 +335,17 @@ export default function HelpDeskClient({ session }: Props) {
               Account: <strong className="text-white">{role}</strong>
               {department && ` • ${department}`}
             </p>
-            {isActualAdmin && (
+            {isAdmin && (
               <span className="inline-block mt-1 text-[10px] font-semibold bg-amber-400 text-amber-950 px-2 py-0.5 rounded-md">
                 Admin Privileges Active
               </span>
             )}
           </div>
         </div>
-
-        {/* Level Switcher Tab — Allows switching, defaults to user's real level */}
-        <div className="mt-5 pt-4 border-t border-white/15 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-1 bg-black/25 p-1 rounded-xl backdrop-blur-md border border-white/10">
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('member');
-                setExpandedFaq(null);
-              }}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                activeTab === 'member'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-300 hover:text-white'
-              }`}
-            >
-              <User size={13} />
-              <span>Member Level Help Desk</span>
-              {!isActualAdmin && (
-                <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-brand-100 text-brand-800 font-bold">Your Role</span>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('admin');
-                setExpandedFaq(null);
-              }}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                activeTab === 'admin'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-300 hover:text-white'
-              }`}
-            >
-              <ShieldCheck size={13} />
-              <span>Admin Level Help Desk</span>
-              {isActualAdmin && (
-                <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-amber-200 text-amber-950 font-bold">Your Role</span>
-              )}
-            </button>
-          </div>
-
-          <p className="text-[11px] text-brand-200">
-            Current View: <strong className="text-white">{activeTab === 'admin' ? 'Admin Level' : 'Member Level'}</strong>
-          </p>
-        </div>
       </div>
 
       {/* Admin Bell Clarification Notice */}
-      {activeTab === 'member' && (
+      {!isAdmin && (
         <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-3.5 text-xs text-blue-900 flex items-start gap-2.5">
           <HelpCircle size={16} className="text-blue-600 shrink-0 mt-0.5" />
           <p className="leading-relaxed">
@@ -377,10 +358,10 @@ export default function HelpDeskClient({ session }: Props) {
       <section className="card p-5 border border-gray-200">
         <div className="mb-4">
           <h2 className="text-sm font-bold uppercase tracking-wider text-brand-700">
-            {activeTab === 'admin' ? '3-Step Administrative Management Cycle' : '3-Step Daily Member Routine'}
+            {isAdmin ? '3-Step Administrative Management Cycle' : '3-Step Daily Member Routine'}
           </h2>
           <p className="text-xs text-gray-500">
-            {activeTab === 'admin'
+            {isAdmin
               ? 'Recommended daily operational cycle for administrators'
               : 'Follow this simple cycle every working day to keep your score at 100%'}
           </p>
@@ -414,10 +395,10 @@ export default function HelpDeskClient({ session }: Props) {
       <section>
         <div className="mb-3">
           <h2 className="text-sm font-bold uppercase tracking-wider text-gray-900">
-            {activeTab === 'admin' ? 'Administrator Features & Controls' : 'Member Features & Score Rules'}
+            {isAdmin ? 'Administrator Features & Controls' : 'Member Features & Score Rules'}
           </h2>
           <p className="text-xs text-gray-500">
-            {activeTab === 'admin'
+            {isAdmin
               ? 'Tools, capabilities, and system rules available to managers and admins'
               : 'Important guidelines for managing and completing your assigned responsibilities'}
           </p>
@@ -474,7 +455,7 @@ export default function HelpDeskClient({ session }: Props) {
       <section className="card p-5 border border-gray-200">
         <div className="mb-3">
           <h2 className="text-sm font-bold uppercase tracking-wider text-gray-900">
-            {activeTab === 'admin' ? 'Administrator FAQ' : 'Member FAQ'}
+            {isAdmin ? 'Administrator FAQ' : 'Member FAQ'}
           </h2>
           <p className="text-xs text-gray-500">Quick answers to common questions</p>
         </div>
@@ -577,20 +558,46 @@ export default function HelpDeskClient({ session }: Props) {
             />
           </label>
 
-          <div className="flex items-center gap-3 pt-1">
+          <div className="flex flex-wrap items-center gap-3 pt-1">
             <button
               type="submit"
-              className="btn-primary py-2 px-4 text-xs flex items-center gap-1.5 shadow-xs"
+              disabled={submitting}
+              className="btn-primary py-2 px-4 text-xs flex items-center gap-1.5 shadow-xs disabled:opacity-50"
             >
-              <Send size={13} />
-              <span>Send to Support Desk</span>
+              {submitting ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              <span>{submitting ? 'Submitting Ticket...' : 'Send to Support Desk'}</span>
             </button>
-            {ticketSent && (
-              <span className="text-xs font-medium text-emerald-600 flex items-center gap-1">
-                <CheckCircle2 size={14} /> WhatsApp prompt opened!
-              </span>
+            {lastTicketUrl && (
+              <a
+                href={lastTicketUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-secondary py-2 px-3 text-xs flex items-center gap-1.5 text-gray-700 hover:text-emerald-700"
+              >
+                <MessageSquare size={13} className="text-emerald-600" />
+                <span>Chat on WhatsApp Directly</span>
+              </a>
             )}
           </div>
+
+          {ticketSent && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900 flex items-center justify-between gap-3">
+              <span className="flex items-center gap-1.5 font-medium">
+                <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                Ticket dispatched to AHL Support (9967716945) via WhatsApp!
+              </span>
+              {lastTicketUrl && (
+                <a
+                  href={lastTicketUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white font-semibold text-[11px] hover:bg-emerald-700 shrink-0"
+                >
+                  Open WhatsApp Chat
+                </a>
+              )}
+            </div>
+          )}
         </form>
       </section>
     </div>

@@ -5,12 +5,16 @@ import { getAuth } from 'firebase-admin/auth';
 function initAdmin() {
   if (getApps().length > 0) return getApp();
 
+  const privateKey = (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+  if (!process.env.FIREBASE_PROJECT_ID || !privateKey) {
+    return initializeApp();
+  }
+
   return initializeApp({
     credential: cert({
       projectId:   process.env.FIREBASE_PROJECT_ID!,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL!,
-      // Replace literal \n in env var with actual newlines
-      privateKey:  process.env.FIREBASE_PRIVATE_KEY!.replace(/\\n/g, '\n'),
+      privateKey,
     }),
   });
 }
