@@ -468,10 +468,12 @@ export default function TaskListClient({
     return () => { clearTimeout(timer); controller.abort(); };
   }, [mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, initialCounts]);
 
-  const cardCounts = search.trim() ? loadedCardCounts : {
+  const isFilterActive = mineOnly || departmentFilter !== 'all' || userFilter !== 'all' || categoryFilter !== 'all' || priorityFilter !== 'all' || Boolean(search.trim());
+
+  const cardCounts = isFilterActive ? loadedCardCounts : {
     pending: aggregateCards?.pending ?? loadedCardCounts.pending,
     inProgress: aggregateCards ? aggregateCards.inProgress + aggregateCards.delayRequested : loadedCardCounts.inProgress,
-    overdue: aggregateCards?.overdue ?? loadedCardCounts.overdue,
+    overdue: Math.max(aggregateCards?.overdue ?? 0, loadedCardCounts.overdue),
     completed: aggregateCards ? aggregateCards.completed + aggregateCards.verified : loadedCardCounts.completed,
     total: aggregateCards?.total ?? loadedCardCounts.total,
   };
