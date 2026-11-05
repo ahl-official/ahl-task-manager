@@ -8,7 +8,7 @@ import { canAssignTask, describeAssignmentRule, roleLabel } from '@/lib/utils/hi
 import { stashPendingCreatedTask } from '@/lib/utils/pendingCreatedTask';
 import type { UserRole } from '@/types';
 
-const CATEGORIES = ['Daily', 'Weekly', 'Monthly', 'One Time'];
+const CATEGORIES = ['One Time', 'Daily', 'Weekly', 'Monthly'];
 const PRIORITIES = ['High', 'Medium', 'Low'];
 
 interface Props {
@@ -98,7 +98,7 @@ export default function CreateTaskForm({ users, currentUser, redirectTo, isReadL
   const [form, setForm] = useState({
     description: '',
     assignedTo:  defaultAssignedTo,
-    category:    'Daily',
+    category:    'One Time',
     priority:    'Medium',
     startDate:   '',
     endDate:     '',
