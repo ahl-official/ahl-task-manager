@@ -159,9 +159,28 @@ export async function routeLifecycle(req,env,url,h){
       verifiedTasks.push({...task,status:'Verified',verified_at:now,updated_at:now});
     }
     if(statements.length>0){
-      await env.DB.batch(statements);
+      const countByBucket=new Map();
       for(const task of verifiedTasks){
-        await syncTaskCountChange(env,h,{...task,status:'Completed'},task);
+        const u=task.assigned_to||'',dept=task.department||'',k=u+'\u0000'+dept;
+        countByBucket.set(k,(countByBucket.get(k)||0)+1);
+      }
+      const countStatements=[];
+      for(const [k,delta] of countByBucket.entries()){
+        const [u,dept]=k.split('\u0000');
+        countStatements.push(
+          env.DB.prepare("UPDATE task_counts_summary SET count = MAX(0, count - ?) WHERE assigned_to = ? AND department = ? AND status = 'Completed'").bind(delta,u,dept),
+          env.DB.prepare("INSERT INTO task_counts_summary (assigned_to, department, status, count) VALUES (?, ?, 'Verified', ?) ON CONFLICT(assigned_to, department, status) DO UPDATE SET count = count + excluded.count").bind(u,dept,delta)
+        );
+      }
+      await env.DB.batch([...statements,...countStatements]);
+      for(const task of verifiedTasks){
+        const parentId=legacyParent(task);
+        if(parentId){
+          const parent=await env.DB.prepare('SELECT assigned_to,department,status FROM tasks_current WHERE task_id=?').bind(parentId).first();
+          if(parent&&parent.status==='Shifted (Verified)'){
+            await h.adjustTaskCount(env,{...parent,status:'Shifted (Completed)'},parent);
+          }
+        }
       }
     }
     return response({verifiedIds:verifiedTasks.map(t=>t.task_id),count:verifiedTasks.length,tasks:verifiedTasks.map(h.taskFromRow)});

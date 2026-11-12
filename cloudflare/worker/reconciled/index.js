@@ -1672,16 +1672,10 @@ async function ensurePeriodRowsTable(env) {
     "CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks_current(assigned_to, status)"
   ).run().catch(() => null);
   await env.DB.prepare(
-    "CREATE INDEX IF NOT EXISTS idx_tasks_status_end ON tasks_current(status, end_date)"
-  ).run().catch(() => null);
-  await env.DB.prepare(
     "CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks_current(status, created_at)"
   ).run().catch(() => null);
   await env.DB.prepare(
     "CREATE INDEX IF NOT EXISTS idx_tasks_handoff_status ON tasks_current(handoff_uid, status)"
-  ).run().catch(() => null);
-  await env.DB.prepare(
-    "CREATE INDEX IF NOT EXISTS idx_tasks_dept_status ON tasks_current(department, status)"
   ).run().catch(() => null);
   periodRowsTableReady = true;
 }
