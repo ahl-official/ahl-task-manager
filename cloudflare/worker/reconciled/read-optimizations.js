@@ -8,6 +8,72 @@ export function invalidateReadCache() {
     if (new URL(key).pathname === '/tasks/counts') cache.delete(key);
   }
 }
+
+function patchSearchEntry(entryUrl, list, mutatedTasks, deletedTaskId) {
+  let changed = false;
+  let next = list;
+  if (deletedTaskId) {
+    const filtered = next.filter(item => item && item.taskId !== deletedTaskId);
+    if (filtered.length !== next.length) {
+      next = filtered;
+      changed = true;
+    }
+  }
+  const isVerificationPending = entryUrl.searchParams.get('verificationPending') === 'true';
+  for (const task of mutatedTasks) {
+    if (!task?.taskId) continue;
+    const idx = next.findIndex(item => item && item.taskId === task.taskId);
+    if (isVerificationPending && (task.status !== 'Completed' || task.verifiedAt)) {
+      if (idx !== -1) {
+        next = next.filter(item => item && item.taskId !== task.taskId);
+        changed = true;
+      }
+      continue;
+    }
+    if (idx !== -1) {
+      next = next.slice();
+      next[idx] = { ...next[idx], ...task };
+      changed = true;
+    }
+  }
+  return changed ? next : null;
+}
+
+export async function syncCachedTasksFromMutation(req, url, response) {
+  if (req.method === 'GET' || !response?.ok) return;
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) return;
+  let payload;
+  try {
+    payload = await response.clone().json();
+  } catch {
+    return;
+  }
+  const data = payload?.data;
+  if (!data) return;
+  const deletedTaskId = data.deleted && data.taskId ? String(data.taskId) : null;
+  const mutatedTasks = Array.isArray(data.tasks) ? data.tasks : (data.taskId && !deletedTaskId ? [data] : []);
+  if (!deletedTaskId && mutatedTasks.length === 0) return;
+
+  const nowIso = new Date().toISOString();
+  for (const [key, entry] of cache.entries()) {
+    const entryUrl = new URL(key);
+    if (entryUrl.pathname !== '/tasks/search') continue;
+    try {
+      const parsed = JSON.parse(entry.body);
+      if (!Array.isArray(parsed?.data)) continue;
+      const updatedList = patchSearchEntry(entryUrl, parsed.data, mutatedTasks, deletedTaskId);
+      if (updatedList) {
+        parsed.data = updatedList;
+        if (parsed.meta) parsed.meta.asOf = nowIso;
+        entry.body = JSON.stringify(parsed);
+        entry.asOf = nowIso;
+      }
+    } catch {
+      // Ignore malformed cached JSON
+    }
+  }
+}
 export function getCachedRead(req, url) {
   if (req.method !== 'GET' || url.searchParams.get('fresh') === 'true') return null;
   const entry = cache.get(url.href);

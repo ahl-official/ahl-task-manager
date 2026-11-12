@@ -1,5 +1,5 @@
 import { routeLifecycle } from './lifecycle.js';
-import { routeReadOptimizations, aggregatePeriods, getCachedRead, cacheRead, invalidateReadCache, adjustTaskCount } from './read-optimizations.js';
+import { routeReadOptimizations, aggregatePeriods, getCachedRead, cacheRead, invalidateReadCache, syncCachedTasksFromMutation, adjustTaskCount } from './read-optimizations.js';
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
@@ -2661,7 +2661,7 @@ var index_default = {
     const cached=getCachedRead(req,url);
     if(cached)return new Response(cached.body,{status:cached.status,headers:{...Object.fromEntries(cached.headers),...corsHeaders(wrappedEnv)}});
     const response = await routeLifecycle(req,wrappedEnv,url,{nextTaskId,taskFromRow,revisionFromRow,resolveRecurringDefinition,buildMonthPeriodRows,periodRowId,adjustTaskCount}) || await routeReadOptimizations(req,wrappedEnv,url,taskFromRow) || await routeUsers(req, wrappedEnv, url) || await routeDepartments(req, wrappedEnv, url) || await routeTasks(req, wrappedEnv, url) || await routeScores(req, wrappedEnv, url) || await routeRevisions(req, wrappedEnv, url) || await routeCrm(req, wrappedEnv, url) || await routeAutomations(req, wrappedEnv, url) || await routeMis(req, wrappedEnv, url) || await routeRecurring(req, wrappedEnv, url) || await routeChecklist(req, wrappedEnv, url) || json({ success: false, error: "Not found" }, { status: 404 });
-    if(req.method!=='GET'&&response.ok)invalidateReadCache();
+    if(req.method!=='GET'&&response.ok){invalidateReadCache();await syncCachedTasksFromMutation(req,url,response);}
     await cacheRead(req,url,response);
     return new Response(response.body, { status: response.status, headers: { ...Object.fromEntries(response.headers), ...corsHeaders(wrappedEnv) } });
   }

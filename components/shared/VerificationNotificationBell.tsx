@@ -36,7 +36,7 @@ export default function VerificationNotificationBell({
       const url = isAdmin
         ? '/api/tasks?scope=all&filter=true&verificationPending=true&excludeRecurring=true&limit=50'
         : '/api/tasks?scope=handoff&filter=true&verificationPending=true&excludeRecurring=true&limit=50';
-      const res = await fetch(url);
+      const res = await fetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to load notifications');
       const pending = (data.data as TaskSerialized[])

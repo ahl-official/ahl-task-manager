@@ -104,12 +104,19 @@ export function updateTaskInReadCache(taskId: string, patch: Record<string, any>
       const list = entry.value as any[];
       const idx = list.findIndex(item => item && (item.taskId === taskId || item.id === taskId));
       if (idx !== -1) {
-        list[idx] = {
+        const merged = {
           ...list[idx],
           ...patch,
           updatedAt: patch.updatedAt || new Date().toISOString(),
         };
-        entry.promise = Promise.resolve(list);
+        if (key.includes('verificationPending=true') && (merged.status !== 'Completed' || merged.verifiedAt)) {
+          const next = list.filter((_, i) => i !== idx);
+          entry.value = next;
+          entry.promise = Promise.resolve(next);
+        } else {
+          list[idx] = merged;
+          entry.promise = Promise.resolve(list);
+        }
       }
     }
 
