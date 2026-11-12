@@ -108,6 +108,8 @@ export async function fetchOrderManagementTasks(requestedUser?: string): Promise
               else if (stepNum === '2' || stepNum === '3' || stepNum === '4') assignedTo = 'Prashant / Anthony';
               else if (stepNum === '5') assignedTo = 'Parth / Divya';
               else if (stepNum === '7') assignedTo = 'Jagruti';
+            } else if (tabName.includes('Mumbai')) {
+              if (stepNum === '8') assignedTo = 'Accounts (Jagruti)';
             }
           }
 

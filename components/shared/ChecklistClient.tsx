@@ -983,7 +983,9 @@ export default function ChecklistClient({
                     </div>
                     {row.remark && (
                       <div className="mt-2 rounded-md border border-gray-200 bg-white px-3 py-2">
-                        <p className="mb-1 text-[10px] font-semibold uppercase text-gray-400">Remarks</p>
+                        <p className="mb-1 text-[10px] font-semibold uppercase text-gray-400">
+                          Remarks {row.remarkBy ? `• ${row.remarkBy}` : ''}
+                        </p>
                         <p className="whitespace-pre-line text-xs text-gray-700">{row.remark}</p>
                       </div>
                     )}
@@ -1048,21 +1050,19 @@ export default function ChecklistClient({
                         Undo
                       </button>
                     )}
-                    {row.canManage && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveRemarkRow(activeRemarkRow === row.id ? null : row.id);
-                          setRemark('');
-                        }}
-                        className="btn-secondary px-3 py-2"
-                        title="Add remark or change Dead status"
-                      >
-                        <MessageSquare size={15} />
-                        Remark
-                      </button>
-                    )}
-                    {isAdmin && row.canManage && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveRemarkRow(activeRemarkRow === row.id ? null : row.id);
+                        setRemark('');
+                      }}
+                      className="btn-secondary px-3 py-2"
+                      title="Add remark"
+                    >
+                      <MessageSquare size={15} />
+                      Remark
+                    </button>
+                    {isAdmin && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1093,12 +1093,12 @@ export default function ChecklistClient({
                       <button type="button" onClick={() => submitAction(row, 'remark')} disabled={ticking === row.id} className="btn-secondary py-2">
                         <MessageSquare size={14} /> Add remark
                       </button>
-                      {!row.completed && !row.dead && (
+                      {(isAdmin || row.canManage) && !row.completed && !row.dead && (
                         <button type="button" onClick={() => submitAction(row, 'dead')} disabled={ticking === row.id} className="inline-flex items-center gap-2 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">
                           <AlertOctagon size={14} /> Flag Dead
                         </button>
                       )}
-                      {row.dead && (
+                      {(isAdmin || row.canManage) && row.dead && (
                         <button type="button" onClick={() => submitAction(row, 'revive')} disabled={ticking === row.id} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">
                           <RotateCcw size={14} /> Revive task
                         </button>

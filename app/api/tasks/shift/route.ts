@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
     const cleanNote = String(shiftNote).trim();
     const parentNotes = (task.notes||'')+'\n[Shifted by '+session.name+' to '+childTaskId+']: '+cleanNote;
     const childNotes = (task.notes||'')+'\n[Shifted by '+session.name+' from '+task.taskId+' to '+childTaskId+']: '+cleanNote;
-    const childStatus = task.startDate && task.endDate ? 'In Progress' : 'Pending Accept';
+    const childStatus = task.endDate ? 'In Progress' : 'Pending Accept';
     const now = Timestamp.now();
     const childTaskData: Task = {
       taskId: childTaskId,

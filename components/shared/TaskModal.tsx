@@ -34,7 +34,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const isOverdue = task.status === 'Overdue' || (Boolean(task.endDate) && indiaDayOffset(today, indiaDateKey(task.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(task.status));
   const displayStatus = isOverdue ? 'Overdue' : (isRecurring && task.status === 'Verified' ? 'Completed' : task.status);
   const due = getDueBadge(task.endDate, displayStatus);
-  const needsDates = !isDone && isAssignee && (task.status === 'In Progress' || task.status === 'Pending Accept') && (!task.startDate || !task.endDate);
+  const needsDates = !isDone && isAssignee && (task.status === 'In Progress' || task.status === 'Pending Accept') && !task.endDate;
   const canChangeDead = !isTimelySheet && (isAssignee || isHandoff || isAdmin);
   const canShift = !isTimelySheet && canUserShiftTask(currentUser ?? { uid: currentUid, role: userRole }, task);
   const canVerify = !isRecurring && !isTimelySheet && (isHandoff || isAdmin || isDelegator) && (task.status === 'Completed' || task.status === 'Shifted (Completed)');
@@ -146,8 +146,10 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
       if (['dead', 'remark', 'revive'].includes(action)) setRemark('');
       onUpdate(data.data);
       window.dispatchEvent(new CustomEvent('task-status-updated', { detail: data.data }));
+      return true;
     } catch (err: any) {
       toast.error(err.message ?? 'Action failed');
+      return false;
     } finally {
       setLoading(null);
     }
@@ -618,10 +620,14 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                 {['In Progress', 'Overdue'].includes(task.status) && !task.childTaskId && !isDone && (
                   <ActionButton
                     label="Mark Complete"
-                    onClick={() => {
-                      if (!isAdmin && (!task.startDate || !task.endDate) && !acceptEndDate) {
+                    onClick={async () => {
+                      if (!isAdmin && !task.endDate && !acceptEndDate) {
                         toast.error('Please set a due date before completing');
                         return;
+                      }
+                      if (!task.endDate && acceptEndDate) {
+                        const saved = await doAction('set-dates', { startDate: acceptStartDate, endDate: acceptEndDate });
+                        if (!saved) return;
                       }
                       doAction('complete');
                     }}

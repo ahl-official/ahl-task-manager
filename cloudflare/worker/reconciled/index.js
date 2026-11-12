@@ -1719,54 +1719,98 @@ function periodRowFromDb(row) {
   };
 }
 __name(periodRowFromDb, "periodRowFromDb");
-async function materializeMonthForTemplate(env, template, monthKey) {
+// Precomputes the two lookups materializeMonthForTemplate otherwise repeats once per
+// template: build it once per bulk backfill (across potentially 1,000+ templates) instead
+// of issuing ~2 extra point reads per template per month.
+async function buildMaterializeContext(env) {
+  const [usersRes, locksRes] = await Promise.all([
+    env.DB.prepare("SELECT uid, name, is_active FROM users").all(),
+    env.DB.prepare("SELECT name_key, week_start, week_end FROM mis_reconciled_people WHERE verified = 1").all(),
+  ]);
+  const userActiveMap = /* @__PURE__ */ new Map();
+  for (const row of usersRes.results || []) {
+    const activeRow = { is_active: row.is_active };
+    if (row.uid) userActiveMap.set(String(row.uid), activeRow);
+    if (row.name) userActiveMap.set(normalizePersonName(row.name), activeRow);
+  }
+  const locksByName = /* @__PURE__ */ new Map();
+  for (const row of locksRes.results || []) {
+    const key = String(row.name_key || "");
+    if (!key) continue;
+    if (!locksByName.has(key)) locksByName.set(key, []);
+    locksByName.get(key).push({ week_start: row.week_start, week_end: row.week_end });
+  }
+  return { userActiveMap, locksByName };
+}
+__name(buildMaterializeContext, "buildMaterializeContext");
+async function materializeMonthForTemplate(env, template, monthKey, ctx) {
   await ensurePeriodRowsTable(env);
   if (template.isActive === false || template.is_active === 0) {
     return { inserted: 0, monthKey, count: 0, skippedInactive: true };
   }
   const assigneeUid = template.assignedTo || template.userId || "";
   const assigneeName = template.assignedToName || template.userName || "";
-  if (assigneeUid || assigneeName) {
-    const userRow = await env.DB.prepare(
+  // When a precomputed map is supplied (bulk callers), skip the per-template point
+  // read against `users` — this is the single costliest N+1 in bulk month backfills.
+  let userRow = null;
+  if (ctx && ctx.userActiveMap) {
+    userRow = (assigneeUid && ctx.userActiveMap.get(assigneeUid)) ||
+      ctx.userActiveMap.get(normalizePersonName(assigneeName)) || null;
+  } else if (assigneeUid || assigneeName) {
+    userRow = await env.DB.prepare(
       "SELECT is_active FROM users WHERE (uid = ? AND uid != '') OR (name != '' AND LOWER(name) = LOWER(?)) LIMIT 1"
     ).bind(assigneeUid, assigneeName).first();
-    if (userRow && (userRow.is_active === 0 || userRow.is_active === false)) {
-      return { inserted: 0, monthKey, count: 0, skippedDeactivated: true };
-    }
   }
-  const locks = await env.DB.prepare('SELECT week_start, week_end FROM mis_reconciled_people WHERE name_key = ? AND verified = 1').bind(normalizePersonName(template.assignedToName)).all();
-  const specs = buildMonthPeriodRows(template, monthKey).filter(spec => !(locks.results || []).some(lock => spec.dueDate >= lock.week_start && spec.dueDate <= lock.week_end));
+  if (userRow && (userRow.is_active === 0 || userRow.is_active === false)) {
+    return { inserted: 0, monthKey, count: 0, skippedDeactivated: true };
+  }
+  const nameKey = normalizePersonName(template.assignedToName);
+  let lockRows;
+  if (ctx && ctx.locksByName) {
+    lockRows = ctx.locksByName.get(nameKey) || [];
+  } else {
+    const locks = await env.DB.prepare('SELECT week_start, week_end FROM mis_reconciled_people WHERE name_key = ? AND verified = 1').bind(nameKey).all();
+    lockRows = locks.results || [];
+  }
+  const specs = buildMonthPeriodRows(template, monthKey).filter(spec => !lockRows.some(lock => spec.dueDate >= lock.week_start && spec.dueDate <= lock.week_end));
   if (specs.length === 0) return { inserted: 0, monthKey };
   const now = nowIso();
+  const stmts = specs.map(spec => env.DB.prepare(
+    `INSERT OR IGNORE INTO recurring_period_rows (
+      id, template_id, period_key, month_key, category, title, description,
+      assigned_to, assigned_to_name, department, due_date, period_start, period_end,
+      status, is_deleted, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 0, ?, ?)`
+  ).bind(
+    periodRowId(spec.templateId, spec.periodKey),
+    spec.templateId,
+    spec.periodKey,
+    spec.monthKey,
+    spec.category,
+    spec.title,
+    spec.description,
+    spec.assignedTo,
+    spec.assignedToName,
+    spec.department,
+    spec.dueDate,
+    spec.periodStart,
+    spec.periodEnd,
+    now,
+    now
+  ));
   let inserted = 0;
-  for (const spec of specs) {
-    const id = periodRowId(spec.templateId, spec.periodKey);
-    try {
-      await env.DB.prepare(
-        `INSERT OR IGNORE INTO recurring_period_rows (
-          id, template_id, period_key, month_key, category, title, description,
-          assigned_to, assigned_to_name, department, due_date, period_start, period_end,
-          status, is_deleted, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 0, ?, ?)`
-      ).bind(
-        id,
-        spec.templateId,
-        spec.periodKey,
-        spec.monthKey,
-        spec.category,
-        spec.title,
-        spec.description,
-        spec.assignedTo,
-        spec.assignedToName,
-        spec.department,
-        spec.dueDate,
-        spec.periodStart,
-        spec.periodEnd,
-        now,
-        now
-      ).run();
-      inserted += 1;
-    } catch {
+  try {
+    // One batched round trip instead of one request per period row.
+    await env.DB.batch(stmts);
+    inserted = stmts.length;
+  } catch {
+    // Preserve the original best-effort behaviour if the batch itself fails for any reason.
+    for (const stmt of stmts) {
+      try {
+        await stmt.run();
+        inserted += 1;
+      } catch {
+      }
     }
   }
   return { inserted, monthKey, count: specs.length };
@@ -1855,10 +1899,15 @@ async function resolveRecurringDefinition(env, id) {
   return taskAsRecurringTemplate(task);
 }
 __name(resolveRecurringDefinition, "resolveRecurringDefinition");
-async function listRecurringDefinitionIds(env, offset, limit) {
-  const openStatuses = ["Pending Accept", "In Progress", "Delay Requested", "Overdue"];
-  const statusPlaceholders = openStatuses.map(() => "?").join(",");
-  // Always fetch ALL active recurring_templates (no LIMIT/OFFSET — there are usually <500)
+// Every page of a bulk backfill (default 40-80 ids) re-reads the full active-templates
+// set below; it's cheap per row but was being read from scratch on every single page
+// request. A short in-isolate cache collapses repeated pages of the same backfill run
+// into one read, without risking staleness beyond a few seconds.
+let activeTemplateIdsCache = null;
+async function loadActiveTemplateIds(env) {
+  if (activeTemplateIdsCache && activeTemplateIdsCache.until > Date.now()) {
+    return activeTemplateIdsCache.ids;
+  }
   const templatesRes = await env.DB.prepare(
     `SELECT t.id FROM recurring_templates t
      LEFT JOIN users u ON u.uid = t.assigned_to
@@ -1866,11 +1915,24 @@ async function listRecurringDefinitionIds(env, offset, limit) {
        AND (u.is_active IS NULL OR u.is_active = 1)
      ORDER BY t.id ASC`
   ).all();
-  const templateIds = new Set((templatesRes.results || []).map((r) => String(r.id || "")).filter(Boolean));
+  const ids = new Set((templatesRes.results || []).map((r) => String(r.id || "")).filter(Boolean));
+  activeTemplateIdsCache = { ids, until: Date.now() + 15000 };
+  return ids;
+}
+__name(loadActiveTemplateIds, "loadActiveTemplateIds");
+async function listRecurringDefinitionIds(env, offset, limit) {
+  const openStatuses = ["Pending Accept", "In Progress", "Delay Requested", "Overdue"];
+  const statusPlaceholders = openStatuses.map(() => "?").join(",");
+  // Active recurring_templates no longer have a hard row-count assumption baked in here —
+  // there are 1,000+ today — but the set is still small enough to read in full and cache.
+  const templateIds = await loadActiveTemplateIds(env);
 
-  // Also paginate through tasks_current standing tasks
+  // Also paginate through tasks_current standing tasks. COUNT(*) OVER() rides along with
+  // the same query (SQLite evaluates window functions over the full matching set before
+  // LIMIT/OFFSET truncate the output) so the total no longer needs a second round trip —
+  // except on an empty page, where the window function has nothing to report from.
   const standing = await env.DB.prepare(
-    `SELECT t.task_id AS id FROM tasks_current t
+    `SELECT t.task_id AS id, COUNT(*) OVER() AS total_n FROM tasks_current t
      LEFT JOIN users u ON u.uid = t.assigned_to
      WHERE LOWER(t.category) IN ('daily', 'weekly', 'monthly')
        AND t.status IN (${statusPlaceholders})
@@ -1878,7 +1940,8 @@ async function listRecurringDefinitionIds(env, offset, limit) {
      ORDER BY t.task_id ASC
      LIMIT ? OFFSET ?`
   ).bind(...openStatuses, limit, offset).all();
-  const standingIds = (standing.results || []).map((r) => String(r.id)).filter(Boolean);
+  const standingRows = standing.results || [];
+  const standingIds = standingRows.map((r) => String(r.id)).filter(Boolean);
 
   // Merge: standing page + all template IDs not already in standing page
   const ids = [...standingIds];
@@ -1886,14 +1949,19 @@ async function listRecurringDefinitionIds(env, offset, limit) {
     if (!ids.includes(id)) ids.push(id);
   }
 
-  const countRow = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM tasks_current t
-     LEFT JOIN users u ON u.uid = t.assigned_to
-     WHERE LOWER(t.category) IN ('daily', 'weekly', 'monthly')
-       AND t.status IN (${statusPlaceholders})
-       AND (u.is_active IS NULL OR u.is_active = 1)`
-  ).bind(...openStatuses).first();
-  const standingTotal = Number(countRow?.n || 0);
+  let standingTotal = standingRows.length > 0 ? Number(standingRows[0].total_n || 0) : 0;
+  if (standingRows.length === 0 && offset === 0) {
+    // Genuinely zero matches vs. an offset past the end look the same from the window
+    // function alone; only the very first page needs the explicit count to tell them apart.
+    const countRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM tasks_current t
+       LEFT JOIN users u ON u.uid = t.assigned_to
+       WHERE LOWER(t.category) IN ('daily', 'weekly', 'monthly')
+         AND t.status IN (${statusPlaceholders})
+         AND (u.is_active IS NULL OR u.is_active = 1)`
+    ).bind(...openStatuses).first();
+    standingTotal = Number(countRow?.n || 0);
+  }
   // Total is the union of standing tasks + unique template IDs
   // But since we always return all template IDs on every page, mark done when standing is exhausted
   const standingPageLen = standingIds.length;
@@ -2180,11 +2248,12 @@ async function routeRecurring(req, env, url) {
     }
     const onlyExisting = data.onlyExisting !== false;
     const withRows = onlyExisting ? await templatesWithPeriodRows(env, templates.map((t) => t.id)) : new Set(templates.map((t) => t.id));
+    const materializeCtx = await buildMaterializeContext(env);
     let total = 0;
     for (const t of templates) {
       if (!withRows.has(t.id) && onlyExisting) continue;
       if (!onlyExisting || withRows.has(t.id)) {
-        const r = await materializeMonthForTemplate(env, t, monthKey);
+        const r = await materializeMonthForTemplate(env, t, monthKey, materializeCtx);
         total += r.count || 0;
       }
     }
@@ -2225,6 +2294,7 @@ async function routeRecurring(req, env, url) {
     };
     if (phase === "materialize" || phase === "all") {
       const page = data.templateId ? { ids: [String(data.templateId)], total: 1, nextOffset: offset + 1, done: true } : await listRecurringDefinitionIds(env, offset, limit);
+      const materializeCtx = dryRun ? null : await buildMaterializeContext(env);
       let slots = 0;
       let defs = 0;
       const errors = [];
@@ -2240,7 +2310,7 @@ async function routeRecurring(req, env, url) {
             if (dryRun) {
               slots += buildMonthPeriodRows(t, monthKey).length;
             } else {
-              const r = await materializeMonthForTemplate(env, t, monthKey);
+              const r = await materializeMonthForTemplate(env, t, monthKey, materializeCtx);
               slots += r.count || 0;
             }
           } catch (err) {
@@ -2450,7 +2520,11 @@ async function routeRecurring(req, env, url) {
       if(scopeName){
         const cleanName = scopeName.trim();
         const normName = normalizePersonName(cleanName);
-        if (normName) {
+        // scopeUid already pins the row by an indexed, exact match (the common "mine" case
+        // always sends both). Only pay for the leading-wildcard LIKE — which defeats
+        // idx_period_rows_name_due and forces a full table scan — when there is no uid to
+        // rely on (admin/leader filtering by a typed name alone).
+        if (normName && !scopeUid) {
           scope.push('(TRIM(LOWER(assigned_to_name))=LOWER(?) OR LOWER(assigned_to_name) LIKE ?)');
           binds.push(cleanName, `%${normName}%`);
         } else {

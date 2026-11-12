@@ -6,7 +6,6 @@ import {
   sendWhatsApp,
   msgTaskAccepted,
   msgTaskCompleted,
-  msgTaskVerified,
   msgReviseRedirect,
 } from '@/lib/waha';
 import { Timestamp } from 'firebase-admin/firestore';
@@ -164,15 +163,15 @@ async function handleAccept(from: string, uid: string, name: string, taskId: str
   const task = await adminGetTask(taskId);
   if (!task) { await sendWhatsApp(from, `❌ Task ${taskId} not found.`); return; }
   if (task.assignedTo !== uid) { await sendWhatsApp(from, `❌ Task ${taskId} is not assigned to you.`); return; }
-  if (task.status === 'In Progress' && (!task.startDate || !task.endDate)) {
-    await sendWhatsApp(from, `Task *${taskId}* is already active. Please open the portal and set the start date and due date before work is completed.`);
+  if (task.status === 'In Progress' && !task.endDate) {
+    await sendWhatsApp(from, `Task *${taskId}* is already active. Please open the portal and set the due date before work is completed.`);
     return;
   }
   if (task.status !== 'Pending Accept') {
     await sendWhatsApp(from, `ℹ️ Task ${taskId} is already ${task.status}.`); return;
   }
 
-  await sendWhatsApp(from, `Please accept *${taskId}* in the portal so you can set the start date and due date before work begins.`);
+  await sendWhatsApp(from, `Please accept *${taskId}* in the portal so you can set the due date before work begins.`);
 }
 
 async function handleDone(from: string, uid: string, name: string, taskId: string) {
@@ -215,7 +214,6 @@ async function handleVerify(from: string, uid: string, name: string, taskId: str
   }
 
   await adminUpdateTaskStatus(taskId, 'Verified', { verifiedAt: Timestamp.now() });
-  await sendWhatsApp(task.assignedToWa, msgTaskVerified({ taskId, handoffName: name }), taskId);
   await sendWhatsApp(from, `✅ Task *${taskId}* verified successfully.`);
   await adminLog('TASK_VERIFIED', `${taskId} verified via WA by ${name}`, { taskId, uid });
 }

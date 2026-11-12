@@ -7,6 +7,7 @@ import {
   adminGetTasksByAssignee,
   adminGetTasksByHandoff,
   adminSearchTasks,
+  generateTaskId,
   serializeTask,
 } from '@/lib/firebase/tasks';
 import { adminIncrementScore, adminLog } from '@/lib/firebase/scores';
@@ -14,6 +15,7 @@ import { clearFirestoreReadCache } from '@/lib/firebase/readCache';
 import {
   sendWhatsApp,
   msgTaskAssigned,
+  msgRecurringTaskAssigned,
   msgCoordinatorNotification,
 } from '@/lib/waha';
 import { formatDate } from '@/lib/utils';
@@ -23,6 +25,8 @@ import { adminGetUserByUid, adminGetAllUsers } from '@/lib/firebase/users';
 import type { AHLUser } from '@/types';
 import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils/timelyDashboard';
 import { hasCloudflareApi } from '@/lib/cloudflare/api';
+import { createRecurringTemplate } from '@/lib/cloudflare/recurring';
+import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { normalizePersonName } from '@/lib/utils/names';
 
 
@@ -270,9 +274,103 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    // All portal and API created tasks are strictly One Time tasks (T-XXXX IDs).
-    // Never create a recurring template from task creation.
-    body.category = 'One Time';
+    if (['Daily', 'Weekly', 'Monthly'].includes(body.category)) {
+      const todayKey = indiaTodayKey();
+      let calculatedStartDate = body.startDate || todayKey;
+      let calculatedEndDate = body.endDate || todayKey;
+      let dayOfWeek: number | null = null;
+      let dayOfMonth: number | null = null;
+
+      if (body.category === 'Daily') {
+        calculatedStartDate = body.startDate || todayKey;
+        calculatedEndDate = body.endDate || todayKey;
+      } else if (body.category === 'Weekly') {
+        calculatedStartDate = body.startDate || todayKey;
+        calculatedEndDate = body.endDate || todayKey;
+        if (body.dayOfWeek != null) {
+          dayOfWeek = Number(body.dayOfWeek);
+        } else {
+          const [y, m, d] = calculatedEndDate.split('-').map(Number);
+          const dt = new Date(Date.UTC(y, m - 1, d, 6, 0, 0));
+          const dow = dt.getUTCDay();
+          dayOfWeek = dow === 0 ? 7 : dow; // 1=Mon...7=Sun
+        }
+      } else if (body.category === 'Monthly') {
+        const [y, m] = todayKey.split('-').map(Number);
+        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        const endOfMonthKey = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+        calculatedStartDate = body.startDate || `${y}-${String(m).padStart(2, '0')}-01`;
+        calculatedEndDate = body.endDate || endOfMonthKey;
+        dayOfMonth = body.dayOfMonth != null ? Number(body.dayOfMonth) : lastDay;
+      }
+
+      if (!hasCloudflareApi()) throw new Error('Cloudflare D1 is required for recurring task creation');
+      const descText = String(body.description || '').trim();
+      if (!descText) return NextResponse.json({ success: false, error: 'Description is required' }, { status: 400 });
+
+      // Generate standard T-XXXX taskId so recurring tasks NEVER receive an ugly rec_ template ID
+      const taskId = await generateTaskId();
+
+      const d1Template = await createRecurringTemplate({
+        id: taskId,
+        title: descText.split('\n')[0].slice(0, 100),
+        description: descText,
+        category: body.category,
+        frequency: body.category,
+        assignedTo: assignee.uid,
+        assignedToName: assignee.name,
+        department: assignee.department || body.department || '',
+        dayOfWeek,
+        dayOfMonth,
+        timeOfDay: body.timeOfDay || '10:00',
+        isActive: true,
+        metadata: { startDate: calculatedStartDate },
+      });
+
+      const effectiveTaskId = d1Template.id || taskId;
+      const effectiveDescription = body.description;
+
+      await adminIncrementScore(assignee.uid, 'tasksAssigned').catch(() => {});
+      await adminLog('TASK_CREATED', `Recurring task created (${body.category}): ${effectiveDescription}`, {
+        taskId: effectiveTaskId,
+        uid: session.uid,
+      }).catch(() => {});
+
+      if (assignee.waNumber) {
+        await sendWhatsApp(
+          assignee.waNumber,
+          msgRecurringTaskAssigned({
+            taskId: effectiveTaskId,
+            category: body.category,
+            description: effectiveDescription,
+            assignedToName: assignee.name,
+            priority: body.priority || 'Medium',
+            createdByName: session.name,
+            startDate: calculatedStartDate,
+            endDate: calculatedEndDate,
+          }),
+          effectiveTaskId,
+        ).catch(err => console.error('[Tasks API] Recurring task WAHA notification failed', err));
+      }
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          taskId: effectiveTaskId,
+          description: effectiveDescription,
+          assignedTo: assignee.uid,
+          assignedToName: assignee.name,
+          category: body.category,
+          status: 'In Progress',
+          priority: body.priority || 'Medium',
+          startDate: calculatedStartDate,
+          endDate: calculatedEndDate,
+          createdAt: new Date().toISOString(),
+          createdBy: session.uid,
+          createdByName: session.name,
+        },
+      }, { status: 201 });
+    }
 
     const skipAcceptance = session.role === 'admin';
     const task = await adminCreateTask(body, session.uid, {

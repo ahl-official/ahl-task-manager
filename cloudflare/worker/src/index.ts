@@ -527,6 +527,29 @@ async function routeTasks(req: Request, env: Env, url: URL) {
     }
   }
 
+  if (url.pathname === '/tasks/batch-verify' && req.method === 'POST') {
+    const d = await body<any>(req);
+    const taskIds = Array.isArray(d.taskIds) ? d.taskIds : [];
+    if (!taskIds.length || taskIds.length > 100) return json({ success: false, error: '1 to 100 task IDs required' }, { status: 400 });
+    const admin = d.actorRole === 'admin', now = nowIso();
+    const placeholders = taskIds.map(() => '?').join(',');
+    const tasksRes = await env.DB.prepare(`SELECT * FROM tasks_current WHERE task_id IN (${placeholders})`).bind(...taskIds).all();
+    const tasks = tasksRes.results || [];
+    const verifiedTasks: any[] = [], statements: any[] = [];
+    for (const task of tasks as any[]) {
+      const checker = task.handoff_uid === d.actorUid;
+      if (!admin && !checker) continue;
+      if (task.status !== 'Completed' || task.verified_at) continue;
+      if (['daily', 'weekly', 'monthly'].includes(String(task.category || '').toLowerCase())) continue;
+      statements.push(env.DB.prepare("UPDATE tasks_current SET status = 'Verified', verified_at = ?, updated_at = ? WHERE task_id = ? AND status = 'Completed'").bind(now, now, task.task_id));
+      verifiedTasks.push({ ...task, status: 'Verified', verified_at: now, updated_at: now });
+    }
+    if (statements.length > 0) {
+      await env.DB.batch(statements);
+    }
+    return json({ success: true, data: { verifiedIds: verifiedTasks.map(t => t.task_id), count: verifiedTasks.length, tasks: verifiedTasks.map(taskFromRow) } });
+  }
+
   if (url.pathname.startsWith('/tasks/') && req.method === 'PATCH') {
     try {
       const id = decodeURIComponent(url.pathname.slice('/tasks/'.length));
@@ -1178,7 +1201,7 @@ async function routeRecurring(req: Request, env: Env, url: URL) {
     }
 
     const now = nowIso();
-    const id = String(data.id || randomId('rec_'));
+    const id = (data.id && !String(data.id).startsWith('rec_') && !String(data.id).startsWith('rec_sheet_')) ? String(data.id) : (await nextTaskId(env));
     const category = String(data.category || data.frequency || 'Daily');
     const title = String(data.title).trim();
     const description = String(data.description || '').trim();

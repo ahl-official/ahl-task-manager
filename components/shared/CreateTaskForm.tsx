@@ -8,7 +8,7 @@ import { canAssignTask, describeAssignmentRule, roleLabel } from '@/lib/utils/hi
 import { stashPendingCreatedTask } from '@/lib/utils/pendingCreatedTask';
 import type { UserRole } from '@/types';
 
-const CATEGORIES = ['One Time'];
+const CATEGORIES = ['One Time', 'Daily', 'Weekly', 'Monthly'];
 const PRIORITIES = ['High', 'Medium', 'Low'];
 
 interface Props {

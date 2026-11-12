@@ -149,56 +149,38 @@ export default function VerificationNotificationBell({
     if (targetIds.length === 0 || batchVerifying) return;
 
     setBatchVerifying(true);
-    const successTasks: TaskSerialized[] = [];
-    const failedIds: string[] = [];
 
     try {
-      const results = await Promise.allSettled(
-        targetIds.map(async (taskId) => {
-          const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'verify' }),
-          });
-          const data = await res.json();
-          if (!data.success) {
-            throw new Error(data.error || `Failed to verify ${taskId}`);
-          }
-          return data.data as TaskSerialized;
-        })
-      );
-
-      for (let i = 0; i < results.length; i++) {
-        const res = results[i];
-        if (res.status === 'fulfilled') {
-          successTasks.push(res.value);
-        } else {
-          failedIds.push(targetIds[i]);
-        }
+      const res = await fetch('/api/tasks/batch-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskIds: targetIds }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to verify tasks');
       }
 
-      if (successTasks.length > 0) {
-        for (const verifiedTask of successTasks) {
+      const verifiedIds = new Set<string>(data.data?.verifiedIds || []);
+      const verifiedTasks: TaskSerialized[] = data.data?.tasks || [];
+
+      if (verifiedTasks.length > 0) {
+        for (const verifiedTask of verifiedTasks) {
           window.dispatchEvent(new CustomEvent('task-status-updated', { detail: verifiedTask }));
         }
-
-        const successSet = new Set(successTasks.map(t => t.taskId));
-        setItems(prev => prev.filter(t => !successSet.has(t.taskId)));
-
-        setSelectedIds(prev => {
-          const next = new Set(prev);
-          successTasks.forEach(t => next.delete(t.taskId));
-          return next;
-        });
-
-        toast.success(`${successTasks.length} task${successTasks.length === 1 ? '' : 's'} verified successfully`);
       }
 
-      if (failedIds.length > 0) {
-        toast.error(`Failed to verify ${failedIds.length} task${failedIds.length === 1 ? '' : 's'}`);
-      }
+      setItems(prev => prev.filter(t => !verifiedIds.has(t.taskId)));
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        verifiedIds.forEach(id => next.delete(id));
+        return next;
+      });
+
+      const count = verifiedIds.size;
+      toast.success(`${count} task${count === 1 ? '' : 's'} verified successfully`);
     } catch (err: any) {
-      toast.error(err.message || 'Batch verification failed');
+      toast.error(err.message || 'Failed to batch verify tasks');
     } finally {
       setBatchVerifying(false);
     }

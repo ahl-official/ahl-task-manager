@@ -3,9 +3,9 @@ const ACCOUNT_ID = 'b20892b35b7ece3670ecaf46e879d5c7';
 /**
  * Cloudflare D1 Daily Usage Guard Thresholds
  * - Writes soft limit: 80,000 writes / day (Cloudflare hard limit is 100,000)
- * - Reads soft limit: 4,500,000 reads / day (Cloudflare hard limit is 5,000,000)
+ * - Reads soft limit: 4,000,000 reads / day (Cloudflare hard limit is 5,000,000)
  */
-export const D1_READ_SOFT_LIMIT = 4_500_000;
+export const D1_READ_SOFT_LIMIT = 4_000_000;
 export const D1_WRITE_SOFT_LIMIT = 80_000;
 
 export async function getTodayD1Usage(): Promise<{ rowsRead: number; rowsWritten: number }> {
@@ -58,7 +58,7 @@ export type D1BudgetStatus = {
 /**
  * Checks if the recurring materialization trigger should run based on D1 usage:
  * - Block if daily writes >= 80,000 (80k)
- * - Block if daily reads >= 4,500,000 (4.5M)
+ * - Block if daily reads >= 4,000,000 (4M)
  * If blocked, returns allowed: false so the trigger halts and defers to next day's cron.
  */
 export async function checkD1RecurringBudget(): Promise<D1BudgetStatus> {

@@ -59,6 +59,8 @@ export const FMS_USER_MAPPING: Record<string, string> = {
   parth: 'Parth',
   divya: 'Divya',
   jagruti: 'Jagruti',
+  'accounts jagruti': 'Jagruti',
+  'accounts (jagruti)': 'Jagruti',
   roshni: 'Roshni',
   roshani: 'Roshani',
   daizy: 'Daizy',

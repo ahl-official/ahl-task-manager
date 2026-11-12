@@ -3,7 +3,7 @@ import { getSession } from '@/lib/utils/auth';
 import { adminGetTask, adminUpdateTaskStatus, adminDeleteTask, serializeTask } from '@/lib/firebase/tasks';
 import { adminGetUserByUid } from '@/lib/firebase/users';
 import { adminIncrementScores, adminLog } from '@/lib/firebase/scores';
-import { sendWhatsApp, msgTaskAccepted, msgTaskCompleted, msgTaskVerified } from '@/lib/waha';
+import { sendWhatsApp, msgTaskAccepted, msgTaskCompleted } from '@/lib/waha';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { TaskPriority, TaskStatus } from '@/types';
 import { canViewTask } from '@/lib/utils/access';
@@ -54,10 +54,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       const result = cfTask(await cfApi('/tasks/' + encodeURIComponent(params.id) + '/lifecycle', {
         method: 'POST', body: JSON.stringify({ action, actorUid: session.uid, actorRole: session.role })
       }))!;
-      if (action === 'complete' && !['Completed', 'Verified'].includes(task.status)) {
-        if (isAdmin) await sendWhatsApp(task.assignedToWa, msgTaskVerified({ taskId: task.taskId, handoffName: session.name }), task.taskId).catch(() => { });
-        else if (task.handoffWa && task.handoffWa !== task.assignedToWa) await sendWhatsApp(task.handoffWa, msgTaskCompleted({ taskId: task.taskId, description: task.description, assignedToName: task.assignedToName }), task.taskId).catch(() => { });
-      } else if (action === 'verify' && task.status !== 'Verified') await sendWhatsApp(task.assignedToWa, msgTaskVerified({ taskId: task.taskId, handoffName: session.name }), task.taskId).catch(() => { });
+      if (action === 'complete' && !['Completed', 'Verified'].includes(task.status) && !isAdmin && task.handoffWa && task.handoffWa !== task.assignedToWa) {
+        await sendWhatsApp(task.handoffWa, msgTaskCompleted({ taskId: task.taskId, description: task.description, assignedToName: task.assignedToName }), task.taskId).catch(() => { });
+      }
       await adminLog('TASK_UPDATED', params.id + ' ' + action + ' by ' + session.name, { taskId: params.id, uid: session.uid }).catch(() => { });
       updateTaskInReadCache(params.id, result);
       return NextResponse.json({ success: true, data: serializeTask(result) });
@@ -113,8 +112,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (!actorIsAssignee && !isAdmin) {
         return NextResponse.json({ success: false, error: 'Only assignee can complete' }, { status: 403 });
       }
-      if (!isAdmin && (!task.startDate || !task.endDate)) {
-        return NextResponse.json({ success: false, error: 'Set start date and due date before completing this task' }, { status: 400 });
+      if (!isAdmin && !task.endDate) {
+        return NextResponse.json({ success: false, error: 'Set due date before completing this task' }, { status: 400 });
       }
       if (task.status === 'Dead') {
         return NextResponse.json({ success: false, error: 'Revive this task before completing it' }, { status: 400 });
@@ -139,13 +138,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         await adminIncrementScores(scoreUid, scoreFields);
       }
 
-      if (isAdmin && !isRecurring) {
-        await sendWhatsApp(
-          task.assignedToWa,
-          msgTaskVerified({ taskId: task.taskId, handoffName: session.name }),
-          task.taskId,
-        );
-      } else if (!isRecurring && task.handoffWa && task.handoffWa !== task.assignedToWa) {
+      if (!isAdmin && !isRecurring && task.handoffWa && task.handoffWa !== task.assignedToWa) {
         // Notify handoff to verify
         await sendWhatsApp(
           task.handoffWa,
@@ -173,13 +166,6 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         return NextResponse.json({ success: false, error: 'Only checker, delegator, or admin can verify' }, { status: 403 });
       }
       updatedTask = await adminUpdateTaskStatus(params.id, 'Verified', { verifiedAt: now });
-
-      // Notify assignee
-      await sendWhatsApp(
-        task.assignedToWa,
-        msgTaskVerified({ taskId: task.taskId, handoffName: session.name }),
-        task.taskId,
-      );
 
       await adminLog('TASK_VERIFIED', `${params.id} verified by ${session.name}`, {
         taskId: params.id, uid: session.uid,

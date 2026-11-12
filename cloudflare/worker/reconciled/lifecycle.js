@@ -38,7 +38,7 @@ export async function routeLifecycle(req,env,url,h){
     const target=await env.DB.prepare('SELECT * FROM users WHERE uid=?').bind(d.targetUid||'').first();
     assert(target&&target.is_active!==0,'Target user missing or inactive');assert(target.uid!==task.assigned_to,'Select a different assignee');
     if(['member','user'].includes(d.actorRole))assert(Boolean(d.actorDepartment)&&String(d.actorDepartment).toLowerCase()===String(target.department).toLowerCase(),'Target must be in your department',403);
-    const childId=await h.nextTaskId(env),now=new Date().toISOString(),status=task.start_date&&task.end_date?'In Progress':'Pending Accept';
+    const childId=await h.nextTaskId(env),now=new Date().toISOString(),status=task.end_date?'In Progress':'Pending Accept';
     const meta={parentTaskId:task.task_id,shiftedByUid:d.actorUid,shiftedByName:d.actorName,shiftedNote:String(d.shiftNote||'').slice(0,1000),shiftedAt:now};
     const childNote=note(task.notes,meta,`[Shifted by ${d.actorName} from ${task.task_id} to ${childId}]: ${meta.shiftedNote}`);
     const parentNote=note(task.notes,{childTaskId:childId,shiftedToUid:target.uid,shiftedToName:target.name,shiftedNote:meta.shiftedNote,shiftedAt:now},`[Shifted by ${d.actorName} to ${childId}]: ${meta.shiftedNote}`);
@@ -123,7 +123,7 @@ export async function routeLifecycle(req,env,url,h){
     if(action==='complete'&&done||action==='verify'&&task.status==='Verified')return response(h.taskFromRow(task));
     assert(action!=='verify'||task.status==='Completed','Complete task before verifying',409);assert(action!=='uncomplete'||done,'Only completed tasks can be undone',409);
     assert(action!=='complete'||['Pending Accept','In Progress','Overdue'].includes(task.status),'Task cannot be completed in this state',409);
-    assert(action!=='complete'||admin||(task.start_date&&task.end_date),'Set dates before completion');
+    assert(action!=='complete'||admin||task.end_date,'Set due date before completion');
     const now=new Date().toISOString(),status=action==='uncomplete'?'In Progress':action==='verify'||admin?'Verified':'Completed';
     const completedAt=action==='uncomplete'?null:task.completed_at||now,verifiedAt=status==='Verified'?task.verified_at||now:null;
     const condition="EXISTS(SELECT 1 FROM tasks_current WHERE task_id=? AND COALESCE(updated_at,'')=? AND status=?)";
@@ -140,6 +140,31 @@ export async function routeLifecycle(req,env,url,h){
     await env.DB.batch(statements);const updated=await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id=?').bind(task.task_id).first();assert(updated.status===status&&updated.updated_at===now,'Task changed; refresh',409);
     await syncTaskCountChange(env,h,task,updated);
     return response(h.taskFromRow(updated));
+  }
+  if(path==='/tasks/batch-verify'&&req.method==='POST'){
+    const d=await req.json();
+    const taskIds=Array.isArray(d.taskIds)?d.taskIds:[];
+    assert(taskIds.length>0&&taskIds.length<=100,'1 to 100 task IDs required',400);
+    const admin=d.actorRole==='admin',now=new Date().toISOString();
+    const placeholders=taskIds.map(()=>'?').join(',');
+    const tasksRes=await env.DB.prepare(`SELECT * FROM tasks_current WHERE task_id IN (${placeholders})`).bind(...taskIds).all();
+    const tasks=tasksRes.results||[];
+    const verifiedTasks=[],statements=[];
+    for(const task of tasks){
+      const checker=task.handoff_uid===d.actorUid||shiftMeta(task).shiftedByUid===d.actorUid;
+      if(!admin&&!checker)continue;
+      if(task.status!=='Completed'||task.verified_at)continue;
+      if(recurring(task.category)||legacyChild(task))continue;
+      statements.push(env.DB.prepare("UPDATE tasks_current SET status='Verified',verified_at=?,updated_at=? WHERE task_id=? AND status='Completed'").bind(now,now,task.task_id));
+      verifiedTasks.push({...task,status:'Verified',verified_at:now,updated_at:now});
+    }
+    if(statements.length>0){
+      await env.DB.batch(statements);
+      for(const task of verifiedTasks){
+        await syncTaskCountChange(env,h,{...task,status:'Completed'},task);
+      }
+    }
+    return response({verifiedIds:verifiedTasks.map(t=>t.task_id),count:verifiedTasks.length,tasks:verifiedTasks.map(h.taskFromRow)});
   }
   const template=path.match(/^\/recurring\/templates\/([^/]+)$/);
   if(template&&['GET','DELETE'].includes(req.method)){

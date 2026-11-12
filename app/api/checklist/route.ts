@@ -122,7 +122,7 @@ export async function GET(req: NextRequest) {
           // Past tasks: completable by members (marked late when completed). Admin can complete any task.
           canComplete: !row.completed && !row.dead && (isAdmin || (!isFuture && permissions.canChange)),
           canUncomplete: row.completed && !row.dead && (isAdmin || permissions.canChange),
-          canManage: isAdmin,
+          canManage: isAdmin || permissions.canChange,
         };
       });
 
@@ -178,10 +178,14 @@ export async function POST(req: NextRequest) {
     const row = await getRecurringPeriod(taskId, periodKey);
     const permissions = checklistPermissions(session, row);
     const isAdmin = session.role === 'admin';
-    if (row.category !== category || (!isAdmin && !permissions.canChange)) {
+    if (row.category !== category) {
       return NextResponse.json({ success: false, error: 'Forbidden for this checklist period' }, { status: 403 });
     }
-    if (action === 'skip_day' && session.role !== 'admin') {
+    // Allow all users to add remarks; other actions (complete, uncomplete, dead, revive) require change permission
+    if (action !== 'remark' && !isAdmin && !permissions.canChange) {
+      return NextResponse.json({ success: false, error: 'Forbidden for this checklist period' }, { status: 403 });
+    }
+    if (action === 'skip_day' && !isAdmin) {
       return NextResponse.json({ success: false, error: 'Forbidden: Only admin can delete checklist tasks' }, { status: 403 });
     }
     const resolvedAction = action === 'verify' ? 'complete' : action;
