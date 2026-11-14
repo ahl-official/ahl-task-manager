@@ -7,8 +7,6 @@ import TaskModal from '@/components/shared/TaskModal';
 import { toast } from 'sonner';
 import type { TaskSerialized } from '@/types';
 
-const STALE_THRESHOLD_MS = 5 * 60_000;
-
 function isPortalTask(task: TaskSerialized) {
   return task.createdBy !== 'timely-sheet' && !/^(office|salon|weekly)-/i.test(task.taskId);
 }
@@ -33,9 +31,10 @@ export default function VerificationNotificationBell({
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const url = isAdmin
+      const baseUrl = isAdmin
         ? '/api/tasks?scope=all&filter=true&verificationPending=true&excludeRecurring=true&limit=50'
         : '/api/tasks?scope=handoff&filter=true&verificationPending=true&excludeRecurring=true&limit=50';
+      const url = `${baseUrl}&fresh=true&t=${Date.now()}`;
       const res = await fetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to load notifications');
@@ -58,7 +57,56 @@ export default function VerificationNotificationBell({
   }, [currentUid, isAdmin]);
 
   useEffect(() => {
+    // Initial fetch on mount
     load();
+
+    // 1. Listen for real-time task update events from the server (SSE) across any computer/user
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/tasks/events');
+      eventSource.onmessage = () => {
+        load(true);
+      };
+      eventSource.onerror = () => {
+        // EventSource will automatically attempt reconnection
+      };
+    } catch {
+      // EventSource not supported
+    }
+
+    // 2. Listen for cross-tab task update events on the same computer
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel('ahl-task-updates');
+      bc.onmessage = () => {
+        load(true);
+      };
+    } catch {
+      // BroadcastChannel not supported
+    }
+
+    // 3. Listen for local window task status update events
+    function onTaskStatusUpdated() {
+      load(true);
+    }
+    window.addEventListener('task-status-updated', onTaskStatusUpdated);
+
+    // 4. Refetch when admin focuses or returns to this tab
+    function onFocusOrVisible() {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        load(true);
+      }
+    }
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+
+    return () => {
+      if (eventSource) eventSource.close();
+      if (bc) bc.close();
+      window.removeEventListener('task-status-updated', onTaskStatusUpdated);
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+    };
   }, [load]);
 
   useEffect(() => {
@@ -68,28 +116,6 @@ export default function VerificationNotificationBell({
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
   }, []);
-
-  useEffect(() => {
-    function onTaskStatusUpdated(event: Event) {
-      const task = (event as CustomEvent<TaskSerialized>).detail;
-      if (!task?.taskId) return;
-      setItems(current => {
-        const other = current.filter(item => item.taskId !== task.taskId);
-        if (task.status !== 'Completed' || task.verifiedAt || !isPortalTask(task) || (!isAdmin && task.handoffUid !== currentUid)) return other;
-        return [task, ...other].slice(0, 50);
-      });
-      setSelectedIds(prev => {
-        if (!prev.has(task.taskId)) return prev;
-        const next = new Set(prev);
-        if (task.status !== 'Completed' || task.verifiedAt) {
-          next.delete(task.taskId);
-        }
-        return next;
-      });
-    }
-    window.addEventListener('task-status-updated', onTaskStatusUpdated);
-    return () => window.removeEventListener('task-status-updated', onTaskStatusUpdated);
-  }, [currentUid, isAdmin]);
 
   function updateTask(updated?: TaskSerialized) {
     if (!updated) {
@@ -165,6 +191,11 @@ export default function VerificationNotificationBell({
       const verifiedTasks: TaskSerialized[] = data.data?.tasks || [];
 
       if (verifiedTasks.length > 0) {
+        try {
+          const bc = new BroadcastChannel('ahl-task-updates');
+          bc.postMessage({ type: 'task-updated' });
+          bc.close();
+        } catch {}
         for (const verifiedTask of verifiedTasks) {
           window.dispatchEvent(new CustomEvent('task-status-updated', { detail: verifiedTask }));
         }
@@ -194,7 +225,7 @@ export default function VerificationNotificationBell({
           onClick={() => {
             const nextOpen = !open;
             setOpen(nextOpen);
-            if (nextOpen && Date.now() - lastLoadedAt.current >= STALE_THRESHOLD_MS) load(items.length > 0);
+            if (nextOpen) load(true);
           }}
           className={cn(
             'relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-900',

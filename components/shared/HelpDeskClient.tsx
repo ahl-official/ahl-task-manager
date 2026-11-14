@@ -242,8 +242,7 @@ export default function HelpDeskClient({ session }: Props) {
   ];
 
   const statuses = [
-    { name: 'Pending Accept', desc: 'New task assigned — open and accept it.', badge: 'bg-yellow-50 text-yellow-800 border-yellow-200' },
-    { name: 'In Progress', desc: 'Accepted and actively being worked on.', badge: 'bg-blue-50 text-blue-800 border-blue-200' },
+    { name: 'In Progress', desc: 'Assigned and actively being worked on.', badge: 'bg-blue-50 text-blue-800 border-blue-200' },
     { name: 'Completed', desc: 'Delivered by assignee — waiting for checker review.', badge: 'bg-purple-50 text-purple-800 border-purple-200' },
     { name: 'Verified', desc: 'Approved by checker/admin — score locked in 100%.', badge: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
     { name: 'Delay Requested', desc: 'Revised date submitted — awaiting approval.', badge: 'bg-orange-50 text-orange-800 border-orange-200' },

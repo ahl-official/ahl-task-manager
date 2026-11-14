@@ -6,6 +6,8 @@ import { toast } from 'sonner';
 import { Loader2, Mic, Square, Wand2, AlertTriangle } from 'lucide-react';
 import { canAssignTask, describeAssignmentRule, roleLabel } from '@/lib/utils/hierarchy';
 import { stashPendingCreatedTask } from '@/lib/utils/pendingCreatedTask';
+import { indiaTodayKey } from '@/lib/utils/indiaDate';
+import { cn } from '@/lib/utils';
 import type { UserRole } from '@/types';
 
 const CATEGORIES = ['One Time', 'Daily', 'Weekly', 'Monthly'];
@@ -115,9 +117,14 @@ export default function CreateTaskForm({ users, currentUser, redirectTo, isReadL
         const user = effectiveUsers.find(u => u.uid === value);
         if (user) next.department = user.department;
       }
+      if (field === 'category' && ['Daily', 'Weekly', 'Monthly'].includes(value)) {
+        next.startDate = '';
+      }
       return next;
     });
   }
+
+  const isRecurring = ['Daily', 'Weekly', 'Monthly'].includes(form.category);
 
   async function transcribeVoiceNote(audioBlob: Blob) {
     setVoiceLoading(true);
@@ -189,17 +196,18 @@ export default function CreateTaskForm({ users, currentUser, redirectTo, isReadL
       toast.error('Please fill in all required fields');
       return;
     }
-    if (form.startDate && form.endDate && new Date(form.endDate) < new Date(form.startDate)) {
+    if (!isRecurring && form.startDate && form.endDate && new Date(form.endDate) < new Date(form.startDate)) {
       toast.error('Due date must be after start date');
       return;
     }
 
     setLoading(true);
     try {
+      const payload = isRecurring ? { ...form, startDate: form.endDate || indiaTodayKey() } : form;
       const res = await fetch('/api/tasks', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(form),
+        body:    JSON.stringify(payload),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -342,29 +350,40 @@ export default function CreateTaskForm({ users, currentUser, redirectTo, isReadL
         </div>
 
         <div>
-          <label className="label">Start Date</label>
+          <label className={cn('label', isRecurring && 'text-gray-400')}>
+            Start Date {isRecurring && <span className="text-[11px] font-normal text-gray-400">(Auto-locked for recurring)</span>}
+          </label>
           <input
             type="date"
-            value={form.startDate}
+            value={isRecurring ? (form.endDate || indiaTodayKey()) : form.startDate}
             onChange={e => set('startDate', e.target.value)}
-            className="input"
+            disabled={isRecurring}
+            className={cn('input', isRecurring && 'bg-gray-100 text-gray-400 cursor-not-allowed select-none')}
+            title={isRecurring ? 'Start date is automatically derived from Due Date for recurring tasks' : undefined}
           />
         </div>
 
         <div>
-          <label className="label">Due Date</label>
+          <label className="label">
+            Due Date {isRecurring && <span className="text-[11px] font-normal text-brand-600">(Plans recurrence schedule)</span>}
+          </label>
           <input
             type="date"
             value={form.endDate}
             onChange={e => set('endDate', e.target.value)}
             className="input"
-            min={form.startDate || undefined}
+            placeholder={isRecurring ? indiaTodayKey() : undefined}
+            min={!isRecurring ? form.startDate || undefined : undefined}
           />
         </div>
 
         <div className="col-span-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
-          {['Daily', 'Weekly', 'Monthly'].includes(form.category)
-            ? `📌 Recurring ${form.category} Task: Repeats automatically on schedule. (Default due date: ${form.category === 'Monthly' ? 'End of Month (30th)' : "Today's date in IST"}).`
+          {form.category === 'Daily'
+            ? `📌 Daily Task: Starts on the chosen Due Date (default: today ${indiaTodayKey()}) and appends daily checklist rows on that date and onwards.`
+            : form.category === 'Weekly'
+            ? `📌 Weekly Task: Starts from the chosen Due Date (default: today ${indiaTodayKey()}) and appends weekly rows on that same weekday.`
+            : form.category === 'Monthly'
+            ? `📌 Monthly Task: Starts in the chosen month (default: today ${indiaTodayKey()}) and appends monthly rows on that same day of the month.`
             : 'Admin-created tasks become active immediately. Add dates now, or the assigned person will be asked to set dates in the portal.'}
         </div>
       </div>

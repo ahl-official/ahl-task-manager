@@ -56,15 +56,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Cannot shift task to the current assignee' }, { status: 400 });
     }
 
-    // Role check for members
-    if (session.role === 'member') {
-      const myDept = (session.department || '').trim().toLowerCase();
-      const targetDept = (targetUser.department || '').trim().toLowerCase();
-      if (myDept !== targetDept) {
-        return NextResponse.json({ success: false, error: 'Members can only shift tasks within their own department' }, { status: 403 });
-      }
-    }
-
     if (hasCloudflareApi()) {
       const result = await cfApi<{parentTask:any;childTask:any}>('/tasks/shift', {
         method:'POST',body:JSON.stringify({taskId:task.taskId,targetUid:targetUser.uid,shiftNote,
@@ -79,7 +70,7 @@ export async function POST(req: NextRequest) {
     const cleanNote = String(shiftNote).trim();
     const parentNotes = (task.notes||'')+'\n[Shifted by '+session.name+' to '+childTaskId+']: '+cleanNote;
     const childNotes = (task.notes||'')+'\n[Shifted by '+session.name+' from '+task.taskId+' to '+childTaskId+']: '+cleanNote;
-    const childStatus = task.endDate ? 'In Progress' : 'Pending Accept';
+    const childStatus = 'In Progress';
     const now = Timestamp.now();
     const childTaskData: Task = {
       taskId: childTaskId,
@@ -151,7 +142,7 @@ export async function POST(req: NextRequest) {
           endDate: dueText,
           createdByName: session.name,
           datesRequired: !task.endDate,
-          acceptanceRequired: childStatus === 'Pending Accept',
+          acceptanceRequired: false,
         }),
         childTaskId,
       ).catch(() => {});

@@ -1261,11 +1261,85 @@ async function routeRecurring(req: Request, env: Env, url: URL) {
     return json({ success: true, data: recurringTemplateFromRow(updated) });
   }
 
+  const templateShiftMatch = path.match(/^\/recurring\/templates\/([^/]+)\/shift$/);
+  if (templateShiftMatch && req.method === 'POST') {
+    const id = templateShiftMatch[1];
+    const data = await body<any>(req);
+    const targetUid = String(data.targetUid || '').trim();
+    const targetName = String(data.targetName || '').trim();
+    const targetDepartment = String(data.targetDepartment || '').trim();
+    const fromDate = String(data.fromDate || getIstDateParts().dateStr).trim();
+    if (!targetUid || !targetName) {
+      return json({ success: false, error: 'targetUid and targetName are required' }, { status: 400 });
+    }
+    const now = nowIso();
+    await env.DB.prepare(
+      'UPDATE recurring_templates SET assigned_to = ?, assigned_to_name = ?, department = ?, updated_at = ? WHERE id = ?'
+    ).bind(targetUid, targetName, targetDepartment, now, id).run();
+
+    const periodRes: any = await env.DB.prepare(
+      `UPDATE recurring_period_rows
+       SET assigned_to = ?, assigned_to_name = ?, department = ?, updated_at = ?
+       WHERE template_id = ?
+         AND status = 'Pending'
+         AND due_date >= ?`
+    ).bind(targetUid, targetName, targetDepartment, now, id, fromDate).run();
+
+    const updated = await env.DB.prepare('SELECT * FROM recurring_templates WHERE id = ?').bind(id).first<any>();
+    return json({
+      success: true,
+      data: {
+        template: recurringTemplateFromRow(updated),
+        shiftedPeriodsCount: periodRes?.meta?.changes ?? 0,
+        fromDate,
+      }
+    });
+  }
+
   // 4. DELETE /recurring/templates/:id -> HARD PERMANENT DELETE
   if (templateMatch && req.method === 'DELETE') {
     const id = templateMatch[1];
     await env.DB.prepare('DELETE FROM recurring_templates WHERE id = ?').bind(id).run();
     return json({ success: true, data: { deletedId: id, permanent: true } });
+  }
+
+  if (path === '/recurring/checklist/batch-delete' && req.method === 'POST') {
+    const data = await body<any>(req);
+    const mode = data.mode; // 'day' | 'whole'
+    const today = getIstDateParts().dateStr;
+    if (mode === 'day') {
+      const ids = Array.isArray(data.ids) ? data.ids.filter(Boolean) : [];
+      if (!ids.length) return json({ success: false, error: 'No item IDs provided' }, { status: 400 });
+      let deleted = 0;
+      for (let i = 0; i < ids.length; i += 50) {
+        const chunk = ids.slice(i, i + 50);
+        const placeholders = chunk.map(() => '?').join(',');
+        await env.DB.prepare(`DELETE FROM recurring_period_rows WHERE id IN (${placeholders})`).bind(...chunk).run().catch(() => null);
+        await env.DB.prepare(`DELETE FROM recurring_completions WHERE id IN (${placeholders})`).bind(...chunk).run().catch(() => null);
+        deleted += chunk.length;
+      }
+      return json({ success: true, data: { deleted, mode: 'day' } });
+    } else if (mode === 'whole') {
+      const templateIds = Array.isArray(data.templateIds) ? data.templateIds.filter(Boolean) : [];
+      if (!templateIds.length) return json({ success: false, error: 'No template IDs provided' }, { status: 400 });
+      let deleted = 0;
+      for (const tId of templateIds) {
+        await env.DB.prepare(
+          `DELETE FROM recurring_period_rows
+           WHERE template_id = ?
+             AND (
+               (LOWER(category) = 'monthly' AND period_key >= ?)
+               OR (LOWER(category) = 'weekly' AND COALESCE(period_end, due_date, period_key) >= ?)
+               OR (LOWER(category) = 'daily' AND period_key >= ?)
+             )`
+        ).bind(tId, today.slice(0, 7), today, today, today).run().catch(() => null);
+        await env.DB.prepare('DELETE FROM recurring_templates WHERE id = ?').bind(tId).run();
+        await env.DB.prepare('DELETE FROM recurring_completions WHERE template_id = ?').bind(tId).run().catch(() => null);
+        deleted++;
+      }
+      return json({ success: true, data: { deleted, mode: 'whole' } });
+    }
+    return json({ success: false, error: 'Invalid batch delete mode' }, { status: 400 });
   }
 
   // 5. GET /recurring/checklist -> Daily / Weekly / Monthly checklist view
@@ -1464,6 +1538,16 @@ async function routeRecurring(req: Request, env: Env, url: URL) {
         .bind(templateId, periodKey)
         .run();
       return json({ success: true, data: { uncompleted: true, templateId, periodKey } });
+    }
+
+    if (action === 'skip_day') {
+      await env.DB.prepare('DELETE FROM recurring_period_rows WHERE template_id = ? AND period_key = ?')
+        .bind(templateId, periodKey)
+        .run().catch(() => null);
+      await env.DB.prepare('DELETE FROM recurring_completions WHERE template_id = ? AND period_key = ?')
+        .bind(templateId, periodKey)
+        .run().catch(() => null);
+      return json({ success: true, data: { deleted: true, permanent: true, templateId, periodKey, deletedScope: 'day' } });
     }
 
     const template = await env.DB.prepare('SELECT * FROM recurring_templates WHERE id = ?').bind(templateId).first<any>();

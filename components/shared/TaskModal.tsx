@@ -20,6 +20,17 @@ interface Props {
   currentUser?: { uid: string; name: string; role: UserRole; department?: string };
 }
 
+function emitTaskUpdated(taskData: any) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('task-status-updated', { detail: taskData }));
+    try {
+      const bc = new BroadcastChannel('ahl-task-updates');
+      bc.postMessage({ type: 'task-updated', task: taskData });
+      bc.close();
+    } catch {}
+  }
+}
+
 export default function TaskModal({ task, onClose, role, currentUid, onUpdate, onDelete, users, currentUser }: Props) {
   const userRole = (currentUser?.role || (role === 'admin' ? 'admin' : 'member')) as UserRole;
   const isAssignee = task.assignedTo === currentUid;
@@ -55,6 +66,10 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
   const [selectedCheckerUid, setSelectedCheckerUid] = useState(task.handoffUid || '');
   const [isEditingDates, setIsEditingDates] = useState(!task.endDate && !isDone && (isAssignee || isAdmin));
   const [userList, setUserList] = useState((users || []).filter(u => u.isActive !== false));
+  const [showDueDateApprovalModal, setShowDueDateApprovalModal] = useState(false);
+  const [dueDateApprovalReason, setDueDateApprovalReason] = useState('');
+  const [pendingApprovalDates, setPendingApprovalDates] = useState<{ startDate: string; endDate: string } | null>(null);
+  const createdDayKey = task.createdAt ? indiaDateKey(task.createdAt) : indiaTodayKey();
 
   useEffect(() => {
     setMounted(true);
@@ -113,7 +128,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
       toast.success('Checker updated successfully');
       setIsEditingChecker(false);
       onUpdate(data.data);
-      window.dispatchEvent(new CustomEvent('task-status-updated', { detail: data.data }));
+      emitTaskUpdated(data.data);
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to update checker');
     } finally {
@@ -145,7 +160,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
       toast.success(data.message || successMessage[action] || 'Task updated successfully');
       if (['dead', 'remark', 'revive'].includes(action)) setRemark('');
       onUpdate(data.data);
-      window.dispatchEvent(new CustomEvent('task-status-updated', { detail: data.data }));
+      emitTaskUpdated(data.data);
       return true;
     } catch (err: any) {
       toast.error(err.message ?? 'Action failed');
@@ -200,7 +215,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
       };
       setShowRevision(false);
       onUpdate(updatedTask);
-      window.dispatchEvent(new CustomEvent('task-status-updated', { detail: updatedTask }));
+      emitTaskUpdated(updatedTask);
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to submit revision');
     } finally {
@@ -208,8 +223,54 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
     }
   }
 
+  async function submitDueDateApproval() {
+    if (!pendingApprovalDates?.endDate) return;
+    const reason = dueDateApprovalReason.trim();
+    if (!reason) {
+      toast.error('Please enter a remark explaining why more than 10 days is needed');
+      return;
+    }
+    setLoading('due-date-approval');
+    try {
+      const res = await fetch('/api/revisions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: task.taskId,
+          requestedDate: pendingApprovalDates.endDate,
+          startDate: pendingApprovalDates.startDate || undefined,
+          reason,
+          type: 'due_date',
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to submit due date for approval');
+      toast.success('Due date submitted for Admin approval');
+      const updatedTask: TaskSerialized = {
+        ...task,
+        endDate: pendingApprovalDates.endDate,
+        startDate: pendingApprovalDates.startDate || task.startDate,
+        delayedDate: pendingApprovalDates.endDate,
+        delayReason: reason,
+        revisionStatus: 'requested',
+        status: 'Delay Requested',
+      };
+      setShowDueDateApprovalModal(false);
+      setDueDateApprovalReason('');
+      setPendingApprovalDates(null);
+      setIsEditingDates(false);
+      onUpdate(updatedTask);
+      emitTaskUpdated(updatedTask);
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to submit due date for approval');
+    } finally {
+      setLoading(null);
+    }
+  }
+
   async function decideRevision(decision: 'approved' | 'rejected', revisionId: string) {
     setLoading(`revision-${decision}`);
+    let pendingType = '';
     try {
       if (revisionId === task.taskId) {
         const lookup = await fetch('/api/revisions?taskId=' + encodeURIComponent(task.taskId));
@@ -218,6 +279,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
         const pending = result.data.find((row: any) => row.status === 'pending');
         if (!pending) throw new Error('No pending revision; refresh the task');
         revisionId = pending.id;
+        pendingType = pending.type || '';
       }
       const res = await fetch('/api/revisions', {
         method: 'PATCH',
@@ -227,10 +289,13 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
       toast.success(decision === 'approved' ? 'Request approved successfully' : 'Request rejected');
+      const isDueDateReq = pendingType === 'due_date';
       const updatedTask: TaskSerialized = data.task || {
         ...task,
         revisionStatus: decision === 'approved' ? 'accepted' : 'rejected',
-        endDate: decision === 'approved' && task.delayedDate ? task.delayedDate : task.endDate,
+        endDate: isDueDateReq && decision === 'rejected'
+          ? null
+          : (decision === 'approved' && task.delayedDate ? task.delayedDate : task.endDate),
         delayedDate: null,
         delayReason: null,
         status: task.status === 'Dead Requested'
@@ -238,7 +303,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
           : (task.status === 'Delay Requested' ? 'In Progress' : task.status),
       };
       onUpdate(updatedTask);
-      window.dispatchEvent(new CustomEvent('task-status-updated', { detail: updatedTask }));
+      emitTaskUpdated(updatedTask);
     } catch (err: any) {
       toast.error(err.message ?? 'Failed');
     } finally {
@@ -402,6 +467,12 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                             toast.error('Please select a due date');
                             return;
                           }
+                          if (!isAdmin && indiaDayOffset(createdDayKey, acceptEndDate) > 10) {
+                            setPendingApprovalDates({ startDate: acceptStartDate, endDate: acceptEndDate });
+                            setDueDateApprovalReason('');
+                            setShowDueDateApprovalModal(true);
+                            return;
+                          }
                           await doAction('set-dates', { startDate: acceptStartDate, endDate: acceptEndDate });
                           setIsEditingDates(false);
                         }}
@@ -425,11 +496,14 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                     </div>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span className={cn('text-sm font-medium', !task.endDate ? 'text-amber-600 font-semibold' : 'text-gray-800')}>
                       {formatDate(task.delayedDate || task.endDate) || 'Date pending'}
                     </span>
-                    {!isDone && due.label === 'Overdue' && (
+                    {task.revisionStatus === 'requested' && task.status !== 'Dead Requested' && (
+                      <span className="badge bg-amber-100 text-amber-800">Pending Approval</span>
+                    )}
+                    {!isDone && due.label === 'Overdue' && task.revisionStatus !== 'requested' && (
                       <span className="badge bg-red-100 text-red-700">Overdue</span>
                     )}
                   </div>
@@ -604,20 +678,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             {/* Assignee / Admin actions */}
             {(isAssignee || isAdmin) && (
               <div className="flex gap-2 flex-wrap w-full">
-                {task.status === 'Pending Accept' && !isDone && (
-                  <ActionButton
-                    label="Accept Task"
-                    onClick={() => {
-                      doAction('accept', { startDate: acceptStartDate, endDate: acceptEndDate });
-                    }}
-                    loading={loading === 'accept'}
-                    color="blue"
-                  />
-                )}
-
-
-
-                {['In Progress', 'Overdue'].includes(task.status) && !task.childTaskId && !isDone && (
+                {['Pending Accept', 'In Progress', 'Overdue'].includes(task.status) && !task.childTaskId && !isDone && task.revisionStatus !== 'requested' && (
                   <ActionButton
                     label="Mark Complete"
                     onClick={async () => {
@@ -626,6 +687,12 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                         return;
                       }
                       if (!task.endDate && acceptEndDate) {
+                        if (!isAdmin && indiaDayOffset(createdDayKey, acceptEndDate) > 10) {
+                          setPendingApprovalDates({ startDate: acceptStartDate, endDate: acceptEndDate });
+                          setDueDateApprovalReason('');
+                          setShowDueDateApprovalModal(true);
+                          return;
+                        }
                         const saved = await doAction('set-dates', { startDate: acceptStartDate, endDate: acceptEndDate });
                         if (!saved) return;
                       }
@@ -752,47 +819,111 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             )}
 
             {/* Revision / Dead decision */}
-            {!isTimelySheet && task.revisionStatus === 'requested' && (
-              <div className={cn('rounded-xl p-3 border', task.status === 'Dead Requested' ? 'bg-rose-50 border-rose-200' : 'bg-yellow-50 border-yellow-200')}>
-                <p className={cn('text-xs font-semibold mb-2 flex items-center gap-1.5', task.status === 'Dead Requested' ? 'text-rose-900' : 'text-yellow-800')}>
-                  {task.status === 'Dead Requested' ? <AlertOctagon size={13} className="text-rose-600" /> : <RefreshCw size={13} />}
-                  {task.status === 'Dead Requested' ? 'Dead Approval Required (Admin Only)' : 'Revision Decision Required'}
-                </p>
-                {task.status !== 'Dead Requested' && task.delayedDate && (
-                  <p className="text-xs text-yellow-900 mb-1">
-                    <span className="font-medium">Requested Date:</span> {formatDate(task.delayedDate)}
+            {!isTimelySheet && task.revisionStatus === 'requested' && (() => {
+              const isInitialDueDateApproval = !task.endDate;
+              const canDecideThisRevision = (task.status === 'Dead Requested' || isInitialDueDateApproval) ? isAdmin : (isHandoff || isAdmin);
+              return (
+                <div className={cn('rounded-xl p-3 border', task.status === 'Dead Requested' ? 'bg-rose-50 border-rose-200' : 'bg-yellow-50 border-yellow-200')}>
+                  <p className={cn('text-xs font-semibold mb-2 flex items-center gap-1.5', task.status === 'Dead Requested' ? 'text-rose-900' : 'text-yellow-800')}>
+                    {task.status === 'Dead Requested' ? <AlertOctagon size={13} className="text-rose-600" /> : <RefreshCw size={13} />}
+                    {task.status === 'Dead Requested'
+                      ? 'Dead Approval Required (Admin Only)'
+                      : isInitialDueDateApproval
+                      ? 'Initial Due Date Approval (>10 Days - Admin Only)'
+                      : 'Revision Decision Required'}
                   </p>
-                )}
-                {task.delayReason && (
-                  <p className={cn('text-xs mb-3', task.status === 'Dead Requested' ? 'text-rose-800' : 'text-yellow-800')}>
-                    <span className="font-medium">{task.status === 'Dead Requested' ? 'Remark / Blocker:' : 'Reason:'}</span> {task.delayReason}
-                  </p>
-                )}
-                {(task.status === 'Dead Requested' ? isAdmin : (isHandoff || isAdmin)) ? (
-                  <div className="flex gap-2">
-                    <ActionButton
-                      label={task.status === 'Dead Requested' ? 'Approve Dead' : 'Approve'}
-                      onClick={() => decideRevision('approved', task.taskId)}
-                      loading={loading === 'revision-approved'}
-                      color={task.status === 'Dead Requested' ? 'red' : 'green'}
-                    />
-                    <ActionButton
-                      label={task.status === 'Dead Requested' ? 'Reject Request' : 'Reject'}
-                      onClick={() => decideRevision('rejected', task.taskId)}
-                      loading={loading === 'revision-rejected'}
-                      color={task.status === 'Dead Requested' ? 'gray' : 'red'}
-                    />
-                  </div>
-                ) : (
-                  <p className="text-xs text-amber-700 italic">Awaiting Admin decision</p>
-                )}
-              </div>
-            )}
+                  {task.status !== 'Dead Requested' && task.delayedDate && (
+                    <p className="text-xs text-yellow-900 mb-1">
+                      <span className="font-medium">Requested Date:</span> {formatDate(task.delayedDate)}
+                    </p>
+                  )}
+                  {task.delayReason && (
+                    <p className={cn('text-xs mb-3', task.status === 'Dead Requested' ? 'text-rose-800' : 'text-yellow-800')}>
+                      <span className="font-medium">{task.status === 'Dead Requested' ? 'Remark / Blocker:' : 'Reason:'}</span> {task.delayReason}
+                    </p>
+                  )}
+                  {canDecideThisRevision ? (
+                    <div className="flex gap-2">
+                      <ActionButton
+                        label={task.status === 'Dead Requested' ? 'Approve Dead' : 'Approve'}
+                        onClick={() => decideRevision('approved', task.taskId)}
+                        loading={loading === 'revision-approved'}
+                        color={task.status === 'Dead Requested' ? 'red' : 'green'}
+                      />
+                      <ActionButton
+                        label={task.status === 'Dead Requested' ? 'Reject Request' : 'Reject'}
+                        onClick={() => decideRevision('rejected', task.taskId)}
+                        loading={loading === 'revision-rejected'}
+                        color={task.status === 'Dead Requested' ? 'gray' : 'red'}
+                      />
+                    </div>
+                  ) : (
+                    <p className="text-xs text-amber-700 italic">
+                      {isInitialDueDateApproval ? 'Awaiting Admin approval' : 'Awaiting Checker / Admin decision'}
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* End of actions */}
           </div>
         </div>
       </div>
+
+      {showDueDateApprovalModal && pendingApprovalDates && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px]" onClick={() => setShowDueDateApprovalModal(false)}>
+          <div className="bg-white rounded-2xl shadow-modal w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">Due Date Approval Required</h3>
+                <p className="mt-1 text-xs text-amber-700">
+                  Due dates more than 10 days from task creation ({formatDate(createdDayKey)}) will be sent for Admin approval.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDueDateApprovalModal(false)}
+                className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">
+              Selected Due Date: <span className="font-semibold">{formatDate(pendingApprovalDates.endDate)}</span>
+            </div>
+            <div>
+              <label className="label text-gray-700">Remark (required) *</label>
+              <textarea
+                value={dueDateApprovalReason}
+                onChange={e => setDueDateApprovalReason(e.target.value)}
+                placeholder="Explain why more than 10 days is required..."
+                className="input resize-none h-24 text-xs"
+                autoFocus
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDueDateApprovalModal(false)}
+                disabled={loading === 'due-date-approval'}
+                className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitDueDateApproval}
+                disabled={loading === 'due-date-approval' || !dueDateApprovalReason.trim()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {loading === 'due-date-approval' && <Loader2 size={12} className="animate-spin" />}
+                OK, Send for Approval
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showShiftModal && (
         <ShiftTaskModal

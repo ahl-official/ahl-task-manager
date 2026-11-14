@@ -15,7 +15,7 @@ import {
 import type { TaskSerialized } from '@/types';
 import { deduplicateDepartments, matchDepartment, canonicalDepartment } from '@/lib/utils/departments';
 
-type TaskFilter = 'all' | 'Pending Accept' | 'In Progress' | 'Completed' | 'Verified' | 'Overdue';
+type TaskFilter = 'all' | 'In Progress' | 'Completed' | 'Verified' | 'Overdue';
 const ACTIVE_STATUSES = new Set(['Pending Accept', 'In Progress', 'Delay Requested', 'Dead Requested', 'Overdue', 'Dead']);
 const NEW_ASSIGNMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -59,7 +59,6 @@ function addTaskToCounts(counts: TaskCounts, task: TaskSerialized) {
 function matchesFilter(task: TaskSerialized, filter: TaskFilter) {
   if (filter === 'all') return true;
   if (filter === 'Overdue') return isOverdue(task);
-  if (filter === 'Pending Accept') return ['Pending', 'Pending Accept'].includes(normalizeBaseStatus(task.status));
   return task.status === filter || normalizeBaseStatus(task.status) === filter;
 }
 
@@ -249,7 +248,7 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
       const departmentUsers = activeUsers.filter((u: any) => matchDepartment(u.department, department));
       const visibleUsers = departmentUsers.filter((u: any) =>
         filter === 'all' || (() => { const counts = taskMetrics.byUser.get(u.uid) || emptyCounts();
-          return filter === 'Completed' ? counts.completed + counts.verified > 0 : counts[({ 'Pending Accept': 'pending', 'In Progress': 'inProgress', 'Verified': 'verified', 'Overdue': 'overdue' } as const)[filter]] > 0; })()
+          return filter === 'Completed' ? counts.completed + counts.verified > 0 : counts[({ 'In Progress': 'inProgress', 'Verified': 'verified', 'Overdue': 'overdue' } as const)[filter]] > 0; })()
       );
 
       return {
@@ -292,10 +291,9 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
       </div>
 
       {/* Overall stats */}
-      <div className="surface-enter grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="surface-enter grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
           { label: 'Total',       value: overallStats.total,      color: 'text-gray-700',   bg: 'bg-gray-50',   filter: 'all' as TaskFilter },
-          { label: 'Pending',     value: overallStats.pending,    color: 'text-yellow-700', bg: 'bg-yellow-50', filter: 'Pending Accept' as TaskFilter },
           { label: 'In Progress', value: overallStats.inProgress, color: 'text-blue-700',   bg: 'bg-blue-50',   filter: 'In Progress' as TaskFilter },
           { label: 'Overdue',     value: overallStats.overdue,    color: 'text-red-700',    bg: 'bg-red-50',    filter: 'Overdue' as TaskFilter },
           { label: 'Done',        value: overallStats.done,       color: 'text-green-700',  bg: 'bg-green-50',  filter: 'Completed' as TaskFilter },
@@ -370,7 +368,7 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
       <div className="surface-enter flex flex-wrap gap-2 items-center">
         {/* Status filter */}
         <div className="flex gap-1.5 flex-wrap">
-          {(['all', 'Pending Accept', 'In Progress', 'Completed', 'Verified', 'Overdue'] as TaskFilter[]).map(f => (
+          {(['all', 'In Progress', 'Completed', 'Verified', 'Overdue'] as TaskFilter[]).map(f => (
             <button
               key={f}
               onClick={() => { setSelectedUser(null); setSelectedDepartment(null); setFilter(f); }}

@@ -105,15 +105,13 @@ export function buildMonthPeriodRows(template: MaterializeTemplate, monthKey: st
   if (fromDate > monthEnd) return [];
 
   if (catLower === 'daily') {
-    return eachDateInRange(fromDate, monthEnd)
-      .filter((d) => !isDailyWeeklyOff(d, template.assignedToName))
-      .map((d) => ({
-        ...base,
-        periodKey: d,
-        dueDate: d,
-        periodStart: d,
-        periodEnd: d,
-      }));
+    return eachDateInRange(fromDate, monthEnd).map((d) => ({
+      ...base,
+      periodKey: d,
+      dueDate: d,
+      periodStart: d,
+      periodEnd: d,
+    }));
   }
 
   if (catLower === 'weekly') {

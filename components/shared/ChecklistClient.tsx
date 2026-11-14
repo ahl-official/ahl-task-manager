@@ -1,12 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertOctagon, CalendarOff, CheckCircle2, Circle, MessageSquare, Loader2, RotateCcw, Search, X, Trash2 } from 'lucide-react';
+import { ArrowRightLeft, CheckCircle2, ChevronDown, Circle, MessageSquare, Loader2, MoreVertical, RotateCcw, Search, X, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn, formatDate } from '@/lib/utils';
 import { namesEqual, normalizePersonName } from '@/lib/utils/names';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
-import { isoWeekday } from '@/lib/mis/weeklyOff';
 
 type ChecklistCategory = 'Daily' | 'Weekly' | 'Monthly';
 
@@ -82,17 +81,27 @@ export default function ChecklistClient({
   const [ticking, setTicking] = useState<string | null>(null);
   const [search, setSearch] = useState(initialTaskId);
   const [department, setDepartment] = useState('');
-  const [individual, setIndividual] = useState('');
+  const [selectedIndividuals, setSelectedIndividuals] = useState<string[]>([]);
+  const [individualDropdownOpen, setIndividualDropdownOpen] = useState(false);
+  const [individualSearch, setIndividualSearch] = useState('');
   const [mineOnly, setMineOnly] = useState(false);
   const [elevated, setElevated] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [currentUserName, setCurrentUserName] = useState('');
   const [currentUserId, setCurrentUserId] = useState('');
-  const [date, setDate] = useState(initialDate);
+  const [startDate, setStartDate] = useState(initialDate || indiaTodayKey());
+  const [endDate, setEndDate] = useState(initialDate || indiaTodayKey());
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
+  const [batchDeleteModalOpen, setBatchDeleteModalOpen] = useState(false);
+  const [batchDeleteMode, setBatchDeleteMode] = useState<'day' | 'whole' | null>(null);
+  const [batchDeleteRemark, setBatchDeleteRemark] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
   const [activeRemarkRow, setActiveRemarkRow] = useState<string | null>(null);
   const [remark, setRemark] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<ChecklistRow | null>(null);
-  const [deleteConfirmMode, setDeleteConfirmMode] = useState<'day' | 'whole' | null>(null);
+  const [openMenuRowId, setOpenMenuRowId] = useState<string | null>(null);
+  const [shiftTarget, setShiftTarget] = useState<ChecklistRow | null>(null);
+  const [shiftTargetUid, setShiftTargetUid] = useState<string>('');
+  const [isShifting, setIsShifting] = useState(false);
   const [allUsers, setAllUsers] = useState<{ uid: string; name: string; department: string }[]>([]);
   const fetchedChecklistKeys = useRef<Set<string>>(new Set());
 
@@ -132,12 +141,6 @@ export default function ChecklistClient({
   const requestKey = useRef('');
   const pageInFlight = useRef(false);
   const searchedKeys = useRef(new Set<string>());
-  const viewingMonday = Boolean(date && isoWeekday(date) === 1);
-  const deleteDayLabel = deleteTarget?.category === 'Daily' && deleteTarget.periodKey === indiaTodayKey()
-    ? "Delete today's task"
-    : deleteTarget?.category === 'Daily' ? "Delete this day's task" : 'Delete this occurrence';
-
-
 
   const departments = useMemo(() => {
     const seen = new Map<string, string>();
@@ -165,28 +168,19 @@ export default function ChecklistClient({
     return Array.from(seen.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   }, [allUsers, rows, department]);
 
-  const selectedIndividualUser = useMemo(() => {
-    if (!individual) return null;
-    return allUsers.find(u => namesEqual(u.name, individual) || u.name.toLowerCase() === individual.toLowerCase()) || null;
-  }, [allUsers, individual]);
-
   const visibleRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const isTargetTask = (taskId: string) => Boolean(initialTaskId && taskId.toLowerCase() === initialTaskId.toLowerCase());
 
     const filtered = rows.filter(row => {
       let matchesDate = true;
-      if (date) {
-        const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
-        if (category === 'Weekly') {
-          const rowWeek = getWeekMonday(row.periodKey || row.dueDate || '');
-          const targetWeek = getWeekMonday(date);
-          matchesDate = Boolean(rowWeek && targetWeek && rowWeek === targetWeek);
-        } else if (category === 'Monthly') {
-          matchesDate = (row.periodKey || row.dueDate || '').slice(0, 7) === date.slice(0, 7);
-        } else {
-          matchesDate = rowDate === date;
-        }
+      const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
+      if (startDate && endDate) {
+        matchesDate = Boolean(rowDate && rowDate >= startDate && rowDate <= endDate);
+      } else if (startDate) {
+        matchesDate = Boolean(rowDate && rowDate >= startDate);
+      } else if (endDate) {
+        matchesDate = Boolean(rowDate && rowDate <= endDate);
       }
 
       // If this row is the targeted recurring task passed via initialTaskId, always match date
@@ -199,12 +193,13 @@ export default function ChecklistClient({
         (Boolean(currentUserId) && Boolean(row.userId) && row.userId === currentUserId) ||
         namesEqual(row.userName, currentUserName);
       const matchesDept = !department || namesEqual(row.department, department);
-      const matchesIndiv = !individual ||
-        Boolean(selectedIndividualUser?.uid && row.userId && row.userId === selectedIndividualUser.uid) ||
-        namesEqual(row.userName, individual) ||
-        (Boolean(row.userName) && (
-          row.userName.toLowerCase().startsWith(individual.toLowerCase()) ||
-          individual.toLowerCase().startsWith(row.userName.toLowerCase())
+      const matchesIndiv = selectedIndividuals.length === 0 ||
+        selectedIndividuals.some(indiv => (
+          namesEqual(row.userName, indiv) ||
+          (Boolean(row.userName) && (
+            row.userName.toLowerCase().startsWith(indiv.toLowerCase()) ||
+            indiv.toLowerCase().startsWith(row.userName.toLowerCase())
+          ))
         ));
       const matchesSearch = !q ||
         (row.taskId && row.taskId.toLowerCase().includes(q)) ||
@@ -221,11 +216,11 @@ export default function ChecklistClient({
     });
 
     // Sort by periodKey descending (newest first) so past completions appear in order
-    if (mineOnly || individual) {
+    if (mineOnly || selectedIndividuals.length > 0 || (startDate && endDate && startDate !== endDate)) {
       return [...filtered].sort((a, b) => (b.periodKey || '').localeCompare(a.periodKey || ''));
     }
     return filtered;
-  }, [rows, department, individual, selectedIndividualUser, date, mineOnly, currentUserName, currentUserId, search, category, initialTaskId]);
+  }, [rows, department, selectedIndividuals, startDate, endDate, mineOnly, currentUserName, currentUserId, search, initialTaskId]);
   const completedCount = useMemo(() => visibleRows.filter(row => row.completed).length, [visibleRows]);
 
   useEffect(() => {
@@ -246,7 +241,7 @@ export default function ChecklistClient({
     const fetchTarget = async () => {
       try {
         const qs = new URLSearchParams({ category, search: initialTaskId });
-        if (date) qs.set('date', date);
+        if (startDate) qs.set('date', startDate);
         const res = await fetch(`/api/checklist?${qs.toString()}`);
         const data = await res.json();
         if (active && data.success && Array.isArray(data.data) && data.data.length > 0) {
@@ -261,7 +256,7 @@ export default function ChecklistClient({
             }
             if (changed) {
               const merged = Array.from(byId.values());
-              const activeCacheKey = `${category}:${date || 'today'}`;
+              const activeCacheKey = `${category}:${startDate}_${endDate}`;
               if (categoryCache.current[activeCacheKey]) {
                 categoryCache.current[activeCacheKey].rows = merged;
               } else {
@@ -285,17 +280,19 @@ export default function ChecklistClient({
     };
     void fetchTarget();
     return () => { active = false; };
-  }, [initialTaskId, loading, category, date, rows]);
+  }, [initialTaskId, loading, category, startDate, endDate, rows]);
 
   async function loadRows(
     nextCategory = category,
-    nextDate = date,
+    nextStartDate = startDate,
+    nextEndDate = endDate,
     forceRefresh = false,
-    nextIndividual = individual,
+    nextIndividuals = selectedIndividuals,
     nextMineOnly = mineOnly,
     nextDepartment = department,
   ) {
-    const currentKey = `${category}:${date || 'all'}:${mineOnly ? 'mine' : (individual || 'all')}:${department || 'all'}`;
+    const indivKey = nextIndividuals.length === 0 ? 'all' : nextIndividuals.slice().sort().join(',');
+    const currentKey = `${category}:${startDate}_${endDate}:${mineOnly ? 'mine' : indivKey}:${department || 'all'}`;
     if (rows.length > 0) {
       if (categoryCache.current[currentKey]) {
         const byId = new Map(categoryCache.current[currentKey].rows.map(r => [r.id, r]));
@@ -313,7 +310,7 @@ export default function ChecklistClient({
       }
     }
 
-    const cacheKey = `${nextCategory}:${nextDate || 'all'}:${nextMineOnly ? 'mine' : (nextIndividual || 'all')}:${nextDepartment || 'all'}`;
+    const cacheKey = `${nextCategory}:${nextStartDate}_${nextEndDate}:${nextMineOnly ? 'mine' : indivKey}:${nextDepartment || 'all'}`;
     requestKey.current = cacheKey;
     if (forceRefresh) searchedKeys.current.clear();
     const cached = categoryCache.current[cacheKey];
@@ -333,16 +330,28 @@ export default function ChecklistClient({
 
     try {
       const qs = new URLSearchParams({ category: nextCategory });
-      if (nextDate) {
-        qs.set('date', nextDate);
+      if (nextStartDate && nextEndDate) {
+        if (nextStartDate === nextEndDate) {
+          qs.set('date', nextStartDate);
+          qs.set('exactDate', 'true');
+          qs.set('startDate', nextStartDate);
+          qs.set('endDate', nextEndDate);
+        } else {
+          qs.set('startDate', nextStartDate);
+          qs.set('endDate', nextEndDate);
+        }
+      } else if (nextStartDate) {
+        qs.set('date', nextStartDate);
         qs.set('exactDate', 'true');
       }
       if (nextMineOnly) {
         qs.set('mine', 'true');
-      } else if (nextIndividual) {
-        qs.set('userName', nextIndividual);
-        const indivUser = allUsers.find(u => namesEqual(u.name, nextIndividual) || u.name.toLowerCase() === nextIndividual.toLowerCase());
+      } else if (nextIndividuals.length === 1) {
+        qs.set('userName', nextIndividuals[0]);
+        const indivUser = allUsers.find(u => namesEqual(u.name, nextIndividuals[0]) || u.name.toLowerCase() === nextIndividuals[0].toLowerCase());
         if (indivUser?.uid) qs.set('assignedTo', indivUser.uid);
+      } else if (nextIndividuals.length > 1) {
+        qs.set('users', nextIndividuals.join(','));
       }
       if (nextDepartment) {
         qs.set('department', nextDepartment);
@@ -391,15 +400,36 @@ export default function ChecklistClient({
 
   async function loadMore() {
     if (!nextCursor || pageInFlight.current || loading || search.trim()) return;
-    const cacheKey = `${category}:${date || 'today'}`;
+    const indivKey = selectedIndividuals.length === 0 ? 'all' : selectedIndividuals.slice().sort().join(',');
+    const cacheKey = `${category}:${startDate}_${endDate}:${mineOnly ? 'mine' : indivKey}:${department || 'all'}`;
     const cursor = nextCursor;
     pageInFlight.current = true;
     setLoadingMore(true);
     try {
       const qs = new URLSearchParams({ category, cursor });
-      if (date) {
-        qs.set('date', date);
+      if (startDate && endDate) {
+        if (startDate === endDate) {
+          qs.set('date', startDate);
+          qs.set('exactDate', 'true');
+          qs.set('startDate', startDate);
+          qs.set('endDate', endDate);
+        } else {
+          qs.set('startDate', startDate);
+          qs.set('endDate', endDate);
+        }
+      } else if (startDate) {
+        qs.set('date', startDate);
         qs.set('exactDate', 'true');
+      }
+      if (mineOnly) {
+        qs.set('mine', 'true');
+      } else if (selectedIndividuals.length === 1) {
+        qs.set('userName', selectedIndividuals[0]);
+      } else if (selectedIndividuals.length > 1) {
+        qs.set('users', selectedIndividuals.join(','));
+      }
+      if (department) {
+        qs.set('department', department);
       }
       const res = await fetch(`/api/checklist?${qs}`);
       const data = await res.json();
@@ -539,7 +569,7 @@ export default function ChecklistClient({
     }
   }
 
-  async function submitAction(row: ChecklistRow, action: 'dead' | 'remark' | 'revive') {
+  async function submitAction(row: ChecklistRow, action: 'remark' = 'remark') {
     if (!remark.trim()) {
       toast.error('Add a remark first');
       return;
@@ -566,17 +596,15 @@ export default function ChecklistClient({
       if (!data.success) throw new Error(data.error);
       const updated = (list: ChecklistRow[]) => list.map(item => item.id === row.id ? {
         ...item,
-        dead: data.data.dead,
-        deadAt: data.data.deadAt,
         remark: data.data.remark,
         remarkBy: data.data.remarkBy,
-        status: data.data.dead ? ('Dead' as const) : item.completed ? ('Completed' as const) : ('Pending' as const),
+        status: item.completed ? ('Completed' as const) : ('Pending' as const),
       } : item);
       setRows(updated);
       updateCacheRows(updated, row.category);
       setRemark('');
       setActiveRemarkRow(null);
-      toast.success(action === 'dead' ? 'Task flagged Dead' : action === 'revive' ? 'Task revived' : 'Remark added');
+      toast.success('Remark added');
     } catch (err: any) {
       toast.error(err.message ?? 'Failed to update checklist task');
     } finally {
@@ -584,69 +612,102 @@ export default function ChecklistClient({
     }
   }
 
-  async function deleteForDayOnly(row: ChecklistRow) {
-    setTicking(row.id);
+  async function handleBatchDelete(mode: 'day' | 'whole') {
+    const selectedRows = visibleRows.filter(r => selectedRowIds.has(r.id));
+    if (selectedRows.length === 0) return;
+    const ids = selectedRows.map(r => r.id);
+    const templateIds = Array.from(new Set(selectedRows.map(r => r.taskId)));
+
+    setIsDeleting(true);
     try {
-      const res = await fetch('/api/checklist', {
+      const res = await fetch('/api/checklist/batch-delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          taskId: row.taskId,
-          title: row.description,
-          description: row.description,
-          department: row.department,
-          assignedTo: row.userId,
-          assignedToName: row.userName,
-          category: row.category,
-          periodKey: row.periodKey,
-          action: 'skip_day',
-          remark: `Removed for ${row.periodKey} only (absent / skip day)`,
+          mode,
+          ids,
+          templateIds,
+          remark: batchDeleteRemark.trim() || undefined,
         }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
-      // Day skip hides from checklist and drops that day from planned score; past days stay.
-      setRows(prev => prev.filter(r => r.id !== row.id));
-      updateCacheRows(list => list.filter(r => r.id !== row.id), row.category);
-      toast.success('Task removed for this period');
+
+      if (mode === 'day') {
+        const idSet = new Set(ids);
+        setRows(prev => prev.filter(r => !idSet.has(r.id)));
+        for (const key of Object.keys(categoryCache.current)) {
+          categoryCache.current[key].rows = categoryCache.current[key].rows.filter(r => !idSet.has(r.id));
+        }
+        toast.success(`Hard deleted ${ids.length} occurrence(s)`);
+      } else {
+        const templateSet = new Set(templateIds);
+        setRows(prev => prev.filter(r => !templateSet.has(r.taskId)));
+        for (const key of Object.keys(categoryCache.current)) {
+          categoryCache.current[key].rows = categoryCache.current[key].rows.filter(r => !templateSet.has(r.taskId));
+        }
+        toast.success(`Hard deleted ${templateIds.length} recurring task(s)`);
+      }
+
+      setSelectedRowIds(new Set());
+      setBatchDeleteModalOpen(false);
+      setBatchDeleteMode(null);
+      setBatchDeleteRemark('');
     } catch (err: any) {
-      toast.error(err.message ?? 'Failed to remove this day');
+      toast.error(err.message ?? 'Failed to delete task(s)');
     } finally {
-      setTicking(null);
-      setDeleteTarget(null);
-      setDeleteConfirmMode(null);
+      setIsDeleting(false);
     }
   }
 
-  async function deleteEntireTask(row: ChecklistRow) {
-    setTicking(row.id);
+  async function handleShiftTask() {
+    if (!shiftTarget || !shiftTargetUid) return;
+    setIsShifting(true);
     try {
-      const templateId = row.taskId;
-      const res = await fetch(`/api/recurring/templates/${encodeURIComponent(templateId)}`, {
-        method: 'DELETE',
+      const templateId = shiftTarget.taskId;
+      const targetUser = allUsers.find(u => u.uid === shiftTargetUid);
+      const res = await fetch(`/api/recurring/templates/${encodeURIComponent(templateId)}/shift`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUid: shiftTargetUid }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      setRows(prev => prev.filter(r => r.taskId !== templateId));
-      // Clear from all category caches for this template going forward
+      const newName = targetUser?.name || shiftTargetUid;
+      const newDept = targetUser?.department || shiftTarget.department;
+
+      const today = indiaTodayKey();
+      setRows(prev => prev.map(r => {
+        if (r.taskId === templateId && !r.completed && r.periodKey >= today) {
+          return { ...r, userId: shiftTargetUid, userName: newName, department: newDept };
+        }
+        return r;
+      }));
+
       for (const key of Object.keys(categoryCache.current)) {
-        categoryCache.current[key].rows = categoryCache.current[key].rows.filter(r => r.taskId !== templateId);
+        categoryCache.current[key].rows = categoryCache.current[key].rows.map(r => {
+          if (r.taskId === templateId && !r.completed && r.periodKey >= today) {
+            return { ...r, userId: shiftTargetUid, userName: newName, department: newDept };
+          }
+          return r;
+        });
       }
-      toast.success('Recurring task deleted');
+
+      toast.success(`Task shifted to ${newName}`);
+      setShiftTarget(null);
+      setShiftTargetUid('');
     } catch (err: any) {
-      toast.error(err.message ?? 'Failed to delete task');
+      toast.error(err.message ?? 'Failed to shift recurring task');
     } finally {
-      setTicking(null);
-      setDeleteTarget(null);
-      setDeleteConfirmMode(null);
+      setIsShifting(false);
     }
   }
 
   useEffect(() => {
-    void loadRows(category, date, false, individual, mineOnly, department);
+    void loadRows(category, startDate, endDate, false, selectedIndividuals, mineOnly, department);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, date, individual, mineOnly, department]);
+  }, [category, startDate, endDate, selectedIndividuals, mineOnly, department]);
 
   useEffect(() => {
     const handleGlobalRefresh = (e: any) => {
@@ -654,13 +715,13 @@ export default function ChecklistClient({
       if (!scope || scope === 'checklist' || scope === 'all') {
         categoryCache.current = {};
         searchedKeys.current.clear();
-        void loadRows(category, date, true, individual, mineOnly, department);
+        void loadRows(category, startDate, endDate, true, selectedIndividuals, mineOnly, department);
       }
     };
     window.addEventListener('app-global-refresh', handleGlobalRefresh);
     return () => window.removeEventListener('app-global-refresh', handleGlobalRefresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, date, individual, mineOnly, department]);
+  }, [category, startDate, endDate, selectedIndividuals, mineOnly, department]);
 
   useEffect(() => {
     if (!nextCursor || loading || loadingMore || search.trim() || !pageSentinel.current) return;
@@ -670,7 +731,7 @@ export default function ChecklistClient({
     observer.observe(pageSentinel.current);
     return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nextCursor, loading, loadingMore, search, category, date]);
+  }, [nextCursor, loading, loadingMore, search, category, startDate, endDate]);
 
   useEffect(() => {
     const query = search.trim();
@@ -682,7 +743,7 @@ export default function ChecklistClient({
       setSearching(false);
       return;
     }
-    const lookupKey = `${category}:${date || 'today'}:${query.toLowerCase()}`;
+    const lookupKey = `${category}:${startDate}_${endDate}:${query.toLowerCase()}`;
     if (searchedKeys.current.has(lookupKey)) return;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
@@ -690,15 +751,25 @@ export default function ChecklistClient({
       setSearching(true);
       try {
         const qs = new URLSearchParams({ category, search: query });
-        if (date) {
-          qs.set('date', date);
+        if (startDate && endDate) {
+          if (startDate === endDate) {
+            qs.set('date', startDate);
+            qs.set('exactDate', 'true');
+            qs.set('startDate', startDate);
+            qs.set('endDate', endDate);
+          } else {
+            qs.set('startDate', startDate);
+            qs.set('endDate', endDate);
+          }
+        } else if (startDate) {
+          qs.set('date', startDate);
           qs.set('exactDate', 'true');
         }
         const res = await fetch(`/api/checklist?${qs}`, { signal: controller.signal });
         const data = await res.json();
         if (!data.success) throw new Error(data.error);
         if (controller.signal.aborted) return;
-        if (requestKey.current !== `${category}:${date || 'today'}`) return;
+        if (requestKey.current !== `${category}:${startDate}_${endDate}`) return;
         setRows(current => {
           const byId = new Map(current.map(row => [row.id, row]));
           let changed = false;
@@ -710,7 +781,7 @@ export default function ChecklistClient({
           }
           if (changed) {
             const merged = Array.from(byId.values());
-            const activeCacheKey = `${category}:${date || 'today'}`;
+            const activeCacheKey = `${category}:${startDate}_${endDate}`;
             if (categoryCache.current[activeCacheKey]) {
               categoryCache.current[activeCacheKey].rows = merged;
             } else {
@@ -738,7 +809,15 @@ export default function ChecklistClient({
     }, 350);
     return () => { window.clearTimeout(timer); controller.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, category, date, loading, visibleRows, initialTaskId]);
+  }, [search, category, startDate, endDate, loading, visibleRows, initialTaskId]);
+
+  const selectedRowsForDelete = useMemo(() => {
+    return rows.filter(r => selectedRowIds.has(r.id));
+  }, [rows, selectedRowIds]);
+
+  const uniqueTemplatesForDelete = useMemo(() => {
+    return Array.from(new Set(selectedRowsForDelete.map(r => r.taskId)));
+  }, [selectedRowsForDelete]);
 
   return (
     <div className="space-y-4">
@@ -759,8 +838,9 @@ export default function ChecklistClient({
               onClick={() => {
                 const next = !mineOnly;
                 setMineOnly(next);
-                if (next) setIndividual('');
-                void loadRows(category, date, false, '', next, department);
+                if (next) setSelectedIndividuals([]);
+                setSelectedRowIds(new Set());
+                void loadRows(category, startDate, endDate, false, [], next, department);
               }}
               className={cn('btn-secondary py-2 flex items-center gap-1.5', mineOnly && 'bg-brand-50 text-brand-700 border-brand-200')}
             >
@@ -772,7 +852,8 @@ export default function ChecklistClient({
             onChange={e => {
               const nextCat = e.target.value as ChecklistCategory;
               setCategory(nextCat);
-              void loadRows(nextCat, date, false, individual, mineOnly, department);
+              setSelectedRowIds(new Set());
+              void loadRows(nextCat, startDate, endDate, false, selectedIndividuals, mineOnly, department);
             }}
             className="input w-auto py-2 text-sm"
           >
@@ -782,7 +863,7 @@ export default function ChecklistClient({
           </select>
           <button
             type="button"
-            onClick={() => void loadRows(category, date, true, individual, mineOnly, department)}
+            onClick={() => void loadRows(category, startDate, endDate, true, selectedIndividuals, mineOnly, department)}
             className="btn-secondary py-2 px-3 text-sm flex items-center gap-1"
             title="Refresh from server"
           >
@@ -791,8 +872,6 @@ export default function ChecklistClient({
           </button>
         </div>
       </div>
-
-
 
       {/* Search & Filter Bar */}
       <div className="space-y-3">
@@ -817,7 +896,7 @@ export default function ChecklistClient({
           )}
         </div>
 
-        <div className={cn('grid gap-3', elevated ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 max-w-xs')}>
+        <div className={cn('grid gap-3', elevated ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4' : 'grid-cols-1 sm:grid-cols-2')}>
           {elevated && (
             <label className="space-y-1">
               <span className="text-xs font-medium text-gray-500">Department</span>
@@ -826,7 +905,8 @@ export default function ChecklistClient({
                 onChange={event => {
                   const nextDept = event.target.value;
                   setDepartment(nextDept);
-                  void loadRows(category, date, false, individual, mineOnly, nextDept);
+                  setSelectedRowIds(new Set());
+                  void loadRows(category, startDate, endDate, false, selectedIndividuals, mineOnly, nextDept);
                 }}
                 className="input w-full py-2 text-sm"
                 disabled={loading || departments.length === 0}
@@ -838,52 +918,153 @@ export default function ChecklistClient({
           )}
 
           <label className="space-y-1">
-            <span className="text-xs font-medium text-gray-500">Date</span>
-            <div className="flex gap-2">
-              <input
-                type="date"
-                value={date}
-                onChange={event => {
-                  const nextDate = event.target.value;
-                  setDate(nextDate);
-                  void loadRows(category, nextDate, false, individual, mineOnly, department);
-                }}
-                className="input min-w-0 flex-1 py-2 text-sm"
-              />
-              {date && (
+            <span className="text-xs font-medium text-gray-500">From Date</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={event => {
+                const nextDate = event.target.value;
+                setStartDate(nextDate);
+                setEndDate(nextDate); // Apply to second date as well
+                setSelectedRowIds(new Set());
+                void loadRows(category, nextDate, nextDate, false, selectedIndividuals, mineOnly, department);
+              }}
+              className="input w-full py-2 text-sm"
+            />
+          </label>
+
+          <label className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-gray-500">To Date</span>
+              {(startDate !== indiaTodayKey() || endDate !== indiaTodayKey()) && (
                 <button
                   type="button"
                   onClick={() => {
-                    setDate('');
-                    void loadRows(category, '', false, individual, mineOnly, department);
+                    const today = indiaTodayKey();
+                    setStartDate(today);
+                    setEndDate(today);
+                    setSelectedRowIds(new Set());
+                    void loadRows(category, today, today, false, selectedIndividuals, mineOnly, department);
                   }}
-                  className="btn-secondary px-3"
-                  title="Clear date filter"
+                  className="text-[11px] text-brand-600 hover:text-brand-700 font-medium"
                 >
-                  <RotateCcw size={14} />
+                  Reset Today
                 </button>
               )}
             </div>
+            <input
+              type="date"
+              value={endDate}
+              min={startDate}
+              onChange={event => {
+                const nextDate = event.target.value;
+                setEndDate(nextDate);
+                setSelectedRowIds(new Set());
+                void loadRows(category, startDate, nextDate, false, selectedIndividuals, mineOnly, department);
+              }}
+              className="input w-full py-2 text-sm"
+            />
           </label>
 
           {elevated && (
-            <label className="space-y-1">
-              <span className="text-xs font-medium text-gray-500">Individual</span>
-              <select
-                value={individual}
-                onChange={event => {
-                  const val = event.target.value;
-                  setIndividual(val);
-                  setMineOnly(false);
-                  void loadRows(category, date, false, val, false, department);
-                }}
-                className="input w-full py-2 text-sm"
+            <div className="relative space-y-1">
+              <span className="text-xs font-medium text-gray-500">Individuals</span>
+              <button
+                type="button"
+                onClick={() => setIndividualDropdownOpen(prev => !prev)}
+                className="input flex w-full items-center justify-between py-2 text-sm text-left bg-white"
                 disabled={loading || individuals.length === 0}
               >
-                <option value="">All individuals</option>
-                {individuals.map(option => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </label>
+                <span className="truncate">
+                  {selectedIndividuals.length === 0
+                    ? 'All individuals'
+                    : selectedIndividuals.length === 1
+                      ? selectedIndividuals[0]
+                      : `${selectedIndividuals.length} individuals selected`}
+                </span>
+                <ChevronDown size={14} className="text-gray-400 shrink-0 ml-1" />
+              </button>
+
+              {individualDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-30"
+                    onClick={() => setIndividualDropdownOpen(false)}
+                  />
+                  <div className="absolute left-0 right-0 top-full mt-1 z-40 rounded-md border border-gray-200 bg-white p-2 shadow-lg">
+                    <div className="flex items-center justify-between border-b border-gray-100 pb-2 mb-2 px-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedIndividuals([...individuals]);
+                          setMineOnly(false);
+                          setSelectedRowIds(new Set());
+                          void loadRows(category, startDate, endDate, false, [...individuals], false, department);
+                        }}
+                        className="text-xs font-semibold text-brand-600 hover:text-brand-700"
+                      >
+                        Select All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedIndividuals([]);
+                          setSelectedRowIds(new Set());
+                          void loadRows(category, startDate, endDate, false, [], false, department);
+                        }}
+                        className="text-xs font-medium text-gray-500 hover:text-gray-700"
+                      >
+                        Clear
+                      </button>
+                    </div>
+
+                    <div className="mb-2">
+                      <input
+                        type="text"
+                        value={individualSearch}
+                        onChange={e => setIndividualSearch(e.target.value)}
+                        placeholder="Search individual..."
+                        className="input w-full py-1 text-xs"
+                        autoFocus
+                      />
+                    </div>
+
+                    <div className="max-h-48 overflow-y-auto space-y-1">
+                      {individuals
+                        .filter(name => !individualSearch.trim() || name.toLowerCase().includes(individualSearch.toLowerCase()))
+                        .map(name => {
+                          const isChecked = selectedIndividuals.includes(name);
+                          return (
+                            <label
+                              key={name}
+                              className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 text-xs text-gray-700 cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => {
+                                  let next: string[];
+                                  if (isChecked) {
+                                    next = selectedIndividuals.filter(n => n !== name);
+                                  } else {
+                                    next = [...selectedIndividuals, name];
+                                  }
+                                  setSelectedIndividuals(next);
+                                  setMineOnly(false);
+                                  setSelectedRowIds(new Set());
+                                  void loadRows(category, startDate, endDate, false, next, false, department);
+                                }}
+                                className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                              />
+                              <span className="truncate">{name}</span>
+                            </label>
+                          );
+                        })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -903,15 +1084,6 @@ export default function ChecklistClient({
         </div>
       </div>
 
-      {viewingMonday && category === 'Daily' && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          <CalendarOff size={16} className="mt-0.5 shrink-0" />
-          <p>
-            Monday is weekly off for <span className="font-medium">Salon Daily</span> doers — their daily checklist does not appear or score on Mondays. Office daily tasks still show.
-          </p>
-        </div>
-      )}
-
       <div className="card overflow-hidden">
         {loading && (
           <div className="flex items-center justify-center gap-2 px-4 py-12 text-sm text-gray-400">
@@ -930,20 +1102,69 @@ export default function ChecklistClient({
             ) : fetchingUserRows ? (
               <div className="flex items-center justify-center gap-2">
                 <Loader2 size={16} className="animate-spin text-brand-600" />
-                <span>{mineOnly ? 'Loading your checklist tasks...' : `Loading checklist tasks for ${individual}...`}</span>
+                <span>{mineOnly ? 'Loading your checklist tasks...' : selectedIndividuals.length ? `Loading checklist tasks for ${selectedIndividuals.join(', ')}...` : 'Loading checklist tasks...'}</span>
               </div>
             ) : initialTaskId && search === initialTaskId
               ? 'This recurring task is not scheduled for the selected date.'
               : mineOnly
-                ? `You have no ${category.toLowerCase()} checklist tasks scheduled${date ? ' for this date' : ''}.`
-                : individual
-                  ? `No ${category.toLowerCase()} checklist tasks found for ${individual}${date ? ' on this date' : ''}.`
+                ? `You have no ${category.toLowerCase()} checklist tasks scheduled${startDate ? ' for this date' : ''}.`
+                : selectedIndividuals.length
+                  ? `No ${category.toLowerCase()} checklist tasks found for ${selectedIndividuals.join(', ')}${startDate ? ' on this date' : ''}.`
                   : `No ${category.toLowerCase()} checklist tasks match these filters.`}
           </div>
         )}
 
         {!loading && visibleRows.length > 0 && (
-          <div className="divide-y divide-gray-50">
+          <div>
+            {isAdmin && (
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 bg-gray-50/90 px-5 py-2.5 text-xs text-gray-600">
+                <label className="flex items-center gap-2 font-medium cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={selectedRowIds.size > 0 && selectedRowIds.size === visibleRows.length}
+                    ref={el => {
+                      if (el) el.indeterminate = selectedRowIds.size > 0 && selectedRowIds.size < visibleRows.length;
+                    }}
+                    onChange={() => {
+                      if (selectedRowIds.size === visibleRows.length) {
+                        setSelectedRowIds(new Set());
+                      } else {
+                        setSelectedRowIds(new Set(visibleRows.map(r => r.id)));
+                      }
+                    }}
+                    className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
+                  />
+                  <span>Select all ({visibleRows.length})</span>
+                </label>
+
+                {selectedRowIds.size > 0 && (
+                  <div className="flex items-center gap-3">
+                    <span className="font-semibold text-gray-800">
+                      {selectedRowIds.size} selected
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBatchDeleteMode(null);
+                        setBatchDeleteModalOpen(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-red-700 transition cursor-pointer"
+                    >
+                      <Trash2 size={13} />
+                      Delete selected ({selectedRowIds.size})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRowIds(new Set())}
+                      className="text-xs text-gray-500 hover:text-gray-700 underline cursor-pointer"
+                    >
+                      Clear selection
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="divide-y divide-gray-50">
             {visibleRows.map(row => (
               <div
                 key={row.id}
@@ -953,7 +1174,26 @@ export default function ChecklistClient({
                   row.taskId.toLowerCase() === initialTaskId.toLowerCase() && 'bg-brand-50 ring-2 ring-inset ring-brand-400')}
               >
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div className="min-w-0 flex-1">
+                  <div className="flex items-start gap-3 min-w-0 flex-1">
+                    {isAdmin && (
+                      <div className="pt-0.5 shrink-0" onClick={e => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedRowIds.has(row.id)}
+                          onChange={() => {
+                            setSelectedRowIds(prev => {
+                              const next = new Set(prev);
+                              if (next.has(row.id)) next.delete(row.id);
+                              else next.add(row.id);
+                              return next;
+                            });
+                          }}
+                          className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
+                          title="Select task"
+                        />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
                     <div className="mb-1 flex flex-wrap items-center gap-2">
                       <span className="font-mono text-xs text-brand-600">{row.taskId}</span>
                       {row.taskId.toLowerCase() === initialTaskId.toLowerCase() &&
@@ -990,6 +1230,7 @@ export default function ChecklistClient({
                       </div>
                     )}
                   </div>
+                </div>
 
                   <div className="flex flex-wrap items-center gap-2">
                     {/* Standalone completion indicator always visible */}
@@ -1063,18 +1304,39 @@ export default function ChecklistClient({
                       Remark
                     </button>
                     {isAdmin && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDeleteConfirmMode(null);
-                          setDeleteTarget(row);
-                        }}
-                        disabled={ticking === row.id}
-                        className="btn-secondary px-2.5 py-2 text-gray-400 hover:text-red-600 hover:bg-red-50 transition"
-                        title="Delete this day or whole recurring task"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setOpenMenuRowId(openMenuRowId === row.id ? null : row.id)}
+                          disabled={ticking === row.id}
+                          className="btn-secondary px-2.5 py-2 text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition"
+                          title="More options"
+                        >
+                          <MoreVertical size={15} />
+                        </button>
+                        {openMenuRowId === row.id && (
+                          <>
+                            <div
+                              className="fixed inset-0 z-20"
+                              onClick={() => setOpenMenuRowId(null)}
+                            />
+                            <div className="absolute right-0 top-full mt-1 z-30 w-36 rounded-md border border-gray-200 bg-white py-1 shadow-lg">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenMenuRowId(null);
+                                  setShiftTarget(row);
+                                  setShiftTargetUid('');
+                                }}
+                                className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 hover:text-brand-600 transition"
+                              >
+                                <ArrowRightLeft size={14} className="text-gray-400" />
+                                Shift task
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1093,21 +1355,12 @@ export default function ChecklistClient({
                       <button type="button" onClick={() => submitAction(row, 'remark')} disabled={ticking === row.id} className="btn-secondary py-2">
                         <MessageSquare size={14} /> Add remark
                       </button>
-                      {(isAdmin || row.canManage) && !row.completed && !row.dead && (
-                        <button type="button" onClick={() => submitAction(row, 'dead')} disabled={ticking === row.id} className="inline-flex items-center gap-2 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">
-                          <AlertOctagon size={14} /> Flag Dead
-                        </button>
-                      )}
-                      {(isAdmin || row.canManage) && row.dead && (
-                        <button type="button" onClick={() => submitAction(row, 'revive')} disabled={ticking === row.id} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">
-                          <RotateCcw size={14} /> Revive task
-                        </button>
-                      )}
                     </div>
                   </div>
                 )}
               </div>
             ))}
+          </div>
           </div>
         )}
         {!loading && nextCursor && !search.trim() && (
@@ -1120,24 +1373,22 @@ export default function ChecklistClient({
         )}
       </div>
 
-      {isAdmin && deleteTarget && (
+      {isAdmin && shiftTarget && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center" role="dialog" aria-modal="true">
           <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold text-gray-900">
-                  {deleteConfirmMode ? 'Confirm deletion' : 'Delete checklist task'}
-                </h2>
-                <p className="mt-1 text-sm text-gray-500 line-clamp-2">{deleteTarget.description}</p>
+                <h2 className="text-base font-semibold text-gray-900">Shift Recurring Task</h2>
+                <p className="mt-1 text-sm text-gray-500 line-clamp-2">{shiftTarget.description}</p>
                 <p className="mt-1 text-xs text-gray-400">
-                  {deleteTarget.userName} · {deleteTarget.periodKey}
+                  {shiftTarget.category} · Current assignee: <span className="font-medium text-gray-700">{shiftTarget.userName}</span>
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => {
-                  setDeleteTarget(null);
-                  setDeleteConfirmMode(null);
+                  setShiftTarget(null);
+                  setShiftTargetUid('');
                 }}
                 className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
               >
@@ -1145,39 +1396,135 @@ export default function ChecklistClient({
               </button>
             </div>
 
-            {!deleteConfirmMode ? (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                  Choose user to shift to:
+                </label>
+                <select
+                  value={shiftTargetUid}
+                  onChange={e => setShiftTargetUid(e.target.value)}
+                  className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                >
+                  <option value="">Select a user...</option>
+                  {allUsers
+                    .filter(u => u.uid !== shiftTarget.userId)
+                    .map(u => (
+                      <option key={u.uid} value={u.uid}>
+                        {u.name} {u.department ? `(${u.department})` : ''}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="rounded-md border border-blue-100 bg-blue-50/70 p-3 text-xs text-blue-800 space-y-1">
+                <p className="font-medium">What will change:</p>
+                <p>• Today&apos;s uncompleted task and upcoming dates will be assigned to the new user.</p>
+                <p>• Next month&apos;s recurring rows will be appended for the new user automatically.</p>
+                <p>• Past completed history stays credited to {shiftTarget.userName}.</p>
+              </div>
+
+              <div className="flex gap-2 justify-end pt-2">
+                <button
+                  type="button"
+                  disabled={isShifting}
+                  onClick={() => {
+                    setShiftTarget(null);
+                    setShiftTargetUid('');
+                  }}
+                  className="btn-secondary px-4 py-2"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!shiftTargetUid || isShifting}
+                  onClick={handleShiftTask}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+                >
+                  {isShifting ? <Loader2 size={15} className="animate-spin" /> : null}
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isAdmin && batchDeleteModalOpen && selectedRowsForDelete.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-gray-900">
+                  {batchDeleteMode ? 'Confirm permanent deletion' : `Delete ${selectedRowsForDelete.length === 1 ? 'checklist task' : `${selectedRowsForDelete.length} checklist tasks`}`}
+                </h2>
+                {selectedRowsForDelete.length === 1 ? (
+                  <>
+                    <p className="mt-1 text-sm text-gray-500 line-clamp-2">{selectedRowsForDelete[0].description}</p>
+                    <p className="mt-1 text-xs text-gray-400">
+                      {selectedRowsForDelete[0].userName} · {selectedRowsForDelete[0].periodKey}
+                    </p>
+                  </>
+                ) : (
+                  <p className="mt-1 text-xs text-gray-500">
+                    {selectedRowsForDelete.length} occurrences selected across {uniqueTemplatesForDelete.length} recurring template(s)
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setBatchDeleteModalOpen(false);
+                  setBatchDeleteMode(null);
+                  setBatchDeleteRemark('');
+                }}
+                className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {!batchDeleteMode ? (
               <div className="space-y-2">
                 <button
                   type="button"
-                  disabled={ticking === deleteTarget.id}
-                  onClick={() => setDeleteConfirmMode('day')}
-                  className="flex w-full flex-col items-start gap-0.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-left hover:bg-amber-100 disabled:opacity-50"
+                  disabled={isDeleting}
+                  onClick={() => setBatchDeleteMode('day')}
+                  className="flex w-full flex-col items-start gap-0.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-left hover:bg-amber-100 disabled:opacity-50 cursor-pointer"
                 >
-                  <span className="text-sm font-semibold text-amber-900">{deleteDayLabel}</span>
+                  <span className="text-sm font-semibold text-amber-900">
+                    {selectedRowsForDelete.length === 1
+                      ? (selectedRowsForDelete[0].category === 'Daily' && selectedRowsForDelete[0].periodKey === indiaTodayKey() ? "Delete today's task" : "Delete this occurrence")
+                      : `Delete selected day occurrences (${selectedRowsForDelete.length})`}
+                  </span>
                   <span className="text-xs text-amber-800">
-                    Only this occurrence is removed.
+                    Hard deletes only these selected occurrence(s). Other dates stay.
                   </span>
                 </button>
                 {elevated && (
                   <button
                     type="button"
-                    disabled={ticking === deleteTarget.id}
-                    onClick={() => setDeleteConfirmMode('whole')}
-                    className="flex w-full flex-col items-start gap-0.5 rounded-md border border-red-200 bg-red-50 px-3 py-3 text-left hover:bg-red-100 disabled:opacity-50"
+                    disabled={isDeleting}
+                    onClick={() => setBatchDeleteMode('whole')}
+                    className="flex w-full flex-col items-start gap-0.5 rounded-md border border-red-200 bg-red-50 px-3 py-3 text-left hover:bg-red-100 disabled:opacity-50 cursor-pointer"
                   >
-                    <span className="text-sm font-semibold text-red-800">Delete whole task</span>
+                    <span className="text-sm font-semibold text-red-800">
+                      {uniqueTemplatesForDelete.length === 1 ? 'Delete whole recurring task' : `Delete whole recurring tasks (${uniqueTemplatesForDelete.length})`}
+                    </span>
                     <span className="text-xs text-red-700">
-                      Stops future repeats. Past history stays.
+                      Hard deletes the recurring templates and future dates. Past history stays.
                     </span>
                   </button>
                 )}
                 <button
                   type="button"
                   onClick={() => {
-                    setDeleteTarget(null);
-                    setDeleteConfirmMode(null);
+                    setBatchDeleteModalOpen(false);
+                    setBatchDeleteMode(null);
+                    setBatchDeleteRemark('');
                   }}
-                  className="btn-secondary w-full py-2"
+                  className="btn-secondary w-full py-2 cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -1185,33 +1532,43 @@ export default function ChecklistClient({
             ) : (
               <div className="space-y-3">
                 <p className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
-                  {deleteConfirmMode === 'day'
-                    ? `Remove this task for ${deleteTarget.periodKey}? Other dates stay.`
-                    : 'Delete this recurring task? Today and future dates are removed; past history stays.'}
+                  {batchDeleteMode === 'day'
+                    ? `Are you sure you want to permanently hard delete ${selectedRowsForDelete.length} selected occurrence(s)? This action cannot be undone.`
+                    : `Are you sure you want to permanently delete ${uniqueTemplatesForDelete.length} recurring template(s) and their future occurrences? Past history stays.`}
                 </p>
+                <div>
+                  <label className="label text-gray-700">Reason / Remark (optional)</label>
+                  <input
+                    type="text"
+                    value={batchDeleteRemark}
+                    onChange={e => setBatchDeleteRemark(e.target.value)}
+                    placeholder="e.g. Staff on leave / absent, Salon weekly off..."
+                    className="input text-xs"
+                    autoFocus
+                  />
+                </div>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <button
                     type="button"
-                    disabled={ticking === deleteTarget.id}
-                    onClick={() => setDeleteConfirmMode(null)}
-                    className="btn-secondary flex-1 py-2"
+                    disabled={isDeleting}
+                    onClick={() => setBatchDeleteMode(null)}
+                    className="btn-secondary flex-1 py-2 cursor-pointer"
                   >
                     Back
                   </button>
                   <button
                     type="button"
-                    disabled={ticking === deleteTarget.id}
-                    onClick={() => {
-                      if (deleteConfirmMode === 'day') deleteForDayOnly(deleteTarget);
-                      else deleteEntireTask(deleteTarget);
-                    }}
+                    disabled={isDeleting}
+                    onClick={() => void handleBatchDelete(batchDeleteMode)}
                     className={cn(
-                      'flex-1 inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-white disabled:opacity-50',
-                      deleteConfirmMode === 'day' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-red-600 hover:bg-red-700'
+                      'flex-1 inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-white disabled:opacity-50 cursor-pointer',
+                      batchDeleteMode === 'day' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-red-600 hover:bg-red-700'
                     )}
                   >
-                    {ticking === deleteTarget.id ? <Loader2 size={15} className="animate-spin" /> : null}
-                    {deleteConfirmMode === 'day' ? 'Delete this occurrence' : 'Delete whole task'}
+                    {isDeleting ? <Loader2 size={15} className="animate-spin" /> : null}
+                    {batchDeleteMode === 'day'
+                      ? `Delete ${selectedRowsForDelete.length} occurrence(s)`
+                      : `Delete ${uniqueTemplatesForDelete.length} whole task(s)`}
                   </button>
                 </div>
               </div>

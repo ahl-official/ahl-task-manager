@@ -55,7 +55,7 @@ function isoWeekday(dateStr) {
 }
 __name(isoWeekday, "isoWeekday");
 function isDailyWeeklyOff(dateStr, personName) {
-  return isoWeekday(dateStr) === 1 && isSalonDailyDoer(personName);
+  return false;
 }
 __name(isDailyWeeklyOff, "isDailyWeeklyOff");
 
@@ -122,7 +122,7 @@ function buildMonthPeriodRows(template, monthKey) {
   };
   if (fromDate > monthEnd) return [];
   if (catLower === "daily") {
-    return eachDateInRange(fromDate, monthEnd).filter((d) => !isDailyWeeklyOff(d, template.assignedToName)).map((d) => ({
+    return eachDateInRange(fromDate, monthEnd).map((d) => ({
       ...base,
       periodKey: d,
       dueDate: d,
@@ -2198,6 +2198,41 @@ async function routeRecurring(req, env, url) {
     const updated = await env.DB.prepare("SELECT * FROM recurring_templates WHERE id = ?").bind(id).first();
     return json({ success: true, data: recurringTemplateFromRow(updated) });
   }
+  const templateShiftMatch = path.match(/^\/recurring\/templates\/([^/]+)\/shift$/);
+  if (templateShiftMatch && req.method === "POST") {
+    const id = templateShiftMatch[1];
+    const data = await body(req);
+    const targetUid = String(data.targetUid || "").trim();
+    const targetName = String(data.targetName || "").trim();
+    const targetDepartment = String(data.targetDepartment || "").trim();
+    const fromDate = String(data.fromDate || getIstDateParts().dateStr).trim();
+    if (!targetUid || !targetName) {
+      return json({ success: false, error: "targetUid and targetName are required" }, { status: 400 });
+    }
+    await ensurePeriodRowsTable(env);
+    const now = nowIso();
+    await env.DB.prepare(
+      "UPDATE recurring_templates SET assigned_to = ?, assigned_to_name = ?, department = ?, updated_at = ? WHERE id = ?"
+    ).bind(targetUid, targetName, targetDepartment, now, id).run();
+
+    const periodRes = await env.DB.prepare(
+      `UPDATE recurring_period_rows
+       SET assigned_to = ?, assigned_to_name = ?, department = ?, updated_at = ?
+       WHERE template_id = ?
+         AND status = 'Pending'
+         AND due_date >= ?`
+    ).bind(targetUid, targetName, targetDepartment, now, id, fromDate).run();
+
+    const updated = await env.DB.prepare("SELECT * FROM recurring_templates WHERE id = ?").bind(id).first();
+    return json({
+      success: true,
+      data: {
+        template: recurringTemplateFromRow(updated),
+        shiftedPeriodsCount: periodRes.meta?.changes ?? 0,
+        fromDate,
+      }
+    });
+  }
   if (templateMatch && req.method === "DELETE") {
     const id = templateMatch[1];
     await ensurePeriodRowsTable(env);
@@ -2493,6 +2528,44 @@ async function routeRecurring(req, env, url) {
     const row=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE template_id=? AND period_key=?').bind(templateId,periodKey).first();
     return row?json({success:true,data:periodRowFromDb(row)}):json({success:false,error:'Checklist period not found'},{status:404});
   }
+  if (path === "/recurring/checklist/batch-delete" && req.method === "POST") {
+    const data = await body(req);
+    const mode = data.mode; // 'day' | 'whole'
+    const today = getIstDateParts().dateStr;
+    if (mode === 'day') {
+      const ids = Array.isArray(data.ids) ? data.ids.filter(Boolean) : [];
+      if (!ids.length) return json({ success: false, error: 'No item IDs provided' }, { status: 400 });
+      let deleted = 0;
+      for (let i = 0; i < ids.length; i += 50) {
+        const chunk = ids.slice(i, i + 50);
+        const placeholders = chunk.map(() => '?').join(',');
+        await env.DB.prepare(`DELETE FROM recurring_period_rows WHERE id IN (${placeholders})`).bind(...chunk).run();
+        await env.DB.prepare(`DELETE FROM recurring_completions WHERE id IN (${placeholders})`).bind(...chunk).run().catch(() => null);
+        deleted += chunk.length;
+      }
+      return json({ success: true, data: { deleted, mode: 'day' } });
+    } else if (mode === 'whole') {
+      const templateIds = Array.isArray(data.templateIds) ? data.templateIds.filter(Boolean) : [];
+      if (!templateIds.length) return json({ success: false, error: 'No template IDs provided' }, { status: 400 });
+      let deleted = 0;
+      for (const tId of templateIds) {
+        await env.DB.prepare(
+          `DELETE FROM recurring_period_rows
+           WHERE template_id = ?
+             AND (
+               (LOWER(category) = 'monthly' AND period_key >= ?)
+               OR (LOWER(category) = 'weekly' AND COALESCE(period_end, due_date, period_key) >= ?)
+               OR (LOWER(category) = 'daily' AND period_key >= ?)
+             )`
+        ).bind(tId, today.slice(0, 7), today, today, today).run().catch(() => null);
+        await env.DB.prepare("DELETE FROM recurring_templates WHERE id = ?").bind(tId).run();
+        await env.DB.prepare("DELETE FROM recurring_completions WHERE template_id = ?").bind(tId).run().catch(() => null);
+        deleted++;
+      }
+      return json({ success: true, data: { deleted, mode: 'whole' } });
+    }
+    return json({ success: false, error: 'Invalid batch delete mode' }, { status: 400 });
+  }
   if (path === "/recurring/checklist" && req.method === "GET") {
     try {
     const tomorrowStr = addDaysDateStr(getIstDateParts().dateStr, 1);
@@ -2535,12 +2608,11 @@ async function routeRecurring(req, env, url) {
     }
     if (startDate && endDate) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return json({success:false,error:'Invalid date range'},{status:400});
-      const cappedEnd = endDate > tomorrowStr ? tomorrowStr : endDate;
-      const startMonth = startDate.slice(0, 7), endMonth = cappedEnd.slice(0, 7);
+      const startMonth = startDate.slice(0, 7), endMonth = endDate.slice(0, 7);
       const months = [startMonth];
       if (endMonth !== startMonth) months.push(endMonth);
       clauses.push('month_key IN ('+months.map(()=>'?').join(',')+')');binds.push(...months);
-      clauses.push('due_date>=? AND due_date<=?');binds.push(startDate, cappedEnd);
+      clauses.push('due_date>=? AND due_date<=?');binds.push(startDate, endDate);
       const catParam = url.searchParams.get('category');
       if (catParam && catParam.toLowerCase() !== 'all') { clauses.push('category=?'); binds.push(catParam); }
     } else {
@@ -2609,7 +2681,12 @@ async function routeRecurring(req, env, url) {
     const row=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE template_id=? AND period_key=?').bind(templateId,periodKey).first();
     if(!row)return json({success:false,error:'Checklist period not found'},{status:404});
     if((row.is_deleted||row.status==='Deleted')&&!['revive','remark'].includes(action))return json({success:false,error:'Revive this period before changing it'},{status:409});
-    const now=nowIso(),deleted=action==='skip_day'||action==='dead';
+    if (action === 'skip_day') {
+      await env.DB.prepare('DELETE FROM recurring_period_rows WHERE template_id=? AND period_key=?').bind(templateId, periodKey).run();
+      await env.DB.prepare('DELETE FROM recurring_completions WHERE template_id=? AND period_key=?').bind(templateId, periodKey).run().catch(() => null);
+      return json({ success: true, data: { templateId, periodKey, deleted: true, permanent: true, deletedScope: 'day' } });
+    }
+    const now=nowIso(),deleted=action==='dead';
     const status=deleted?'Deleted':action==='uncomplete'||action==='revive'?'Pending':action==='remark'?row.status:'Completed';
     const completed=status==='Completed'||status==='Verified';
     const due=String(row.due_date||periodKey).slice(0,10);

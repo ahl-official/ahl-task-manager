@@ -24,8 +24,10 @@ export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
+  const scope = req.nextUrl.searchParams.get('scope');
   const activeOnly = req.nextUrl.searchParams.get('activeOnly') === 'true' || session.role !== 'admin';
-  let users = filterUsersForSession(session, await adminGetAllUsers());
+  const allUsers = await adminGetAllUsers();
+  let users = scope === 'shift' ? allUsers : filterUsersForSession(session, allUsers);
   if (activeOnly) {
     users = users.filter(u => u.isActive !== false);
   }

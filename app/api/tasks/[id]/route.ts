@@ -10,6 +10,8 @@ import { canViewTask } from '@/lib/utils/access';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { cfTask } from '@/lib/cloudflare/models';
 import { updateTaskInReadCache } from '@/lib/firebase/readCache';
+import { notifyTaskUpdated } from '@/lib/events/taskEvents';
+import { indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 
 // GET /api/tasks/[id]
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -97,6 +99,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       const endMs = newEndDate ? (typeof (newEndDate as any).toDate === 'function' ? (newEndDate as any).toDate().getTime() : new Date(newEndDate as any).getTime()) : null;
       if (startMs && endMs && endMs < startMs) {
         return NextResponse.json({ success: false, error: 'Due date must be on or after start date' }, { status: 400 });
+      }
+      if (!isAdmin && endDate) {
+        const createdDay = task.createdAt
+          ? ((task.createdAt as any).toDate ? (task.createdAt as any).toDate().toISOString().slice(0, 10) : String(task.createdAt).slice(0, 10))
+          : indiaTodayKey();
+        const endDay = String(endDate).slice(0, 10);
+        if (indiaDayOffset(createdDay, endDay) > 10) {
+          return NextResponse.json({ success: false, error: 'Due dates more than 10 days from task creation require admin approval' }, { status: 400 });
+        }
       }
       updatedTask = await adminUpdateTaskStatus(params.id, 'In Progress', {
         startDate: newStartDate,
@@ -347,6 +358,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     const updated = updatedTask ?? await adminGetTask(params.id);
+    notifyTaskUpdated();
     return NextResponse.json({ success: true, data: serializeTask(updated!) });
   } catch (err: any) {
     console.error(`PATCH /api/tasks/${params.id} error`, err);
@@ -392,6 +404,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       },
     });
 
+    notifyTaskUpdated();
     return NextResponse.json({ success: true, data: { taskId: params.id, deleted: true } });
   } catch (err: any) {
     console.error(`DELETE /api/tasks/${params.id} error`, err);

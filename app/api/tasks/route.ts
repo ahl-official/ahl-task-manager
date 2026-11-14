@@ -12,6 +12,7 @@ import {
 } from '@/lib/firebase/tasks';
 import { adminIncrementScore, adminLog } from '@/lib/firebase/scores';
 import { clearFirestoreReadCache } from '@/lib/firebase/readCache';
+import { notifyTaskUpdated } from '@/lib/events/taskEvents';
 import {
   sendWhatsApp,
   msgTaskAssigned,
@@ -108,6 +109,7 @@ export async function GET(req: NextRequest) {
         verificationPending: searchParams.get('verificationPending') === 'true',
         weekStart: searchParams.get('weekStart') || undefined,
         weekEnd: searchParams.get('weekEnd') || undefined,
+        fresh: isFresh || searchParams.get('verificationPending') === 'true' || searchParams.get('fresh') === 'true',
       });
       tasks = filterTasksForSession(session, tasks);
     } else if (scope === 'all' && (isAdmin || isLeader)) {
@@ -267,41 +269,35 @@ export async function POST(req: NextRequest) {
       }, { status: 403 });
     }
 
-    if (body.startDate && body.endDate && new Date(body.endDate) < new Date(body.startDate)) {
+    const isRecurring = ['Daily', 'Weekly', 'Monthly'].includes(body.category);
+
+    if (!isRecurring && body.startDate && body.endDate && new Date(body.endDate) < new Date(body.startDate)) {
       return NextResponse.json({
         success: false,
         error: 'Due date must be after start date.',
       }, { status: 400 });
     }
 
-    if (['Daily', 'Weekly', 'Monthly'].includes(body.category)) {
+    if (isRecurring) {
       const todayKey = indiaTodayKey();
-      let calculatedStartDate = body.startDate || todayKey;
-      let calculatedEndDate = body.endDate || todayKey;
+      // For recurring tasks, only the entered due date is used; if none is selected, default to today.
+      const targetDate = (body.endDate ? String(body.endDate).slice(0, 10) : '') || todayKey;
+      const calculatedStartDate = targetDate;
+      const calculatedEndDate = targetDate;
       let dayOfWeek: number | null = null;
       let dayOfMonth: number | null = null;
 
       if (body.category === 'Daily') {
-        calculatedStartDate = body.startDate || todayKey;
-        calculatedEndDate = body.endDate || todayKey;
+        dayOfWeek = null;
+        dayOfMonth = null;
       } else if (body.category === 'Weekly') {
-        calculatedStartDate = body.startDate || todayKey;
-        calculatedEndDate = body.endDate || todayKey;
-        if (body.dayOfWeek != null) {
-          dayOfWeek = Number(body.dayOfWeek);
-        } else {
-          const [y, m, d] = calculatedEndDate.split('-').map(Number);
-          const dt = new Date(Date.UTC(y, m - 1, d, 6, 0, 0));
-          const dow = dt.getUTCDay();
-          dayOfWeek = dow === 0 ? 7 : dow; // 1=Mon...7=Sun
-        }
+        const [y, m, d] = targetDate.split('-').map(Number);
+        const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+        const dow = dt.getUTCDay();
+        dayOfWeek = dow === 0 ? 7 : dow; // 1=Mon...7=Sun
       } else if (body.category === 'Monthly') {
-        const [y, m] = todayKey.split('-').map(Number);
-        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
-        const endOfMonthKey = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-        calculatedStartDate = body.startDate || `${y}-${String(m).padStart(2, '0')}-01`;
-        calculatedEndDate = body.endDate || endOfMonthKey;
-        dayOfMonth = body.dayOfMonth != null ? Number(body.dayOfMonth) : lastDay;
+        const [y, m, d] = targetDate.split('-').map(Number);
+        dayOfMonth = d; // exact day of month from the entered due date
       }
 
       if (!hasCloudflareApi()) throw new Error('Cloudflare D1 is required for recurring task creation');
@@ -324,7 +320,7 @@ export async function POST(req: NextRequest) {
         dayOfMonth,
         timeOfDay: body.timeOfDay || '10:00',
         isActive: true,
-        metadata: { startDate: calculatedStartDate },
+        metadata: { startDate: targetDate, dueDate: targetDate },
       });
 
       const effectiveTaskId = d1Template.id || taskId;
@@ -353,6 +349,7 @@ export async function POST(req: NextRequest) {
         ).catch(err => console.error('[Tasks API] Recurring task WAHA notification failed', err));
       }
 
+      notifyTaskUpdated();
       return NextResponse.json({
         success: true,
         data: {
@@ -372,7 +369,7 @@ export async function POST(req: NextRequest) {
       }, { status: 201 });
     }
 
-    const skipAcceptance = session.role === 'admin';
+    const skipAcceptance = true;
     const task = await adminCreateTask(body, session.uid, {
       name: session.name,
       waNumber: session.waNumber,
@@ -445,6 +442,7 @@ export async function POST(req: NextRequest) {
       uid: session.uid,
     }).catch(err => console.error('[Tasks API] Task was created but audit log failed', err));
 
+    notifyTaskUpdated();
     return NextResponse.json({ success: true, data: serializeTask(task) }, { status: 201 });
   } catch (err: any) {
     console.error('POST /api/tasks error', err);

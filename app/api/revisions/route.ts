@@ -39,18 +39,19 @@ export async function GET(req: NextRequest) {
 }
 
 // POST /api/revisions — request revision (assignee or dead status request)
-// Body: { taskId, requestedDate (ISO), reason, type?: 'delay' | 'dead' }
+// Body: { taskId, requestedDate (ISO), startDate?: string, reason, type?: 'delay' | 'dead' | 'due_date' }
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
   try {
-    const { taskId, requestedDate, reason, type = 'delay' } = await req.json();
+    const { taskId, requestedDate, startDate, reason, type = 'delay' } = await req.json();
 
     const task = await adminGetTask(taskId);
     if (!task) return NextResponse.json({ success: false, error: 'Task not found' }, { status: 404 });
 
     const isDead = type === 'dead';
+    const isDueDate = type === 'due_date';
 
     if (isDead) {
       const canRequestDead = task.assignedTo === session.uid || task.handoffUid === session.uid || session.role === 'admin';
@@ -80,6 +81,7 @@ export async function POST(req: NextRequest) {
     if (!hasCloudflareApi()) throw new Error('Cloudflare is required for atomic revision requests');
 
     const reqDate = isDead ? (task.endDate ? task.endDate.toDate().toISOString() : new Date().toISOString()) : requestedDate;
+    const revType = isDead ? 'dead' : (isDueDate ? 'due_date' : 'delay');
     const revision = cfRevision(await cfApi('/revisions', {
       method: 'POST',
       body: JSON.stringify({
@@ -87,21 +89,22 @@ export async function POST(req: NextRequest) {
         requestedBy: session.uid,
         requestedByName: session.name,
         requestedDate: reqDate,
+        startDate: isDueDate ? startDate : undefined,
         reason: cleanReason,
-        type: isDead ? 'dead' : 'delay',
+        type: revType,
         actorRole: session.role,
       }),
     }))!;
 
     const requestedDateStr = isDead ? null : String(requestedDate).slice(0, 10);
-    const newStatus = isDead ? 'Dead Requested' : (task.status === 'In Progress' ? 'Delay Requested' : task.status);
+    const newStatus = isDead ? 'Dead Requested' : ((isDueDate || task.status === 'In Progress' || task.status === 'Pending Accept') ? 'Delay Requested' : task.status);
 
     const timestamp = new Intl.DateTimeFormat('en-IN', {
       dateStyle: 'medium',
       timeStyle: 'short',
       timeZone: 'Asia/Kolkata',
     }).format(new Date());
-    const marker = isDead ? 'DEAD REQUESTED' : 'REVISION REQUESTED';
+    const marker = isDead ? 'DEAD REQUESTED' : (isDueDate ? 'DUE DATE APPROVAL REQUESTED' : 'REVISION REQUESTED');
     const entry = `[${marker} - ${timestamp}] ${session.name}: ${cleanReason}`;
     const notes = task.notes ? `${task.notes}\n${entry}` : entry;
 
@@ -110,6 +113,7 @@ export async function POST(req: NextRequest) {
       method: 'PATCH',
       body: JSON.stringify({
         revisionStatus: 'requested',
+        ...(isDueDate ? { endDate: requestedDateStr, ...(startDate ? { startDate } : {}) } : {}),
         delayedDate: requestedDateStr,
         delayReason: cleanReason,
         status: newStatus,
@@ -119,6 +123,7 @@ export async function POST(req: NextRequest) {
 
     updateTaskInReadCache(taskId, {
       revisionStatus: 'requested',
+      ...(isDueDate ? { endDate: requestedDateStr, ...(startDate ? { startDate } : {}) } : {}),
       delayedDate: requestedDateStr,
       delayReason: cleanReason,
       status: newStatus,
@@ -191,10 +196,11 @@ export async function PATCH(req: NextRequest) {
     const revision=cfRevision(await cfApi('/revisions',{method:'PATCH',body:JSON.stringify({revisionId,taskId,decision,decidedBy:session.uid,decidedByName:session.name,actorRole:session.role})}))!;
 
     const isDeadRequest = revision.type === 'dead' || task.status === 'Dead Requested';
+    const isDueDateRequest = revision.type === 'due_date';
 
-    if (isDeadRequest) {
+    if (isDeadRequest || isDueDateRequest) {
       if (session.role !== 'admin') {
-        return NextResponse.json({ success: false, error: 'Only admin can approve or reject dead task requests' }, { status: 403 });
+        return NextResponse.json({ success: false, error: isDeadRequest ? 'Only admin can approve or reject dead task requests' : 'Only admin can approve or reject due date requests' }, { status: 403 });
       }
     } else {
       if (task.handoffUid !== session.uid && session.role !== 'admin') {
@@ -325,6 +331,7 @@ export async function PATCH(req: NextRequest) {
       await cfApi(`/tasks/${encodeURIComponent(taskId)}`, {
         method: 'PATCH',
         body: JSON.stringify({
+          ...(isDueDateRequest ? { endDate: null } : {}),
           revisionStatus: 'rejected',
           delayedDate: null,
           delayReason: null,
@@ -332,6 +339,7 @@ export async function PATCH(req: NextRequest) {
         }),
       }).catch(err => console.error('Failed to apply rejected revision in D1:', err));
       updateTaskInReadCache(taskId, {
+        ...(isDueDateRequest ? { endDate: null } : {}),
         revisionStatus: 'rejected',
         delayedDate: null,
         delayReason: null,

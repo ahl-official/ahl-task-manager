@@ -273,7 +273,6 @@ export default async function PortalScorePage() {
         <p className="text-sm font-semibold text-gray-700 mb-3">One-Time Tasks Status</p>
         <div className="space-y-2">
           {[
-            { label: 'Pending Accept', value: pending,   color: 'bg-yellow-400' },
             { label: 'Verified',       value: verified,  color: 'bg-brand-500' },
             { label: 'Completed',      value: completed, color: 'bg-green-500' },
             { label: 'Overdue',        value: overdue,   color: 'bg-red-500' },

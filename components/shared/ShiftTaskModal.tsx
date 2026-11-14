@@ -31,36 +31,24 @@ export default function ShiftTaskModal({
 
   useEffect(() => {
     setMounted(true);
-    if (!users || users.length === 0) {
-      setFetchingUsers(true);
-      fetch('/api/users')
-        .then(res => res.json())
-        .then(data => {
-          if (data.success && Array.isArray(data.data)) {
-            setUserList(data.data.filter((u: any) => u.isActive !== false));
-          }
-        })
-        .catch(() => {})
-        .finally(() => setFetchingUsers(false));
-    } else {
-      setUserList(users.filter(u => u.isActive !== false));
-    }
-  }, [users]);
+    setFetchingUsers(true);
+    fetch('/api/users?scope=shift')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && Array.isArray(data.data)) {
+          setUserList(data.data.filter((u: any) => u.isActive !== false));
+        }
+      })
+      .catch(() => {})
+      .finally(() => setFetchingUsers(false));
+  }, []);
 
-  const userRole = currentUser?.role ?? 'member';
-  const isMember = userRole === 'member';
-  const myDept = (currentUser?.department || '').trim().toLowerCase();
   const currentUid = currentUser?.uid ?? '';
 
   const eligibleUsers = userList.filter(u => {
     if (u.isActive === false) return false;
     if (u.uid === currentUid || u.uid === task.assignedTo) return false;
-    if (isMember) {
-      const userDept = (u.department || '').trim().toLowerCase();
-      const sameDept = !myDept || userDept === myDept;
-      return sameDept && (u.role === 'member' || u.role === 'intern');
-    }
-    return true; // Admin can shift to anyone
+    return true;
   });
 
   async function handleShift(e: React.FormEvent) {

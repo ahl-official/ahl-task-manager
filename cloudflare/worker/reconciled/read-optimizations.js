@@ -121,8 +121,18 @@ function add(bucket,status,n,overdue){
 const today=()=>new Date(Date.now()+19_800_000).toISOString().slice(0,10);
 function statusFilter(clauses,binds,status){
   if(status==='Completed')clauses.push("status IN ('Completed','Verified','Shifted (Completed)','Shifted (Verified)')");
-  else if(status==='Pending Accept')clauses.push("status IN ('Pending','Pending Accept','Shifted (Pending)','Shifted (Pending Accept)')");
-  else if(status==='Overdue'){clauses.push("(status='Overdue' OR (status IN ('Pending Accept','In Progress','Delay Requested') AND date(end_date,'+5 hours','+30 minutes') < ?))");binds.push(today());}
+  else if(status==='Pending Accept'){
+    clauses.push("(status IN ('Pending','Pending Accept','Shifted (Pending)','Shifted (Pending Accept)') AND (end_date IS NULL OR date(end_date,'+5 hours','+30 minutes') >= ?))");
+    binds.push(today());
+  }
+  else if(status==='In Progress'){
+    clauses.push("(status IN ('In Progress','Delay Requested','Shifted (In Progress)') AND (end_date IS NULL OR date(end_date,'+5 hours','+30 minutes') >= ?))");
+    binds.push(today());
+  }
+  else if(status==='Overdue'){
+    clauses.push("(status='Overdue' OR (status IN ('Pending','Pending Accept','In Progress','Delay Requested','Shifted (In Progress)') AND end_date IS NOT NULL AND date(end_date,'+5 hours','+30 minutes') < ?))");
+    binds.push(today());
+  }
   else if(status){clauses.push('(status=? OR status=?)');binds.push(status,'Shifted ('+status+')');}
 }
 let taskCountsTableReady = false;
@@ -229,14 +239,58 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     return json((rows.results||[]).map(mapTask));
   }
   if(url.pathname==='/tasks/counts'){
-    const summaryClauses=[],summaryBinds=[];
     const scope=url.searchParams.get('scope')||'all',uid=url.searchParams.get('uid');
-    if(scope==='mine'&&uid){summaryClauses.push('assigned_to=?');summaryBinds.push(uid);}
     const dept=url.searchParams.get('department');
-    if(dept){summaryClauses.push('department=?');summaryBinds.push(dept);}
     const assignedTo=url.searchParams.get('assignedTo');
-    if(assignedTo){summaryClauses.push('assigned_to=?');summaryBinds.push(assignedTo);}
     const reqStatus=url.searchParams.get('status');
+
+    if (assignedTo || (scope === 'mine' && uid)) {
+      const targetUser = assignedTo || uid;
+      const todayVal = today();
+      const userRes = await env.DB.prepare(`
+        SELECT
+          COUNT(*) AS total,
+          SUM(CASE WHEN (status IN ('Pending','Pending Accept','Shifted (Pending)','Shifted (Pending Accept)')) AND (end_date IS NULL OR date(end_date,'+5 hours','+30 minutes') >= ?) THEN 1 ELSE 0 END) AS pending,
+          SUM(CASE WHEN (status IN ('In Progress','Delay Requested','Shifted (In Progress)')) AND (end_date IS NULL OR date(end_date,'+5 hours','+30 minutes') >= ?) THEN 1 ELSE 0 END) AS inProgress,
+          SUM(CASE WHEN status = 'Delay Requested' THEN 1 ELSE 0 END) AS delayRequested,
+          SUM(CASE WHEN (status='Overdue' OR (status IN ('Pending','Pending Accept','In Progress','Delay Requested','Shifted (In Progress)') AND end_date IS NOT NULL AND date(end_date,'+5 hours','+30 minutes') < ?)) THEN 1 ELSE 0 END) AS overdue,
+          SUM(CASE WHEN status IN ('Completed','Shifted (Completed)') THEN 1 ELSE 0 END) AS completed,
+          SUM(CASE WHEN status IN ('Verified','Shifted (Verified)') THEN 1 ELSE 0 END) AS verified,
+          SUM(CASE WHEN status IN ('Dead','Shifted (Dead)') THEN 1 ELSE 0 END) AS dead
+        FROM tasks_current
+        WHERE assigned_to = ?
+      `).bind(todayVal, todayVal, todayVal, targetUser).first();
+
+      const overall = {
+        total: Number(userRes?.total || 0),
+        pending: Number(userRes?.pending || 0),
+        inProgress: Number(userRes?.inProgress || 0),
+        delayRequested: Number(userRes?.delayRequested || 0),
+        overdue: Number(userRes?.overdue || 0),
+        completed: Number(userRes?.completed || 0),
+        verified: Number(userRes?.verified || 0),
+        dead: Number(userRes?.dead || 0),
+        active: Number(userRes?.inProgress || 0) + Number(userRes?.delayRequested || 0) + Number(userRes?.overdue || 0),
+      };
+
+      const params = url.searchParams;
+      if (params.get('includeChecklist') === 'true' && scope === 'mine' && uid && (!params.get('category') || params.get('category') === 'Daily') && (!params.get('priority') || params.get('priority') === 'Medium')) {
+        const department = params.get('department');
+        const periods = await env.DB.prepare("SELECT department,status,COUNT(*) AS n FROM recurring_period_rows WHERE assigned_to=? AND category='Daily' AND is_deleted=0 AND status!='Deleted' AND due_date=?" + (department ? ' AND department=?' : '') + " GROUP BY department,status LIMIT 50").bind(uid, todayVal, ...(department ? [department] : [])).all();
+        for (const row of periods.results || []) {
+          const status = ['Completed', 'Verified'].includes(row.status) ? 'Completed' : 'In Progress';
+          const n = Number(row.n || 0);
+          if (status === 'Completed') overall.completed += n;
+          else overall.inProgress += n;
+          overall.total += n;
+        }
+      }
+
+      return json({ ...overall, byUser: Object.create(null), byDepartment: Object.create(null) });
+    }
+
+    const summaryClauses=[],summaryBinds=[];
+    if(dept){summaryClauses.push('department=?');summaryBinds.push(dept);}
     if(reqStatus){summaryClauses.push('status=?');summaryBinds.push(reqStatus);}
 
     const isGlobal = summaryClauses.length === 0;
@@ -260,13 +314,6 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
       }
     }
 
-
-    const params=url.searchParams;
-    if(params.get('includeChecklist')==='true'&&params.get('scope')==='mine'&&(!params.get('assignedTo')||params.get('assignedTo')===uid)&&(!params.get('category')||params.get('category')==='Daily')&&(!params.get('priority')||params.get('priority')==='Medium')){
-      const department=params.get('department');
-      const periods=await env.DB.prepare("SELECT department,status,COUNT(*) AS n FROM recurring_period_rows WHERE assigned_to=? AND category='Daily' AND is_deleted=0 AND status!='Deleted' AND due_date=?"+(department?' AND department=?':'')+" GROUP BY department,status LIMIT 50").bind(uid,today(),...(department?[department]:[])).all();
-      for(const row of periods.results||[]){const status=['Completed','Verified'].includes(row.status)?'Completed':'In Progress',requested=params.get('status');if(requested&&requested!==status&&!(requested==='Completed'&&status==='Verified'))continue;const n=Number(row.n),uidVal=url.searchParams.get('uid'),deptVal=row.department||'Unassigned';add(overall,status,n,false);add(byUser[uidVal]??=empty(),status,n,false);add(byDepartment[deptVal]??=empty(),status,n,false);}
-    }
     return json({...overall,byUser,byDepartment});
   }
   if(url.pathname==='/tasks/search'){

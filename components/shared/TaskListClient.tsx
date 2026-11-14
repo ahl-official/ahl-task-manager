@@ -39,7 +39,7 @@ interface Props {
   readLimitReached?: boolean;
 }
 
-const STATUS_OPTIONS = ['all', 'Pending Accept', 'In Progress', 'Delay Requested', 'Dead Requested', 'Overdue', 'Dead', 'Completed', 'Verified'];
+const STATUS_OPTIONS = ['all', 'In Progress', 'Delay Requested', 'Dead Requested', 'Overdue', 'Dead', 'Completed', 'Verified'];
 const CATEGORY_OPTIONS = ['all', 'Daily', 'Weekly', 'Monthly', 'One Time'];
 const CATEGORY_LABELS: Record<string, string> = {
   Daily: 'Daily Task',
@@ -468,13 +468,11 @@ export default function TaskListClient({
     return () => { clearTimeout(timer); controller.abort(); };
   }, [mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, initialCounts]);
 
-  const isFilterActive = mineOnly || departmentFilter !== 'all' || userFilter !== 'all' || categoryFilter !== 'all' || priorityFilter !== 'all' || Boolean(search.trim());
-
-  const cardCounts = isFilterActive ? loadedCardCounts : {
+  const cardCounts = Boolean(search.trim()) ? loadedCardCounts : {
     pending: aggregateCards?.pending ?? loadedCardCounts.pending,
-    inProgress: aggregateCards ? aggregateCards.inProgress + aggregateCards.delayRequested : loadedCardCounts.inProgress,
-    overdue: Math.max(aggregateCards?.overdue ?? 0, loadedCardCounts.overdue),
-    completed: aggregateCards ? aggregateCards.completed + aggregateCards.verified : loadedCardCounts.completed,
+    inProgress: aggregateCards ? aggregateCards.inProgress + (aggregateCards.delayRequested || 0) : loadedCardCounts.inProgress,
+    overdue: aggregateCards?.overdue ?? loadedCardCounts.overdue,
+    completed: aggregateCards ? aggregateCards.completed + (aggregateCards.verified || 0) : loadedCardCounts.completed,
     total: aggregateCards?.total ?? loadedCardCounts.total,
   };
 
@@ -665,18 +663,9 @@ export default function TaskListClient({
         </section>
       )}
 
-      {/* 4 Interactive Stat Filter Cards */}
-      <div className="surface-enter mb-3.5 grid grid-cols-2 md:grid-cols-4 gap-2.5 sm:gap-3">
+      {/* 3 Interactive Stat Filter Cards */}
+      <div className="surface-enter mb-3.5 grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
         {[
-          {
-            id: 'Pending Accept',
-            label: 'Pending',
-            value: cardCounts.pending,
-            activeBg: 'bg-yellow-100/90 border-yellow-400 ring-2 ring-yellow-400/40 shadow-xs',
-            defaultBg: 'bg-yellow-50/80 border-yellow-200/80 hover:bg-yellow-100/50',
-            textVal: 'text-yellow-950',
-            textLabel: 'text-yellow-700',
-          },
           {
             id: 'In Progress',
             label: 'In Progress',

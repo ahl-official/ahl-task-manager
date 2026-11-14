@@ -701,7 +701,12 @@ export async function adminSearchTasks(queryText: string, options: TaskReadScope
   const params = taskScopeParams(department, scope);
   params.set('q', queryText.trim());
   params.set('limit', String(Math.min(Math.max(limit || 2000, 1), MAX_SEARCH_READ_LIMIT)));
-  return cachedFirestoreRead('tasks:search:' + params.toString(), 5 * 60 * 1000, async () => {
+  if (options.fresh || options.verificationPending) {
+    params.set('fresh', 'true');
+    clearFirestoreReadCache('tasks:search:' + params.toString());
+  }
+  const cacheTtl = options.verificationPending ? 10_000 : 5 * 60 * 1000;
+  return cachedFirestoreRead('tasks:search:' + params.toString(), cacheTtl, async () => {
     try {
       const rows = await cfApi<any[]>('/tasks/search?' + params);
       return rows.map(cfTask).filter(Boolean) as Task[];

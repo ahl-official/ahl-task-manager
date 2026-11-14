@@ -9,6 +9,7 @@ import {
 import { checklistPermissions } from '@/lib/utils/checklistPermissions';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { addDaysKey } from '@/lib/mis/week';
+import { notifyTaskUpdated } from '@/lib/events/taskEvents';
 
 const CATEGORIES = ['Daily', 'Weekly', 'Monthly'];
 
@@ -36,11 +37,14 @@ export async function GET(req: NextRequest) {
   const isAdmin = session.role === 'admin';
   const elevated = session.role === 'admin' || session.role === 'leader';
   const dateParam = searchParams.get('date') || undefined;
+  const startDateParam = searchParams.get('startDate') || undefined;
+  const endDateParam = searchParams.get('endDate') || undefined;
   const exactDate = searchParams.get('exactDate') === 'true' || Boolean(dateParam);
   const cursor = searchParams.get('cursor') || undefined;
   const rawSearch = (searchParams.get('search') || '').trim();
   const search = rawSearch.replace(/[^a-zA-Z0-9\s\-_.:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
   const userNameParam = searchParams.get('userName') || searchParams.get('assignedToName') || searchParams.get('individual') || undefined;
+  const usersParam = searchParams.get('users') || undefined;
   const mineParam = searchParams.get('mine') === 'true';
   const today = indiaTodayKey();
 
@@ -59,7 +63,7 @@ export async function GET(req: NextRequest) {
     // (past, current, future) so they can see their full history. Only skip this when
     // an explicit date filter is applied (in which case exactDate restricts it for them).
     const isScopedUser = Boolean(mineParam || userNameParam);
-    const includeAllPeriods = isScopedUser && !dateParam;
+    const includeAllPeriods = isScopedUser && !dateParam && !startDateParam;
 
     // Calculate a broad startDate to fetch past 6 months of history when showing all periods
     const pastStartDate = includeAllPeriods ? (() => {
@@ -68,10 +72,13 @@ export async function GET(req: NextRequest) {
       return d.toISOString().slice(0, 10);
     })() : undefined;
 
+    const effectiveStartDate = startDateParam || pastStartDate;
+    const effectiveEndDate = endDateParam || undefined;
+
     const page = await getRecurringChecklistPage({
       category,
-      date: dateParam,
-      exactDate: Boolean(dateParam), // only exact-filter when date is explicitly chosen
+      date: (startDateParam && endDateParam) ? undefined : dateParam,
+      exactDate: Boolean(dateParam && !startDateParam), // only exact-filter when date is explicitly chosen
       cursor,
       search: search.length >= 2 ? search : undefined,
       uid: targetUid,
@@ -79,9 +86,14 @@ export async function GET(req: NextRequest) {
       scopeUser: isScopedUser,
       department: mineParam ? undefined : (session.role === 'leader' ? session.department : (searchParams.get('department') || undefined)),
       isAdmin: isAdmin && !mineParam && !userNameParam,
-      startDate: pastStartDate,
+      startDate: effectiveStartDate,
+      endDate: effectiveEndDate,
       includeAllPeriods,
     });
+
+    const targetUsersList = usersParam
+      ? usersParam.split(',').map(u => u.trim().toLowerCase()).filter(Boolean)
+      : [];
 
     const rows = page.items
       .filter(row => {
@@ -97,18 +109,20 @@ export async function GET(req: NextRequest) {
         return false;
       })
       .filter(row => {
-        if (!dateParam) return true;
+        if (targetUsersList.length > 0) {
+          const rowName = (row.userName || '').toLowerCase().trim();
+          const matched = targetUsersList.some(u => rowName === u || rowName.startsWith(u) || u.startsWith(rowName));
+          if (!matched) return false;
+        }
+        return true;
+      })
+      .filter(row => {
         const rowDate = (row.dueDate || row.periodKey || '').slice(0, 10);
-        if (rowDate === dateParam) return true;
-        if (category === 'Weekly') {
-          const rowWeek = getWeekMonday(row.periodKey || row.dueDate || '');
-          const targetWeek = getWeekMonday(dateParam);
-          return Boolean(rowWeek && targetWeek && rowWeek === targetWeek);
+        if (startDateParam && endDateParam) {
+          return rowDate >= startDateParam && rowDate <= endDateParam;
         }
-        if (category === 'Monthly') {
-          return (row.periodKey || row.dueDate || '').slice(0, 7) === dateParam.slice(0, 7);
-        }
-        return false;
+        if (!dateParam) return true;
+        return rowDate === dateParam;
       })
       .map(row => {
         const permissions = checklistPermissions(session, row);
@@ -196,6 +210,7 @@ export async function POST(req: NextRequest) {
       action: resolvedAction, isAdmin: session.role === 'admin',
       remark: String(remark).trim(), remarkBy: session.name,
     });
+    notifyTaskUpdated();
     return NextResponse.json({ success: true, data: result });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message || 'Checklist update failed' }, { status: error.status === 404 ? 404 : 400 });

@@ -24,7 +24,7 @@ import TaskModal from '@/components/shared/TaskModal';
 import { Skeleton, MisReportMasterSkeleton } from '@/components/shared/ScoreSkeleton';
 import type { TaskSerialized } from '@/types';
 
-type TaskFilter = 'all' | 'Pending Accept' | 'In Progress' | 'Completed' | 'Verified' | 'Overdue';
+type TaskFilter = 'all' | 'In Progress' | 'Completed' | 'Verified' | 'Overdue';
 
 interface MisBucketView {
   planned: number;
@@ -373,7 +373,6 @@ export default function ScoresClient({
     if (nextFilter === 'Completed') return rows.filter(task => ['Completed', 'Verified', 'Shifted (Completed)', 'Shifted (Verified)'].includes(task.status));
     if (nextFilter === 'Verified') return rows.filter(task => ['Verified', 'Shifted (Verified)'].includes(task.status));
     if (nextFilter === 'In Progress') return rows.filter(task => ['In Progress', 'Shifted (In Progress)'].includes(task.status));
-    if (nextFilter === 'Pending Accept') return rows.filter(task => ['Pending Accept', 'Shifted (Pending Accept)'].includes(task.status));
     if (nextFilter === 'Overdue') return rows.filter(isTaskOverdue);
     return rows.filter(task => task.status === nextFilter || normalizeBaseStatus(task.status) === nextFilter);
   }
@@ -753,10 +752,9 @@ export default function ScoresClient({
               </div>
             </div>
 
-            <div className="mt-5 grid grid-cols-5 gap-2">
+            <div className="mt-5 grid grid-cols-4 gap-2">
               {[
                 { label: 'Total', value: block.counts.total, color: 'text-gray-700' },
-                { label: 'Pending', value: block.counts.pending, color: 'text-yellow-700' },
                 { label: 'Active', value: block.counts.active, color: 'text-blue-700' },
                 { label: 'Done', value: block.counts.completed, color: 'text-green-700' },
                 { label: 'Late', value: block.counts.overdue, color: 'text-red-700' },

@@ -164,7 +164,8 @@ export async function createRecurringTemplate(data: RecurringTemplateInput): Pro
       // Guarantee period rows are materialized for the current month right now
       // so today's checklist slot appears in the user's portal immediately!
       if (created?.id) {
-        await materializeRecurringTemplate(created.id).catch((err) => {
+        const monthKey = String(data.metadata?.startDate || data.startDate || '').slice(0, 7) || undefined;
+        await materializeRecurringTemplate(created.id, monthKey).catch((err) => {
           console.warn('[Recurring] materialize-month call warning:', err?.message);
         });
       }
@@ -214,6 +215,29 @@ export async function getRecurringTemplate(id: string): Promise<RecurringTemplat
 export async function deleteRecurringTemplate(id: string): Promise<{ deletedId: string; permanent: boolean }> {
   if (!hasCloudflareApi()) throw new Error('Cloudflare D1 is not configured');
   return cfApi('/recurring/templates/'+encodeURIComponent(id), {method:'DELETE'});
+}
+
+export async function batchDeleteChecklistTasks(params: {
+  mode: 'day' | 'whole';
+  ids?: string[];
+  templateIds?: string[];
+}): Promise<{ deleted: number; mode: 'day' | 'whole' }> {
+  if (!hasCloudflareApi()) throw new Error('Cloudflare D1 is not configured');
+  return cfApi('/recurring/checklist/batch-delete', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+export async function shiftRecurringTemplate(
+  id: string,
+  params: { targetUid: string; targetName: string; targetDepartment?: string; fromDate?: string }
+): Promise<{ template: RecurringTemplate; shiftedPeriodsCount: number; fromDate: string }> {
+  if (!hasCloudflareApi()) throw new Error('Cloudflare D1 is not configured');
+  return cfApi(`/recurring/templates/${encodeURIComponent(id)}/shift`, {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
 }
 
 export async function getRecurringChecklist(params: {

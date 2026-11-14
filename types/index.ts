@@ -131,7 +131,7 @@ export interface CreateTaskInput {
 // ─── Revision ───────────────────────────────────────────────────────────────
 
 export type RevisionDecision = 'pending' | 'approved' | 'rejected';
-export type RevisionType = 'delay' | 'dead';
+export type RevisionType = 'delay' | 'dead' | 'due_date';
 
 export interface RevisionLog {
   id: string;

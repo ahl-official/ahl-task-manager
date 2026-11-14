@@ -54,6 +54,7 @@ export async function cfApi<T>(
     clearMisCache();
     clearFirestoreReadCache('scores:');
     clearFirestoreReadCache('revisions:');
+    clearFirestoreReadCache('tasks:');
   }
   return payload.data as T;
 }

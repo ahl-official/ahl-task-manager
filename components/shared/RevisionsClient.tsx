@@ -52,8 +52,9 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
       {revisions.map(rev => {
         const task = taskMap[rev.taskId];
         const isDeadRequest = rev.type === 'dead' || task?.status === 'Dead Requested';
+        const isDueDateRequest = rev.type === 'due_date';
         const canDecide = rev.status === 'pending' && (
-          isDeadRequest ? role === 'admin' : (role === 'admin' || task?.handoffUid === currentUid)
+          (isDeadRequest || isDueDateRequest) ? role === 'admin' : (role === 'admin' || task?.handoffUid === currentUid)
         );
 
         return (
@@ -68,6 +69,10 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
                   {isDeadRequest ? (
                     <span className="inline-flex items-center gap-1 rounded-md bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800 border border-rose-200">
                       <AlertOctagon size={11} /> Dead Approval Request
+                    </span>
+                  ) : isDueDateRequest ? (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 border border-amber-200">
+                      <Calendar size={11} /> Initial Due Date (&gt; 10 Days)
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 border border-blue-200">
@@ -104,7 +109,7 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
                   {task && (
                     <div className="flex items-center gap-1.5">
                       <Calendar size={12} />
-                      <span>Current due: <strong className="text-gray-700">{formatDate(task.endDate)}</strong></span>
+                      <span>Current due: <strong className="text-gray-700">{task.endDate ? formatDate(task.endDate) : 'Not set (Initial Date)'}</strong></span>
                     </div>
                   )}
                   <div className="flex items-center gap-1.5">

@@ -50,7 +50,10 @@ export function isoWeekday(dateStr: string) {
   return day === 0 ? 7 : day;
 }
 
-/** Salon daily tasks are off every Monday. Office daily tasks are not. */
-export function isDailyWeeklyOff(dateStr: string, personName: unknown) {
-  return isoWeekday(dateStr) === 1 && isSalonDailyDoer(personName);
+/**
+ * All days are working days. No automatic off day is skipped;
+ * any off days will be deleted manually by the admin.
+ */
+export function isDailyWeeklyOff(_dateStr: string, _personName?: unknown) {
+  return false;
 }
