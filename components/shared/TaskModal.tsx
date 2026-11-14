@@ -832,6 +832,11 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                       ? 'Due Date Delay Approval (>10 Days - Admin Only)'
                       : 'Due Date Delay Decision Required'}
                   </p>
+                  {isInitialDueDateApproval && (task.createdAt || task.dayKey) && (
+                    <p className="text-xs text-yellow-900 mb-1">
+                      <span className="font-medium">Task Assigned Date:</span> {formatDate(task.createdAt || task.dayKey)}
+                    </p>
+                  )}
                   {task.status !== 'Dead Requested' && task.delayedDate && (
                     <p className="text-xs text-yellow-900 mb-1">
                       <span className="font-medium">Requested Date:</span> {formatDate(task.delayedDate)}

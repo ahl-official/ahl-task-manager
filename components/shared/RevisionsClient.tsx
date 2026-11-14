@@ -100,13 +100,27 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
                       <AlertOctagon size={12} className="text-rose-500" />
                       <span>Action requested: <strong className="text-rose-700">Flag Task Dead</strong></span>
                     </div>
+                  ) : isDueDateRequest ? (
+                    <div className="flex items-center gap-1.5">
+                      <Calendar size={12} />
+                      <span>Requested date: <strong className="text-gray-700">{formatDate(rev.requestedDate)}</strong></span>
+                    </div>
                   ) : (
                     <div className="flex items-center gap-1.5">
                       <Calendar size={12} />
-                      <span>{isDueDateRequest ? 'Requested due date:' : 'New due date:'} <strong className="text-gray-700">{formatDate(rev.requestedDate)}</strong></span>
+                      <span>New date: <strong className="text-gray-700">{formatDate(rev.requestedDate)}</strong></span>
                     </div>
                   )}
-                  {/* For due date (> 10 days), do not show Current due. For other requests, show current due only if distinct from requested date */}
+
+                  {/* Initial due date request: show task assigned date (not current or due date) */}
+                  {isDueDateRequest && task && (
+                    <div className="flex items-center gap-1.5">
+                      <Calendar size={12} />
+                      <span>Task assigned date: <strong className="text-gray-700">{formatDate(task.createdAt || task.dayKey || rev.createdAt)}</strong></span>
+                    </div>
+                  )}
+
+                  {/* For regular delay requests: show current due only if distinct from requested date */}
                   {task && !isDueDateRequest && task.endDate && formatDate(task.endDate) !== formatDate(rev.requestedDate) && (
                     <div className="flex items-center gap-1.5">
                       <Calendar size={12} />
