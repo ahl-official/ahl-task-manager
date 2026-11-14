@@ -356,6 +356,7 @@ function revisionFromRow(row) {
     requestedDate: row.requested_date,
     reason: row.reason,
     status: row.status,
+    type: row.type || 'delay',
     decidedBy: row.decided_by,
     decidedByName: row.decided_by_name,
     decidedAt: row.decided_at,

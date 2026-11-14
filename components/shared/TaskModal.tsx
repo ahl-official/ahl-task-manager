@@ -829,8 +829,8 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
                     {task.status === 'Dead Requested'
                       ? 'Dead Approval Required (Admin Only)'
                       : isInitialDueDateApproval
-                      ? 'Initial Due Date Approval (>10 Days - Admin Only)'
-                      : 'Revision Decision Required'}
+                      ? 'Due Date Delay Approval (>10 Days - Admin Only)'
+                      : 'Due Date Delay Decision Required'}
                   </p>
                   {task.status !== 'Dead Requested' && task.delayedDate && (
                     <p className="text-xs text-yellow-900 mb-1">
