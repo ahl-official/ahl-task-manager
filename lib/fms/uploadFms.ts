@@ -30,27 +30,35 @@ export interface FmsTask {
 const UPLOAD_FMS_STAGES = [
   {
     stageName: 'Upload Video',
-    plannedCol: 13, // Col N
-    actualCol: 14,  // Col O
-    statusCol: 15,  // Col P
-    formLinkCol: 16,// Col Q
-    timeDelayCol: 20,// Col U
+    plannedCol: 15, // Col P
+    actualCol: 16,  // Col Q
+    statusCol: 17,  // Col R
+    formLinkCol: 18,// Col S
+    timeDelayCol: 22,// Col W
   },
   {
     stageName: 'Download & Upload Ad',
-    plannedCol: 21, // Col V
-    actualCol: 22,  // Col W
-    statusCol: 23,  // Col X
-    formLinkCol: 24,// Col Y
-    timeDelayCol: 25,// Col Z
+    plannedCol: 23, // Col X
+    actualCol: 24,  // Col Y
+    statusCol: 25,  // Col Z
+    formLinkCol: 26,// Col AA
+    timeDelayCol: 27,// Col AB
+  },
+  {
+    stageName: 'Run The Ads',
+    plannedCol: 28, // Col AC
+    actualCol: 29,  // Col AD
+    statusCol: 30,  // Col AE
+    formLinkCol: 31,// Col AF
+    timeDelayCol: 33,// Col AH
   },
   {
     stageName: 'Website / Landing Page Upload',
-    plannedCol: 32, // Col AG
-    actualCol: 33,  // Col AH
-    statusCol: 34,  // Col AI
-    formLinkCol: 35,// Col AJ
-    timeDelayCol: 37,// Col AL
+    plannedCol: 34, // Col AI
+    actualCol: 35,  // Col AJ
+    statusCol: 36,  // Col AK
+    formLinkCol: 37,// Col AL
+    timeDelayCol: 39,// Col AN
   },
 ];
 
@@ -102,7 +110,7 @@ export async function getUploadFmsTasks(options?: {
 
     const results = await readSpreadsheetValues(
       spreadsheetId,
-      `'${SHEET_TITLE}'!A7:AL1500`,
+      `'${SHEET_TITLE}'!A7:AO1500`,
       'FORMATTED_VALUE',
     );
     const rows = results[0] || [];
@@ -165,7 +173,7 @@ export async function getUploadFmsTasks(options?: {
           mappedUser,
           priority: String(row[10] ?? '').trim(),
           remarks: String(row[11] ?? '').trim(),
-          scheduleDate: String(row[12] ?? '').trim(),
+          scheduleDate: String(row[14] ?? '').trim(),
           stageName: stage.stageName,
           plannedDate,
           actualDate,
