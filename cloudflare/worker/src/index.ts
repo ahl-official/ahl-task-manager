@@ -1567,18 +1567,28 @@ async function routeRecurring(req: Request, env: Env, url: URL) {
     const remark = data.remark ? String(data.remark).trim() : null;
     const remarkBy = data.remarkBy ? String(data.remarkBy).trim() : null;
 
-    // Check if on time (IST comparison)
+    // Check if on time (IST comparison with 1-day buffer for daily tasks)
     const ist = getIstDateParts();
+    const isDaily = category.toLowerCase() === 'daily';
+    const dueMs = periodKey.match(/^\d{4}-\d{2}-\d{2}$/) ? Date.parse(periodKey + 'T00:00:00Z') : 0;
+    const todayMs = Date.parse(ist.dateStr + 'T00:00:00Z');
+    const daysDiff = dueMs ? Math.round((todayMs - dueMs) / 86400000) : 0;
+    const isBufferedOnTime = isDaily ? daysDiff <= 1 : (periodKey >= ist.dateStr);
+
     let completedAtDate = now;
-    if (periodKey.match(/^\d{4}-\d{2}-\d{2}$/) && periodKey < ist.dateStr) {
+    if (isDaily && daysDiff === 1) {
+      completedAtDate = `${periodKey}T23:59:59+05:30`;
+    } else if (periodKey.match(/^\d{4}-\d{2}-\d{2}$/) && periodKey < ist.dateStr) {
       completedAtDate = `${periodKey}T18:00:00+05:30`;
     }
 
     let isOnTime = 1;
-    if (category.toLowerCase() === 'daily' || category.toLowerCase() === 'weekly') {
-      if (periodKey < ist.dateStr) isOnTime = 1; // Admin marking past completion is credited for that date
+    if (isDaily) {
+      isOnTime = isBufferedOnTime ? 1 : 0;
+    } else if (category.toLowerCase() === 'weekly') {
+      isOnTime = periodKey >= ist.dateStr ? 1 : 0;
     } else if (category.toLowerCase() === 'monthly') {
-      if (periodKey < ist.monthStr) isOnTime = 1;
+      isOnTime = periodKey >= ist.monthStr ? 1 : 0;
     }
 
     // Delete existing completion for this template + periodKey if any

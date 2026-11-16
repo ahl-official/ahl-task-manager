@@ -1264,7 +1264,7 @@ export default function ChecklistClient({
                     {!row.dead && row.completed && (
                       <span className={cn(
                         'inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium',
-                        (row as any).isOnTime === false || ((row as any).isPast && row.completedAt && (row as any).dueDate && row.completedAt.slice(0, 10) > (row as any).dueDate.slice(0, 10))
+                        (row as any).isOnTime === false || ((row as any).isPast && (row as any).isOnTime !== true && row.completedAt && (row as any).dueDate && row.completedAt.slice(0, 10) > (row as any).dueDate.slice(0, 10))
                           ? 'border-amber-200 bg-amber-50 text-amber-800'
                           : 'border-green-200 bg-green-50 text-green-700'
                       )}>

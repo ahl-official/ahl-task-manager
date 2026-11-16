@@ -2691,8 +2691,15 @@ async function routeRecurring(req, env, url) {
     const status=deleted?'Deleted':action==='uncomplete'||action==='revive'?'Pending':action==='remark'?row.status:'Completed';
     const completed=status==='Completed'||status==='Verified';
     const due=String(row.due_date||periodKey).slice(0,10);
-    const completedAt=action==='remark'?row.completed_at:completed?(row.completed_at||now):null;
-    const onTime=completed?(row.completed_at?row.is_on_time:(due>=getIstDateParts().dateStr?1:0)):row.is_on_time;
+    const cat=String(row.category||'').toLowerCase();
+    const todayStr=getIstDateParts().dateStr;
+    const isDaily=cat==='daily';
+    const dueMs=Date.parse(due+'T00:00:00Z')||0;
+    const todayMs=Date.parse(todayStr+'T00:00:00Z')||0;
+    const daysDiff=Math.round((todayMs-dueMs)/86400000);
+    const isBufferedOnTime=isDaily ? daysDiff<=1 : due>=todayStr;
+    const completedAt=action==='remark'?row.completed_at:completed?(row.completed_at||(isDaily&&daysDiff===1?`${due}T23:59:59+05:30`:now)):null;
+    const onTime=completed?(row.completed_at?row.is_on_time:(isBufferedOnTime?1:0)):row.is_on_time;
     const remark=data.remark===undefined?row.remark:String(data.remark).trim(),remarkBy=data.remarkBy?String(data.remarkBy):row.remark_by;
     // Period rows own checklist state; ordinary status changes leave the indexed
     // is_deleted column untouched and do not duplicate data in recurring_completions.
