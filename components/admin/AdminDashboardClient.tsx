@@ -44,6 +44,16 @@ function isOverdue(task: TaskSerialized): boolean {
   return indiaDayOffset(todayKey, dueKey) < 0;
 }
 
+function mergeCounts(target: TaskCounts, source?: Partial<TaskCounts>) {
+  if (!source) return;
+  target.total += source.total || 0;
+  target.pending += source.pending || 0;
+  target.inProgress += source.inProgress || 0;
+  target.completed += source.completed || 0;
+  target.verified += source.verified || 0;
+  target.overdue += source.overdue || 0;
+}
+
 // Add one task to a rollup, keeping every displayed status count consistent.
 function addTaskToCounts(counts: TaskCounts, task: TaskSerialized) {
   counts.total += 1;
@@ -229,9 +239,22 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
     const finalByUser = (hasAggregateCounts && Object.keys(taskCounts.byUser || {}).length > 0)
       ? new Map<string, TaskCounts>(Object.entries(taskCounts.byUser || {}))
       : byUser;
-    const finalByDepartment = (hasAggregateCounts && Object.keys(taskCounts.byDepartment || {}).length > 0)
-      ? new Map<string, TaskCounts>(Object.entries(taskCounts.byDepartment || {}))
-      : byDepartment;
+    const finalByDepartment = new Map<string, TaskCounts>();
+    if (hasAggregateCounts && Object.keys(taskCounts.byDepartment || {}).length > 0) {
+      for (const [deptName, counts] of Object.entries(taskCounts.byDepartment || {})) {
+        const canon = canonicalDepartment(deptName) || deptName;
+        const cur = finalByDepartment.get(canon) ?? emptyCounts();
+        mergeCounts(cur, counts as any);
+        finalByDepartment.set(canon, cur);
+      }
+    } else {
+      byDepartment.forEach((counts, deptName) => {
+        const canon = canonicalDepartment(deptName) || deptName;
+        const cur = finalByDepartment.get(canon) ?? emptyCounts();
+        mergeCounts(cur, counts);
+        finalByDepartment.set(canon, cur);
+      });
+    }
 
     return {
       overall: finalOverall,
@@ -251,13 +274,17 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
           return filter === 'Completed' ? counts.completed + counts.verified > 0 : counts[({ 'In Progress': 'inProgress', 'Verified': 'verified', 'Overdue': 'overdue' } as const)[filter]] > 0; })()
       );
 
+      const deptCounts = taskMetrics.byDepartment.get(canonicalDepartment(department))
+        || taskMetrics.byDepartment.get(department)
+        || emptyCounts();
+
       return {
         name: department,
         users: visibleUsers,
         totalUsers: departmentUsers.length,
         counts: {
-          ...(taskMetrics.byDepartment.get(department) ?? emptyCounts()),
-          done: (taskMetrics.byDepartment.get(department)?.completed ?? 0) + (taskMetrics.byDepartment.get(department)?.verified ?? 0),
+          ...deptCounts,
+          done: (deptCounts.completed ?? 0) + (deptCounts.verified ?? 0),
         },
       };
     })
@@ -427,10 +454,9 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
               </span>
             </div>
 
-            <div className="mt-5 grid grid-cols-5 gap-2">
+            <div className="mt-5 grid grid-cols-4 gap-2">
               {[
                 { label: 'Total', value: block.counts.total, color: 'text-gray-700' },
-                { label: 'Pending', value: block.counts.pending, color: 'text-yellow-700' },
                 { label: 'Active', value: block.counts.inProgress, color: 'text-blue-700' },
                 { label: 'Done', value: block.counts.done, color: 'text-green-700' },
                 { label: 'OD', value: block.counts.overdue, color: 'text-red-700' },
@@ -470,10 +496,9 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
               </button>
             </div>
 
-            <div className="grid grid-cols-5 gap-2 border-b border-gray-100 px-5 py-4">
+            <div className="grid grid-cols-4 gap-2 border-b border-gray-100 px-5 py-4">
               {[
                 { label: 'Total', value: selectedDepartmentBlock.counts.total, color: 'text-gray-700' },
-                { label: 'Pending', value: selectedDepartmentBlock.counts.pending, color: 'text-yellow-700' },
                 { label: 'In Progress', value: selectedDepartmentBlock.counts.inProgress, color: 'text-blue-700' },
                 { label: 'Done', value: selectedDepartmentBlock.counts.done, color: 'text-green-700' },
                 { label: 'OD', value: selectedDepartmentBlock.counts.overdue, color: 'text-red-700' },

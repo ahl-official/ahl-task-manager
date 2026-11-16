@@ -3,7 +3,7 @@
  * Handles mixed case issues (e.g. "digital marketing" vs "Digital Marketing").
  */
 
-const KNOWN_ACRONYMS = new Set(['HR', 'CRM', 'MIS', 'FMS', 'SMP', 'IT', 'QA', 'PR']);
+const KNOWN_ACRONYMS = new Set(['HR', 'CRM', 'MIS', 'FMS', 'SMP', 'IT', 'QA', 'PR', 'AI']);
 
 export function canonicalDepartment(dept?: string | null): string {
   if (!dept) return '';
