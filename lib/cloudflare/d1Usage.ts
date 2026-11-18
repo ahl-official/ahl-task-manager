@@ -64,8 +64,7 @@ export type D1BudgetStatus = {
 export async function checkD1RecurringBudget(): Promise<D1BudgetStatus> {
   const token = process.env.CLOUDFLARE_ANALYTICS_TOKEN;
   if (!token) {
-    // If analytics token is not set, allow execution but note it's untracked
-    return { allowed: true, source: 'untracked' };
+    return { allowed: false, reason: 'CLOUDFLARE_ANALYTICS_TOKEN is not configured; D1 usage cannot be checked.', source: 'untracked' };
   }
 
   try {
@@ -96,10 +95,10 @@ export async function checkD1RecurringBudget(): Promise<D1BudgetStatus> {
     };
   } catch (err: any) {
     console.warn('[checkD1RecurringBudget] Analytics check error:', err.message);
-    // On unexpected analytics lookup error, proceed so materialization isn't permanently stalled
+    // Bulk work must not run when the daily budget cannot be verified.
     return {
-      allowed: true,
-      reason: `Analytics warning: ${err.message}`,
+      allowed: false,
+      reason: `D1 usage could not be checked: ${err.message}`,
       source: 'untracked',
     };
   }

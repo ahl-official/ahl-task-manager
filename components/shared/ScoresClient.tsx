@@ -134,6 +134,7 @@ export default function ScoresClient({
   const [pdfByKey, setPdfByKey] = useState<Record<string, MisPersonView>>({});
   const [pdfWeekLabel, setPdfWeekLabel] = useState('');
   const [misLoading, setMisLoading] = useState(true);
+  const [misRefreshVersion, setMisRefreshVersion] = useState(0);
   const [nameQuery, setNameQuery] = useState('');
   const [nameMenuOpen, setNameMenuOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -223,10 +224,19 @@ export default function ScoresClient({
       if (!scope || scope === 'scores' || scope === 'all') {
         weekCacheRef.current.clear();
         setPdfByKey({});
+        setMisRefreshVersion(version => version + 1);
       }
     };
+    const handleTaskUpdate = () => {
+      weekCacheRef.current.clear();
+      setMisRefreshVersion(version => version + 1);
+    };
     window.addEventListener('app-global-refresh', handleGlobalRefresh);
-    return () => window.removeEventListener('app-global-refresh', handleGlobalRefresh);
+    window.addEventListener('task-status-updated', handleTaskUpdate);
+    return () => {
+      window.removeEventListener('app-global-refresh', handleGlobalRefresh);
+      window.removeEventListener('task-status-updated', handleTaskUpdate);
+    };
   }, []);
 
   useEffect(() => {
@@ -284,7 +294,7 @@ export default function ScoresClient({
       }
     })();
     return () => { cancelled = true; };
-  }, [weekStart, selectedWeekMeta]);
+  }, [weekStart, selectedWeekMeta, misRefreshVersion]);
 
   function updateTask(updated?: TaskSerialized) {
     if (!updated) {

@@ -3,6 +3,8 @@ import { getSession } from '@/lib/utils/auth';
 import Sidebar from '@/components/shared/Sidebar';
 import GlobalRefreshButton from '@/components/shared/GlobalRefreshButton';
 
+export const dynamic = 'force-dynamic';
+
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect('/login');

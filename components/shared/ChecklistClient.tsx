@@ -5,7 +5,7 @@ import { ArrowRightLeft, CheckCircle2, ChevronDown, Circle, MessageSquare, Loade
 import { toast } from 'sonner';
 import { cn, formatDate } from '@/lib/utils';
 import { namesEqual, normalizePersonName } from '@/lib/utils/names';
-import { indiaTodayKey } from '@/lib/utils/indiaDate';
+import { indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 
 type ChecklistCategory = 'Daily' | 'Weekly' | 'Monthly';
 
@@ -25,6 +25,7 @@ interface ChecklistRow {
   dueDate: string | null;
   completed: boolean;
   completedAt: string | null;
+  isOnTime?: boolean;
   status: 'Completed' | 'Verified' | 'Pending' | 'Dead';
   dead: boolean;
   deadAt: string | null;
@@ -51,8 +52,14 @@ function getWeekMonday(dateStr: string) {
   return dt.toISOString().slice(0, 10);
 }
 
+function isGraceDay(row: ChecklistRow) {
+  const due = (row.dueDate || row.periodKey || '').slice(0, 10);
+  return Boolean(due && indiaDayOffset(due, indiaTodayKey()) === 1);
+}
+
 type ChecklistCacheEntry = {
   rows: ChecklistRow[];
+  pageRows?: ChecklistRow[];
   elevated: boolean;
   isAdmin: boolean;
   currentUserName: string;
@@ -73,9 +80,10 @@ export default function ChecklistClient({
 }) {
   const [category, setCategory] = useState<ChecklistCategory>(initialCategory);
   const [rows, setRows] = useState<ChecklistRow[]>([]);
+  const [pageRows, setPageRows] = useState<ChecklistRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [pageNumber, setPageNumber] = useState(1);
+  const [pageCursors, setPageCursors] = useState<string[]>(['']);
   const [searching, setSearching] = useState(false);
   const [fetchingUserRows, setFetchingUserRows] = useState(false);
   const [ticking, setTicking] = useState<string | null>(null);
@@ -96,6 +104,7 @@ export default function ChecklistClient({
   const [batchDeleteMode, setBatchDeleteMode] = useState<'day' | 'whole' | null>(null);
   const [batchDeleteRemark, setBatchDeleteRemark] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isCompleting, setIsCompleting] = useState(false);
   const [activeRemarkRow, setActiveRemarkRow] = useState<string | null>(null);
   const [remark, setRemark] = useState('');
   const [openMenuRowId, setOpenMenuRowId] = useState<string | null>(null);
@@ -106,6 +115,12 @@ export default function ChecklistClient({
   const fetchedChecklistKeys = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    if (sessionStorage.getItem('ahl-checklist-restored-at')) {
+      sessionStorage.removeItem('ahl-checklist-restored-at');
+      for (const key of Object.keys(moduleChecklistCache)) delete moduleChecklistCache[key];
+      fetchedChecklistKeys.current.clear();
+      searchedKeys.current.clear();
+    }
     fetch('/api/users')
       .then(r => r.json())
       .then(json => {
@@ -132,14 +147,13 @@ export default function ChecklistClient({
     for (const [key, entry] of Object.entries(categoryCache.current)) {
       if (!targetCategory || key.startsWith(`${targetCategory}:`)) {
         entry.rows = updater(entry.rows);
+        if (entry.pageRows) entry.pageRows = updater(entry.pageRows);
       }
     }
   };
-  const pageSentinel = useRef<HTMLDivElement | null>(null);
   const selectedTaskRow = useRef<HTMLDivElement | null>(null);
   const selectedTaskFocused = useRef(false);
   const requestKey = useRef('');
-  const pageInFlight = useRef(false);
   const searchedKeys = useRef(new Set<string>());
 
   const departments = useMemo(() => {
@@ -221,6 +235,12 @@ export default function ChecklistClient({
     }
     return filtered;
   }, [rows, department, selectedIndividuals, startDate, endDate, mineOnly, currentUserName, currentUserId, search, initialTaskId]);
+  const currentPageIds = useMemo(() => new Set(pageRows.map(row => row.id)), [pageRows]);
+  const visiblePageRows = useMemo(() => visibleRows.filter(row => currentPageIds.has(row.id)), [visibleRows, currentPageIds]);
+  const today = indiaTodayKey();
+  const selectablePageRows = useMemo(() => visiblePageRows.filter(row => isAdmin ||
+    (row.canComplete && !row.dead && (!row.dueDate || row.dueDate.slice(0, 10) <= today))), [visiblePageRows, isAdmin, today]);
+  const selectedVisibleCount = useMemo(() => visibleRows.filter(row => selectedRowIds.has(row.id)).length, [visibleRows, selectedRowIds]);
   const completedCount = useMemo(() => visibleRows.filter(row => row.completed).length, [visibleRows]);
 
   useEffect(() => {
@@ -290,46 +310,50 @@ export default function ChecklistClient({
     nextIndividuals = selectedIndividuals,
     nextMineOnly = mineOnly,
     nextDepartment = department,
+    targetPage = 1,
+    cursor = '',
+    resetPages = true,
   ) {
     const indivKey = nextIndividuals.length === 0 ? 'all' : nextIndividuals.slice().sort().join(',');
-    const currentKey = `${category}:${startDate}_${endDate}:${mineOnly ? 'mine' : indivKey}:${department || 'all'}`;
-    if (rows.length > 0) {
-      if (categoryCache.current[currentKey]) {
-        const byId = new Map(categoryCache.current[currentKey].rows.map(r => [r.id, r]));
-        for (const r of rows) byId.set(r.id, r);
-        categoryCache.current[currentKey].rows = Array.from(byId.values());
-      } else {
-        categoryCache.current[currentKey] = {
-          rows,
-          elevated,
-          isAdmin,
-          currentUserName,
-          currentUserId,
-          nextCursor,
-        };
-      }
-    }
-
-    const cacheKey = `${nextCategory}:${nextStartDate}_${nextEndDate}:${nextMineOnly ? 'mine' : indivKey}:${nextDepartment || 'all'}`;
+    const baseKey = `${nextCategory}:${nextStartDate}_${nextEndDate}:${nextMineOnly ? 'mine' : indivKey}:${nextDepartment || 'all'}`;
+    const cacheKey = cursor ? `${baseKey}:page:${cursor}` : baseKey;
     requestKey.current = cacheKey;
+    setSelectedRowIds(new Set());
+    if (resetPages) {
+      setPageNumber(1);
+      setPageCursors(['']);
+    }
+    // Keep numbered navigation backed by server cursors, without counting or prefetching the range.
+    const showPage = (entry: ChecklistCacheEntry) => {
+      setRows(entry.rows);
+      setPageRows(entry.rows);
+      setPageNumber(targetPage);
+      setPageCursors(previous => {
+        const known = resetPages ? [''] : previous;
+        if (entry.nextCursor && known[targetPage] === entry.nextCursor) return known;
+        return [...known.slice(0, targetPage), ...(entry.nextCursor ? [entry.nextCursor] : [])];
+      });
+    };
     if (forceRefresh) searchedKeys.current.clear();
     const cached = categoryCache.current[cacheKey];
     if (cached && !forceRefresh) {
-      setRows(cached.rows);
+      showPage(cached);
       setElevated(cached.elevated);
       setIsAdmin(cached.isAdmin);
       setCurrentUserName(cached.currentUserName);
       if (cached.currentUserId) setCurrentUserId(cached.currentUserId);
-      setNextCursor(cached.nextCursor);
       setLoading(false);
       return;
     }
     setLoading(true);
-    setRows([]);
-    setNextCursor(null);
+    if (resetPages) {
+      setRows([]);
+      setPageRows([]);
+    }
 
     try {
       const qs = new URLSearchParams({ category: nextCategory });
+      if (cursor) qs.set('cursor', cursor);
       if (nextStartDate && nextEndDate) {
         if (nextStartDate === nextEndDate) {
           qs.set('date', nextStartDate);
@@ -364,110 +388,28 @@ export default function ChecklistClient({
       const userNameVal = String(data.meta?.currentUserName ?? '');
       const userIdVal = String(data.meta?.currentUserId ?? '');
       if (requestKey.current !== cacheKey) return;
-      // Deduplicate: first by taskId+periodKey, then by description+periodKey+userId
-      // to remove server-side duplicates (same task materialized multiple times)
-      const seen = new Map<string, ChecklistRow>();
-      const descSeen = new Map<string, string>(); // desc:period:uid -> taskId already added
-      for (const row of (data.data as ChecklistRow[])) {
-        const dk = `${row.taskId}:${row.periodKey}`;
-        const contentKey = `${(row.description || '').slice(0, 80)}:${row.periodKey}:${row.userId}`;
-        if (!seen.has(dk) && !descSeen.has(contentKey)) {
-          seen.set(dk, row);
-          descSeen.set(contentKey, row.taskId);
-        }
-      }
-      const deduped = Array.from(seen.values());
+      const deduped = Array.from(new Map((data.data as ChecklistRow[]).map(row => [row.id, row])).values());
       categoryCache.current[cacheKey] = {
         rows: deduped,
+        pageRows: deduped,
         elevated: elevatedVal,
         isAdmin: isAdminVal,
         currentUserName: userNameVal,
         currentUserId: userIdVal,
         nextCursor: data.meta?.nextCursor || null,
       };
-      setRows(deduped);
-      setNextCursor(data.meta?.nextCursor || null);
+      showPage(categoryCache.current[cacheKey]);
       setElevated(elevatedVal);
       setIsAdmin(isAdminVal);
       setCurrentUserName(userNameVal);
       setCurrentUserId(userIdVal);
     } catch (err: any) {
-      if (!cached) toast.error(err.message ?? 'Failed to load checklist');
+      if (requestKey.current === cacheKey) toast.error(err.message ?? 'Failed to load checklist');
     } finally {
       if (requestKey.current === cacheKey) setLoading(false);
     }
   }
 
-  async function loadMore() {
-    if (!nextCursor || pageInFlight.current || loading || search.trim()) return;
-    const indivKey = selectedIndividuals.length === 0 ? 'all' : selectedIndividuals.slice().sort().join(',');
-    const cacheKey = `${category}:${startDate}_${endDate}:${mineOnly ? 'mine' : indivKey}:${department || 'all'}`;
-    const cursor = nextCursor;
-    pageInFlight.current = true;
-    setLoadingMore(true);
-    try {
-      const qs = new URLSearchParams({ category, cursor });
-      if (startDate && endDate) {
-        if (startDate === endDate) {
-          qs.set('date', startDate);
-          qs.set('exactDate', 'true');
-          qs.set('startDate', startDate);
-          qs.set('endDate', endDate);
-        } else {
-          qs.set('startDate', startDate);
-          qs.set('endDate', endDate);
-        }
-      } else if (startDate) {
-        qs.set('date', startDate);
-        qs.set('exactDate', 'true');
-      }
-      if (mineOnly) {
-        qs.set('mine', 'true');
-      } else if (selectedIndividuals.length === 1) {
-        qs.set('userName', selectedIndividuals[0]);
-      } else if (selectedIndividuals.length > 1) {
-        qs.set('users', selectedIndividuals.join(','));
-      }
-      if (department) {
-        qs.set('department', department);
-      }
-      const res = await fetch(`/api/checklist?${qs}`);
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error);
-      if (requestKey.current !== cacheKey) return;
-      const next = data.meta?.nextCursor || null;
-      setNextCursor(next);
-      setRows(current => {
-        // Deduplicate by taskId+periodKey AND description+period+userId across pages
-        const seen = new Map<string, ChecklistRow>();
-        const descSeen = new Map<string, string>();
-        for (const row of current) {
-          seen.set(`${row.taskId}:${row.periodKey}`, row);
-          descSeen.set(`${(row.description || '').slice(0, 80)}:${row.periodKey}:${row.userId}`, row.taskId);
-        }
-        let changed = false;
-        for (const row of (data.data as ChecklistRow[])) {
-          const dk = `${row.taskId}:${row.periodKey}`;
-          const ck = `${(row.description || '').slice(0, 80)}:${row.periodKey}:${row.userId}`;
-          if (!seen.has(dk) && !descSeen.has(ck)) {
-            seen.set(dk, row);
-            descSeen.set(ck, row.taskId);
-            changed = true;
-          }
-        }
-        const merged = Array.from(seen.values());
-        if (changed) {
-          categoryCache.current[cacheKey] = { rows: merged, elevated, isAdmin, currentUserName, nextCursor: next };
-        }
-        return merged;
-      });
-    } catch (err: any) {
-      toast.error(err.message ?? 'Failed to load more checklist tasks');
-    } finally {
-      pageInFlight.current = false;
-      setLoadingMore(false);
-    }
-  }
 
   async function tick(row: ChecklistRow) {
     if (row.dead) return;
@@ -479,11 +421,12 @@ export default function ChecklistClient({
     }
     const action = 'complete';
     const nextStatus = 'Completed' as const;
+    const isOnTime = Boolean(rowDate && indiaDayOffset(rowDate, today) <= 1);
 
     // Optimistic UI update for 0ms instant feedback
     const prevRows = rows;
     const updatedRows = (list: ChecklistRow[]) => list.map(item => item.id === row.id
-      ? { ...item, completed: true, completedAt: item.completedAt || new Date().toISOString(), status: nextStatus, canComplete: false, canUncomplete: true }
+      ? { ...item, completed: true, completedAt: item.completedAt || new Date().toISOString(), isOnTime, status: nextStatus, canComplete: false, canUncomplete: true }
       : item);
 
     setRows(updatedRows);
@@ -510,7 +453,7 @@ export default function ChecklistClient({
       if (!data.success) throw new Error(data.error);
       const serverStatus = (data.data.status === 'Verified' ? 'Completed' : data.data.status) || nextStatus;
       const serverUpdated = (list: ChecklistRow[]) => list.map(item => item.id === row.id
-        ? { ...item, completed: true, completedAt: data.data.completedAt, status: serverStatus, canComplete: false, canUncomplete: true }
+        ? { ...item, completed: true, completedAt: data.data.completedAt, isOnTime: data.data.isOnTime === true, status: serverStatus, canComplete: false, canUncomplete: true }
         : item);
       setRows(serverUpdated);
       updateCacheRows(serverUpdated, row.category);
@@ -521,6 +464,43 @@ export default function ChecklistClient({
       toast.error(err.message ?? 'Failed to complete checklist task');
     } finally {
       setTicking(null);
+    }
+  }
+
+  // Complete selected, eligible occurrences through one server request and refresh the loaded-page cache.
+  async function handleBatchComplete() {
+    const selectedRows = visibleRows.filter(row => selectedRowIds.has(row.id));
+    const today = indiaTodayKey();
+    const eligibleRows = selectedRows.filter(row => !row.completed && !row.dead &&
+      (!row.dueDate || row.dueDate.slice(0, 10) <= today) && (isAdmin || row.canComplete));
+    if (!eligibleRows.length) {
+      toast.error('No selected checklist tasks can be completed');
+      return;
+    }
+    setIsCompleting(true);
+    try {
+      const res = await fetch('/api/checklist/batch-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: eligibleRows.map(row => ({ templateId: row.taskId, periodKey: row.periodKey })) }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to complete selected checklist tasks');
+      const completedByKey = new Map<string, any>((data.data?.completed || []).map((item: any) => [`${item.templateId}:${item.periodKey}`, item]));
+      const updateCompleted = (list: ChecklistRow[]) => list.map(row => {
+        const result = completedByKey.get(`${row.taskId}:${row.periodKey}`);
+        return result ? { ...row, completed: true, status: 'Completed' as const, completedAt: result.completedAt,
+          isOnTime: result.isOnTime, canComplete: false, canUncomplete: true } : row;
+      });
+      setRows(updateCompleted);
+      setPageRows(updateCompleted);
+      updateCacheRows(updateCompleted, category);
+      setSelectedRowIds(new Set());
+      toast.success(`${completedByKey.size} checklist task(s) marked complete`);
+    } catch (err: any) {
+      toast.error(err.message ?? 'Failed to complete selected checklist tasks');
+    } finally {
+      setIsCompleting(false);
     }
   }
 
@@ -632,6 +612,10 @@ export default function ChecklistClient({
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
+      if (data.data?.mode !== mode || (mode === 'whole' &&
+        (data.data?.deleted !== templateIds.length || !Number.isInteger(data.data?.deletedPeriods)))) {
+        throw new Error('The server did not delete every selected recurring task. Refresh and try again.');
+      }
 
       if (mode === 'day') {
         const idSet = new Set(ids);
@@ -639,16 +623,24 @@ export default function ChecklistClient({
         for (const key of Object.keys(categoryCache.current)) {
           categoryCache.current[key].rows = categoryCache.current[key].rows.filter(r => !idSet.has(r.id));
         }
-        toast.success(`Hard deleted ${ids.length} occurrence(s)`);
+        toast.success(`Deleted ${data.data.deleted} occurrence(s). Restore them from Deleted Tasks.`);
       } else {
         const templateSet = new Set(templateIds);
-        setRows(prev => prev.filter(r => !templateSet.has(r.taskId)));
+        const today = indiaTodayKey();
+        const keepRow = (r: ChecklistRow) => !templateSet.has(r.taskId) ||
+          (r.completed && (r.periodEnd || r.dueDate || r.periodKey).slice(0, 10) < today);
+        setRows(prev => prev.filter(keepRow));
         for (const key of Object.keys(categoryCache.current)) {
-          categoryCache.current[key].rows = categoryCache.current[key].rows.filter(r => !templateSet.has(r.taskId));
+          categoryCache.current[key].rows = categoryCache.current[key].rows.filter(keepRow);
         }
-        toast.success(`Hard deleted ${templateIds.length} recurring task(s)`);
+        toast.success(`Deleted ${templateIds.length} recurring task(s) and ${data.data.deletedPeriods} occurrence(s)`);
       }
 
+      for (const key of Object.keys(moduleChecklistCache)) delete moduleChecklistCache[key];
+      categoryCache.current = moduleChecklistCache;
+      fetchedChecklistKeys.current.clear();
+      searchedKeys.current.clear();
+      requestKey.current = '';
       setSelectedRowIds(new Set());
       setBatchDeleteModalOpen(false);
       setBatchDeleteMode(null);
@@ -723,15 +715,6 @@ export default function ChecklistClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category, startDate, endDate, selectedIndividuals, mineOnly, department]);
 
-  useEffect(() => {
-    if (!nextCursor || loading || loadingMore || search.trim() || !pageSentinel.current) return;
-    const observer = new IntersectionObserver(entries => {
-      if (entries[0]?.isIntersecting) void loadMore();
-    }, { rootMargin: '250px' });
-    observer.observe(pageSentinel.current);
-    return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nextCursor, loading, loadingMore, search, category, startDate, endDate]);
 
   useEffect(() => {
     const query = search.trim();
@@ -1116,32 +1099,48 @@ export default function ChecklistClient({
 
         {!loading && visibleRows.length > 0 && (
           <div>
-            {isAdmin && (
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 bg-gray-50/90 px-5 py-2.5 text-xs text-gray-600">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 bg-gray-50/90 px-5 py-2.5 text-xs text-gray-600">
                 <label className="flex items-center gap-2 font-medium cursor-pointer select-none">
                   <input
                     type="checkbox"
-                    checked={selectedRowIds.size > 0 && selectedRowIds.size === visibleRows.length}
+                    checked={selectablePageRows.length > 0 && selectablePageRows.every(row => selectedRowIds.has(row.id))}
                     ref={el => {
-                      if (el) el.indeterminate = selectedRowIds.size > 0 && selectedRowIds.size < visibleRows.length;
+                      if (el) {
+                        const selectedOnPage = selectablePageRows.filter(row => selectedRowIds.has(row.id)).length;
+                        el.indeterminate = selectedOnPage > 0 && selectedOnPage < selectablePageRows.length;
+                      }
                     }}
                     onChange={() => {
-                      if (selectedRowIds.size === visibleRows.length) {
-                        setSelectedRowIds(new Set());
-                      } else {
-                        setSelectedRowIds(new Set(visibleRows.map(r => r.id)));
-                      }
+                      const allPageSelected = selectablePageRows.length > 0 && selectablePageRows.every(row => selectedRowIds.has(row.id));
+                      setSelectedRowIds(prev => {
+                        const next = new Set(prev);
+                        for (const row of selectablePageRows) {
+                          if (allPageSelected) next.delete(row.id);
+                          else next.add(row.id);
+                        }
+                        return next;
+                      });
                     }}
                     className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
                   />
-                  <span>Select all ({visibleRows.length})</span>
+                  <span>Select page ({selectablePageRows.length})</span>
                 </label>
 
-                {selectedRowIds.size > 0 && (
+                {selectedVisibleCount > 0 && (
                   <div className="flex items-center gap-3">
                     <span className="font-semibold text-gray-800">
-                      {selectedRowIds.size} selected
+                      {selectedVisibleCount} selected
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => void handleBatchComplete()}
+                      disabled={isCompleting}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-green-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-green-700 disabled:opacity-60 transition cursor-pointer"
+                    >
+                      {isCompleting ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+                      {isCompleting ? 'Completing…' : 'Mark Complete'}
+                    </button>
+                    {isAdmin && (
                     <button
                       type="button"
                       onClick={() => {
@@ -1151,8 +1150,9 @@ export default function ChecklistClient({
                       className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-red-700 transition cursor-pointer"
                     >
                       <Trash2 size={13} />
-                      Delete selected ({selectedRowIds.size})
+                      Delete selected ({selectedVisibleCount})
                     </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setSelectedRowIds(new Set())}
@@ -1162,8 +1162,7 @@ export default function ChecklistClient({
                     </button>
                   </div>
                 )}
-              </div>
-            )}
+            </div>
             <div className="divide-y divide-gray-50">
             {visibleRows.map(row => (
               <div
@@ -1175,7 +1174,7 @@ export default function ChecklistClient({
               >
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div className="flex items-start gap-3 min-w-0 flex-1">
-                    {isAdmin && (
+                    {(isAdmin || (row.canComplete && !row.dead && (!row.dueDate || row.dueDate.slice(0, 10) <= today))) && (
                       <div className="pt-0.5 shrink-0" onClick={e => e.stopPropagation()}>
                         <input
                           type="checkbox"
@@ -1254,11 +1253,11 @@ export default function ChecklistClient({
                         disabled={ticking === row.id}
                         className={cn(
                           'inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-white cursor-pointer transition-colors disabled:opacity-50',
-                          row.isPast ? 'bg-amber-600 hover:bg-amber-700' : 'bg-brand-600 hover:bg-brand-700'
+                          row.isPast && !isGraceDay(row) ? 'bg-amber-600 hover:bg-amber-700' : 'bg-brand-600 hover:bg-brand-700'
                         )}
-                        title={row.isPast ? 'Complete past task (will be recorded as Late)' : 'Mark task complete'}
+                        title={row.isPast && !isGraceDay(row) ? 'Complete past task (recorded as late)' : 'Mark task complete on time'}
                       >
-                        {row.isPast ? 'Mark Complete (Late)' : 'Mark Complete'}
+                        {row.isPast ? (isGraceDay(row) ? 'Mark Complete (On Time)' : 'Mark Complete (Late)') : 'Mark Complete'}
                       </button>
                     )}
                     {!row.dead && row.completed && (
@@ -1363,13 +1362,18 @@ export default function ChecklistClient({
           </div>
           </div>
         )}
-        {!loading && nextCursor && !search.trim() && (
-          <div ref={pageSentinel} className="flex justify-center px-4 py-4">
-            <button type="button" onClick={() => void loadMore()} disabled={loadingMore} className="btn-secondary py-2">
-              {loadingMore ? <Loader2 size={14} className="animate-spin" /> : null}
-              {loadingMore ? 'Loading more...' : 'Load more tasks'}
-            </button>
-          </div>
+        {pageCursors.length > 1 && !search.trim() && (
+          <nav aria-label="Checklist pages" className="flex flex-wrap justify-center gap-2 px-4 py-4">
+            {pageCursors.map((cursor, index) => (
+              <button key={index} type="button" aria-label={`Page ${index + 1}`}
+                aria-current={pageNumber === index + 1 ? 'page' : undefined}
+                disabled={loading || isCompleting || isDeleting || Boolean(ticking) || pageNumber === index + 1}
+                onClick={() => void loadRows(category, startDate, endDate, false, selectedIndividuals, mineOnly, department, index + 1, cursor, false)}
+                className={cn('btn-secondary min-w-9 py-2', pageNumber === index + 1 && 'border-brand-600 font-bold text-brand-700')}>
+                {index + 1}
+              </button>
+            ))}
+          </nav>
         )}
       </div>
 
@@ -1457,7 +1461,7 @@ export default function ChecklistClient({
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-gray-900">
-                  {batchDeleteMode ? 'Confirm permanent deletion' : `Delete ${selectedRowsForDelete.length === 1 ? 'checklist task' : `${selectedRowsForDelete.length} checklist tasks`}`}
+                  {batchDeleteMode ? 'Confirm deletion' : `Delete ${selectedRowsForDelete.length === 1 ? 'checklist task' : `${selectedRowsForDelete.length} checklist tasks`}`}
                 </h2>
                 {selectedRowsForDelete.length === 1 ? (
                   <>
@@ -1499,7 +1503,7 @@ export default function ChecklistClient({
                       : `Delete selected day occurrences (${selectedRowsForDelete.length})`}
                   </span>
                   <span className="text-xs text-amber-800">
-                    Hard deletes only these selected occurrence(s). Other dates stay.
+                    Hides only these selected occurrence(s). Other dates stay. You can undo this later.
                   </span>
                 </button>
                 {elevated && (
@@ -1513,7 +1517,7 @@ export default function ChecklistClient({
                       {uniqueTemplatesForDelete.length === 1 ? 'Delete whole recurring task' : `Delete whole recurring tasks (${uniqueTemplatesForDelete.length})`}
                     </span>
                     <span className="text-xs text-red-700">
-                      Hard deletes the recurring templates and future dates. Past history stays.
+                      Removes all unfinished occurrences, including past dates. Past completed history stays.
                     </span>
                   </button>
                 )}
@@ -1533,8 +1537,8 @@ export default function ChecklistClient({
               <div className="space-y-3">
                 <p className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
                   {batchDeleteMode === 'day'
-                    ? `Are you sure you want to permanently hard delete ${selectedRowsForDelete.length} selected occurrence(s)? This action cannot be undone.`
-                    : `Are you sure you want to permanently delete ${uniqueTemplatesForDelete.length} recurring template(s) and their future occurrences? Past history stays.`}
+                    ? `Delete ${selectedRowsForDelete.length} selected occurrence(s)? You can restore them from Deleted Tasks.`
+                    : `Delete ${uniqueTemplatesForDelete.length} recurring task(s), all unfinished occurrences, and current or future occurrences? Past completed history stays. You can undo this from Deleted Tasks.`}
                 </p>
                 <div>
                   <label className="label text-gray-700">Reason / Remark (optional)</label>

@@ -26,6 +26,14 @@ async function syncTaskCountChange(env,h,oldTask,newTask){
     }
   }
 }
+async function refreshTaskMis(env,h,before,after){
+  await h.refreshDelegationForTaskChange?.(env,before,after);
+  const parentId=legacyParent(before||after);
+  if(parentId){
+    const parent=await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id=?').bind(parentId).first();
+    if(parent)await h.refreshDelegationForTaskChange?.(env,parent,parent);
+  }
+}
 export async function routeLifecycle(req,env,url,h){
  try {
   const path=url.pathname;
@@ -53,6 +61,8 @@ export async function routeLifecycle(req,env,url,h){
     const parent=await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id=?').bind(task.task_id).first();
     await h.adjustTaskCount?.(env,null,child);
     await h.adjustTaskCount?.(env,task,parent);
+    await refreshTaskMis(env,h,task,parent);
+    await h.refreshDelegationForTaskChange?.(env,null,child);
     return response({childTask:h.taskFromRow(child),parentTask:h.taskFromRow(parent)});
   }
   if(path==='/revisions'&&['POST','PATCH'].includes(req.method)){
@@ -90,7 +100,9 @@ export async function routeLifecycle(req,env,url,h){
         ...await parentUpdate(env,task,targetStatus,{revision_status:'requested'},condition,[revisionId])
       ];await env.DB.batch(statements);
       const rev=await env.DB.prepare('SELECT * FROM revisions WHERE id=?').bind(revisionId).first();assert(rev,'Task changed; refresh before requesting revision',409);
-      await syncTaskCountChange(env,h,task,await env.DB.prepare('SELECT assigned_to,department,status FROM tasks_current WHERE task_id=?').bind(task.task_id).first());
+      const updatedTask=await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id=?').bind(task.task_id).first();
+      await syncTaskCountChange(env,h,task,updatedTask);
+      await refreshTaskMis(env,h,task,updatedTask);
       return response(h.revisionFromRow(rev),201);
     }
     assert(['approved','rejected'].includes(d.decision),'Invalid decision');assert(d.revisionId&&d.taskId,'Task and revision ID required');
@@ -128,7 +140,9 @@ export async function routeLifecycle(req,env,url,h){
       env.DB.prepare('UPDATE revisions SET decided_at=? WHERE id=? AND decided_at=?').bind(now,rev.id,decisionAt)
     ]);
     const updated=await env.DB.prepare('SELECT * FROM revisions WHERE id=?').bind(rev.id).first();assert(updated.status===d.decision&&updated.decided_by===d.decidedBy&&updated.decided_at===now,'Revision changed; refresh',409);
-    await syncTaskCountChange(env,h,task,await env.DB.prepare('SELECT assigned_to,department,status FROM tasks_current WHERE task_id=?').bind(task.task_id).first());
+    const updatedTask=await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id=?').bind(task.task_id).first();
+    await syncTaskCountChange(env,h,task,updatedTask);
+    await refreshTaskMis(env,h,task,updatedTask);
     return response(h.revisionFromRow(updated));
   }
   const lifecycle=path.match(/^\/tasks\/([^/]+)\/lifecycle$/);
@@ -157,6 +171,7 @@ export async function routeLifecycle(req,env,url,h){
     statements.push(env.DB.prepare("UPDATE tasks_current SET status=?,completed_at=?,verified_at=?,accepted_at=COALESCE(accepted_at,?),updated_at=? WHERE task_id=? AND status=? AND COALESCE(updated_at,'')=?").bind(status,completedAt,verifiedAt,now,now,task.task_id,task.status,task.updated_at||''));
     await env.DB.batch(statements);const updated=await env.DB.prepare('SELECT * FROM tasks_current WHERE task_id=?').bind(task.task_id).first();assert(updated.status===status&&updated.updated_at===now,'Task changed; refresh',409);
     await syncTaskCountChange(env,h,task,updated);
+    await refreshTaskMis(env,h,task,updated);
     return response(h.taskFromRow(updated));
   }
   if(path==='/tasks/batch-verify'&&req.method==='POST'){
@@ -207,17 +222,7 @@ export async function routeLifecycle(req,env,url,h){
   if(template&&['GET','DELETE'].includes(req.method)){
     const templateId=decodeURIComponent(template[1]),definition=await h.resolveRecurringDefinition(env,templateId);assert(definition,'Recurring task not found',404);
     if(req.method==='GET')return response(definition);
-    const today=istDay(new Date());
-    const sourceTask=await env.DB.prepare('SELECT assigned_to,department,status FROM tasks_current WHERE task_id=?').bind(templateId).first();
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM recurring_completions WHERE template_id=? AND period_key IN (SELECT period_key FROM recurring_period_rows WHERE template_id=? AND COALESCE(NULLIF(period_end,''),NULLIF(due_date,''),substr(period_key,1,10))>=?)").bind(templateId,templateId,today),
-      env.DB.prepare("DELETE FROM recurring_period_rows WHERE template_id=? AND COALESCE(NULLIF(period_end,''),NULLIF(due_date,''),substr(period_key,1,10))>=?").bind(templateId,today),
-      env.DB.prepare('DELETE FROM recurring_templates WHERE id=?').bind(templateId),
-      env.DB.prepare('DELETE FROM revisions WHERE task_id=?').bind(templateId),
-      env.DB.prepare("DELETE FROM tasks_current WHERE task_id=? AND LOWER(category) IN ('daily','weekly','monthly')").bind(templateId)
-    ]);
-    if(sourceTask)await h.adjustTaskCount?.(env,sourceTask,null);
-    return response({deletedId:templateId,permanent:true,keptPastPeriodRows:true});
+    return response(await h.deleteRecurringDefinition(env,templateId));
   }
   if(path==='/recurring/templates'&&req.method==='POST'){
     const d=await req.json();assert(d.title&&d.assignedToName&&d.assignedTo,'Title and assignee required');assert(['Daily','Weekly','Monthly'].includes(d.category),'Invalid category');

@@ -9,7 +9,6 @@ import {
 import { checklistPermissions } from '@/lib/utils/checklistPermissions';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { addDaysKey } from '@/lib/mis/week';
-import { notifyTaskUpdated } from '@/lib/events/taskEvents';
 
 const CATEGORIES = ['Daily', 'Weekly', 'Monthly'];
 
@@ -39,6 +38,9 @@ export async function GET(req: NextRequest) {
   const dateParam = searchParams.get('date') || undefined;
   const startDateParam = searchParams.get('startDate') || undefined;
   const endDateParam = searchParams.get('endDate') || undefined;
+  if (Boolean(startDateParam) !== Boolean(endDateParam)) {
+    return NextResponse.json({ success: false, error: 'Both startDate and endDate are required' }, { status: 400 });
+  }
   const exactDate = searchParams.get('exactDate') === 'true' || Boolean(dateParam);
   const cursor = searchParams.get('cursor') || undefined;
   const rawSearch = (searchParams.get('search') || '').trim();
@@ -73,7 +75,9 @@ export async function GET(req: NextRequest) {
     })() : undefined;
 
     const effectiveStartDate = startDateParam || pastStartDate;
-    const effectiveEndDate = endDateParam || undefined;
+    // The Worker applies a range only when both bounds are present. Keep the
+    // scoped history bounded and include already materialized future periods.
+    const effectiveEndDate = endDateParam || (includeAllPeriods ? addDaysKey(today, 366) : undefined);
 
     const page = await getRecurringChecklistPage({
       category,
@@ -155,22 +159,6 @@ export async function GET(req: NextRequest) {
     }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (err: any) {
     console.error('Cloudflare D1 recurring checklist fetch error', err);
-    // If a search query caused an execution error/timeout in D1, return empty results gracefully
-    if (search.length >= 2) {
-      return NextResponse.json({
-        success: true,
-        meta: {
-          currentUserName: session.name,
-          currentUserId: session.uid,
-          elevated,
-          isAdmin,
-          source: 'cloudflare_d1',
-          hasMore: false,
-          nextCursor: null,
-        },
-        data: [],
-      });
-    }
     return NextResponse.json({
       success: false,
       error: err.message || 'Failed to fetch checklist from Cloudflare D1',
@@ -210,7 +198,6 @@ export async function POST(req: NextRequest) {
       action: resolvedAction, isAdmin: session.role === 'admin',
       remark: String(remark).trim(), remarkBy: session.name,
     });
-    notifyTaskUpdated();
     return NextResponse.json({ success: true, data: result });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message || 'Checklist update failed' }, { status: error.status === 404 ? 404 : 400 });

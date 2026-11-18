@@ -178,7 +178,7 @@ export default function RecurringTemplatesModal({
 
 
   async function handleDelete(id: string) {
-    if (!window.confirm('Are you sure you want to permanently delete this recurring task template? This action cannot be undone.')) {
+    if (!window.confirm('Delete this recurring task? You can restore it from Deleted Tasks.')) {
       return;
     }
 

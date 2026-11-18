@@ -10,7 +10,6 @@ import { canViewTask } from '@/lib/utils/access';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { cfTask } from '@/lib/cloudflare/models';
 import { updateTaskInReadCache } from '@/lib/firebase/readCache';
-import { notifyTaskUpdated } from '@/lib/events/taskEvents';
 import { indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 
 // GET /api/tasks/[id]
@@ -358,7 +357,6 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     const updated = updatedTask ?? await adminGetTask(params.id);
-    notifyTaskUpdated();
     return NextResponse.json({ success: true, data: serializeTask(updated!) });
   } catch (err: any) {
     console.error(`PATCH /api/tasks/${params.id} error`, err);
@@ -404,7 +402,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       },
     });
 
-    notifyTaskUpdated();
     return NextResponse.json({ success: true, data: { taskId: params.id, deleted: true } });
   } catch (err: any) {
     console.error(`DELETE /api/tasks/${params.id} error`, err);

@@ -34,7 +34,7 @@ async function probeScope(scope: string, session: Session) {
         await Promise.all([adminGetAllTasks({ limit: 100 }), adminGetTaskCounts()]);
       } else {
         await Promise.all([
-          adminGetTasksByAssignee(session.uid),
+          adminGetTasksByAssignee(session.uid, true),
           adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true }),
         ]);
       }

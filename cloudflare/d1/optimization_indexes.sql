@@ -1,6 +1,7 @@
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks_current (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_department_created ON tasks_current (department, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_department_status_created ON tasks_current (department, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_pending_verification ON tasks_current (created_at DESC, task_id DESC) WHERE (category NOT IN ('Daily','Weekly','Monthly') OR category IS NULL) AND status = 'Completed' AND (verified_at IS NULL OR verified_at = '');
 CREATE INDEX IF NOT EXISTS idx_revisions_task_created ON revisions (task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_revisions_status_task_created ON revisions (status, task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_checklist_completions_task_period ON checklist_completions (uid, task_id, period_key);
@@ -10,3 +11,7 @@ CREATE INDEX IF NOT EXISTS idx_period_rows_due ON recurring_period_rows (due_dat
 CREATE INDEX IF NOT EXISTS idx_period_rows_due_filter ON recurring_period_rows (due_date, is_deleted, status);
 CREATE INDEX IF NOT EXISTS idx_period_rows_month_filter ON recurring_period_rows (month_key, is_deleted, status);
 CREATE INDEX IF NOT EXISTS idx_period_rows_user_date ON recurring_period_rows (assigned_to, category, due_date, is_deleted, status);
+CREATE INDEX IF NOT EXISTS idx_period_rows_name_norm_due ON recurring_period_rows (TRIM(LOWER(assigned_to_name)), category, due_date, id) WHERE is_deleted = 0 AND status != 'Deleted';
+CREATE INDEX IF NOT EXISTS idx_period_sources_row_kind ON recurring_period_sources (period_row_id, source_kind);
+CREATE INDEX IF NOT EXISTS idx_reconciled_verified_week ON mis_reconciled_people (verified, week_start, name_key);
+CREATE INDEX IF NOT EXISTS idx_period_rows_deleted ON recurring_period_rows (deleted_at DESC, id DESC) WHERE is_deleted = 1 AND deleted_at IS NOT NULL;

@@ -29,7 +29,7 @@ export default async function PortalPage() {
   const prevWeek = getPreviousMisWeekPeriod();
 
   const [databaseTasks, timelyTasks, prevSnaps, taskCounts] = await Promise.all([
-    adminGetTasksByAssignee(session.uid),
+    adminGetTasksByAssignee(session.uid, true),
     getPersonalTimelyTasks(session),
     adminGetMisWeeklySnapshots({ weekKey: prevWeek.weekKey }).catch(() => []),
     adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true, includeChecklist: true }),

@@ -125,6 +125,7 @@ async function runAction(action: string, body: Record<string, unknown> = {}) {
     const saveSummary = await saveMisWeeklySnapshots({
       weekStart: typeof body.weekStart === 'string' ? body.weekStart : undefined,
       weekEnd: typeof body.weekEnd === 'string' ? body.weekEnd : undefined,
+      onlyName: typeof body.onlyName === 'string' ? body.onlyName : undefined,
     });
 
     const sendSummary = await generateAndSendWeeklyMisPdfReports({
@@ -135,6 +136,16 @@ async function runAction(action: string, body: Record<string, unknown> = {}) {
     });
 
     return { ...saveSummary, pdfReports: sendSummary };
+  }
+
+  // Repair a saved weekly score after a historical task correction, without
+  // regenerating or sending the PDF. Optional onlyName limits D1 writes to one row.
+  if (action === 'refreshWeeklySnapshots') {
+    return saveMisWeeklySnapshots({
+      weekStart: typeof body.weekStart === 'string' ? body.weekStart : undefined,
+      weekEnd: typeof body.weekEnd === 'string' ? body.weekEnd : undefined,
+      onlyName: typeof body.onlyName === 'string' ? body.onlyName : undefined,
+    });
   }
 
   throw new Error('Unknown action');

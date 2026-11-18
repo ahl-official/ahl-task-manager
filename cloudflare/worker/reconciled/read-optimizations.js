@@ -5,7 +5,7 @@ const TTL = 300_000;
 export function invalidateReadCache() {
   periodCache.clear();
   for (const key of cache.keys()) {
-    if (new URL(key).pathname === '/tasks/counts') cache.delete(key);
+    if (['/tasks/counts','/mis/weekly','/mis/weekly/latest','/mis/reconciled','/mis/delegation-counts','/recurring/mis-counts'].includes(new URL(key).pathname)) cache.delete(key);
   }
 }
 
@@ -87,11 +87,12 @@ export async function cacheRead(req, url, response) {
   if (cache.size >= 128) cache.delete(cache.keys().next().value);
   const cacheUrl = new URL(url.href);
   cacheUrl.searchParams.delete('fresh');
-  cache.set(cacheUrl.href, { body, until: Date.now() + TTL, asOf: new Date().toISOString() });
+  const ttl = url.pathname === '/tasks/search' && url.searchParams.get('verificationPending') === 'true' ? 10_000 : TTL;
+  cache.set(cacheUrl.href, { body, until: Date.now() + ttl, asOf: new Date().toISOString() });
 }
 const json = data => new Response(JSON.stringify({success:true,data,meta:{asOf:new Date().toISOString()}}),{headers:{'content-type':'application/json'}});
 function scopeFilters(url) {
-  const clauses=[],binds=[],scope=url.searchParams.get('scope')||'all',uid=url.searchParams.get('uid');
+  const clauses=["status!='Deleted'"],binds=[],scope=url.searchParams.get('scope')||'all',uid=url.searchParams.get('uid');
   if (scope !== 'all') {
     if (!uid) throw new Error('A scoped request requires uid');
     if (scope==='visible') { clauses.push('(assigned_to=? OR created_by=? OR handoff_uid=?)');binds.push(uid,uid,uid); }
@@ -244,8 +245,9 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     const assignedTo=url.searchParams.get('assignedTo');
     const reqStatus=url.searchParams.get('status');
 
-    if (assignedTo || (scope === 'mine' && uid)) {
-      const targetUser = assignedTo || uid;
+    if (assignedTo || (scope !== 'all' && uid)) {
+      const scoped = scopeFilters(url);
+      if (reqStatus) statusFilter(scoped.clauses, scoped.binds, reqStatus);
       const todayVal = today();
       const userRes = await env.DB.prepare(`
         SELECT
@@ -258,8 +260,8 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
           SUM(CASE WHEN status IN ('Verified','Shifted (Verified)') THEN 1 ELSE 0 END) AS verified,
           SUM(CASE WHEN status IN ('Dead','Shifted (Dead)') THEN 1 ELSE 0 END) AS dead
         FROM tasks_current
-        WHERE assigned_to = ?
-      `).bind(todayVal, todayVal, todayVal, targetUser).first();
+        WHERE ${scoped.clauses.join(' AND ')}
+      `).bind(todayVal, todayVal, todayVal, ...scoped.binds).first();
 
       const overall = {
         total: Number(userRes?.total || 0),
@@ -270,18 +272,19 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
         completed: Number(userRes?.completed || 0),
         verified: Number(userRes?.verified || 0),
         dead: Number(userRes?.dead || 0),
-        active: Number(userRes?.inProgress || 0) + Number(userRes?.delayRequested || 0) + Number(userRes?.overdue || 0),
+        active: Number(userRes?.inProgress || 0) + Number(userRes?.overdue || 0),
       };
 
       const params = url.searchParams;
-      if (params.get('includeChecklist') === 'true' && scope === 'mine' && uid && (!params.get('category') || params.get('category') === 'Daily') && (!params.get('priority') || params.get('priority') === 'Medium')) {
+      if (params.get('includeChecklist') === 'true' && scope === 'mine' && uid && (!reqStatus || ['Completed','In Progress'].includes(reqStatus)) && (!params.get('category') || params.get('category') === 'Daily') && (!params.get('priority') || params.get('priority') === 'Medium')) {
         const department = params.get('department');
         const periods = await env.DB.prepare("SELECT department,status,COUNT(*) AS n FROM recurring_period_rows WHERE assigned_to=? AND category='Daily' AND is_deleted=0 AND status!='Deleted' AND due_date=?" + (department ? ' AND department=?' : '') + " GROUP BY department,status LIMIT 50").bind(uid, todayVal, ...(department ? [department] : [])).all();
         for (const row of periods.results || []) {
           const status = ['Completed', 'Verified'].includes(row.status) ? 'Completed' : 'In Progress';
+          if (reqStatus && status !== reqStatus) continue;
           const n = Number(row.n || 0);
           if (status === 'Completed') overall.completed += n;
-          else overall.inProgress += n;
+          else { overall.inProgress += n; overall.active += n; }
           overall.total += n;
         }
       }
@@ -340,7 +343,7 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     const first="date(t.start_date,'+5 hours','+30 minutes')";
     const revised="date(COALESCE(NULLIF(t.delayed_date,''),NULLIF(t.end_date,'')),'+5 hours','+30 minutes')";
     const done="t.status NOT IN ('Pending','Shifted')";
-    const result=await env.DB.prepare(`SELECT t.assigned_to AS uid,COALESCE(NULLIF(u.name,''),t.assigned_to_name) AS name,COALESCE(NULLIF(u.department,''),t.department) AS department,u.wa_number AS waNumber,COUNT(*) AS planned,SUM(CASE WHEN ${done} THEN 1 ELSE 0 END) AS done,SUM(CASE WHEN ${done} AND NOT (t.status IN ('Completed','Verified') AND COALESCE(${first}<${revised},0)) THEN 1 ELSE 0 END) AS onTime FROM tasks_current t LEFT JOIN users u ON u.uid=t.assigned_to WHERE LOWER(COALESCE(t.category,'')) NOT IN ('daily','weekly','monthly') AND ${final}>=? AND ${final}<=? GROUP BY t.assigned_to,COALESCE(NULLIF(u.name,''),t.assigned_to_name),COALESCE(NULLIF(u.department,''),t.department),u.wa_number`).bind(start,end).all();
+    const result=await env.DB.prepare(`SELECT t.assigned_to AS uid,COALESCE(NULLIF(u.name,''),t.assigned_to_name) AS name,COALESCE(NULLIF(u.department,''),t.department) AS department,u.wa_number AS waNumber,COUNT(*) AS planned,SUM(CASE WHEN ${done} THEN 1 ELSE 0 END) AS done,SUM(CASE WHEN ${done} AND NOT (t.status IN ('Completed','Verified') AND COALESCE(${first}<${revised},0)) THEN 1 ELSE 0 END) AS onTime FROM tasks_current t LEFT JOIN users u ON u.uid=t.assigned_to WHERE t.status!='Deleted' AND LOWER(COALESCE(t.category,'')) NOT IN ('daily','weekly','monthly') AND ${final}>=? AND ${final}<=? GROUP BY t.assigned_to,COALESCE(NULLIF(u.name,''),t.assigned_to_name),COALESCE(NULLIF(u.department,''),t.department),u.wa_number`).bind(start,end).all();
     return json(result.results||[]);
   }
   return null;
@@ -354,6 +357,17 @@ export async function aggregatePeriods(env,start,end){
   return promise;
 }
 async function loadPeriodAggregates(env,start,end){
-  const result=await env.DB.prepare(`SELECT p.assigned_to_name AS name,p.department,p.category,s.source_kind,COUNT(*) AS planned,SUM(CASE WHEN p.status IN ('Completed','Verified') THEN 1 ELSE 0 END) AS done,SUM(CASE WHEN p.status IN ('Completed','Verified') AND COALESCE(p.is_on_time,1)=1 THEN 1 ELSE 0 END) AS onTime FROM recurring_period_rows p LEFT JOIN (SELECT period_row_id,MIN(source_kind) AS source_kind FROM recurring_period_sources GROUP BY period_row_id) s ON s.period_row_id=p.id WHERE p.is_deleted=0 AND p.status!='Deleted' AND p.due_date>=? AND p.due_date<=? GROUP BY p.assigned_to_name,p.department,p.category,s.source_kind`).bind(start,end).all();
+  // Resolve provenance only for periods in the requested week. The old LEFT
+  // JOIN grouped every source row in the database on every MIS request.
+  const result=await env.DB.prepare(`WITH periods AS (
+    SELECT p.assigned_to_name AS name,p.department,p.category,p.status,p.is_on_time,
+      (SELECT MIN(s.source_kind) FROM recurring_period_sources s WHERE s.period_row_id=p.id) AS source_kind
+    FROM recurring_period_rows p
+    WHERE p.is_deleted=0 AND p.status!='Deleted' AND p.due_date>=? AND p.due_date<=?
+  )
+  SELECT name,department,category,source_kind,COUNT(*) AS planned,
+    SUM(CASE WHEN status IN ('Completed','Verified') THEN 1 ELSE 0 END) AS done,
+    SUM(CASE WHEN status IN ('Completed','Verified') AND COALESCE(is_on_time,1)=1 THEN 1 ELSE 0 END) AS onTime
+  FROM periods GROUP BY name,department,category,source_kind`).bind(start,end).all();
   return result.results||[];
 }

@@ -73,6 +73,9 @@ export async function GET(req: NextRequest) {
     if (mode === 'monthly') {
       const year = Number(searchParams.get('year') || week.year);
       const month = Number(searchParams.get('month') || week.weekEnd.slice(5, 7));
+      if (!Number.isInteger(year) || year < 2020 || year > 2100 || !Number.isInteger(month) || month < 1 || month > 12) {
+        return NextResponse.json({ success: false, error: 'Invalid month or year' }, { status: 400 });
+      }
       let reports = await buildMonthlyMisReports({ year, monthIndex0: month - 1 });
       if (!canViewAll(session)) {
         reports = reports.filter(row =>

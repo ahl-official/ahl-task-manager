@@ -1,5 +1,6 @@
 import { routeLifecycle } from './lifecycle.js';
 import { routeReadOptimizations, aggregatePeriods, getCachedRead, cacheRead, invalidateReadCache, syncCachedTasksFromMutation, adjustTaskCount } from './read-optimizations.js';
+import { routeTrash, ensureDeletionsTable } from './trash.js';
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
@@ -506,8 +507,9 @@ async function routeUsers(req, env, url) {
   if (url.pathname === "/users" && req.method === "DELETE") {
     const uid = url.searchParams.get("uid");
     if (!uid) return json({ success: false, error: "User id is required" }, { status: 400 });
+    const hasTasks = await env.DB.prepare('SELECT 1 AS found FROM tasks_current WHERE assigned_to=? LIMIT 1').bind(uid).first();
+    if (hasTasks) return json({ success: false, error: 'This user has tasks. Deactivate the user to preserve task history.' }, { status: 409 });
     await env.DB.batch([
-      env.DB.prepare("DELETE FROM tasks_current WHERE assigned_to = ?").bind(uid),
       env.DB.prepare("DELETE FROM scores WHERE uid = ?").bind(uid),
       env.DB.prepare("DELETE FROM users WHERE uid = ?").bind(uid)
     ]);
@@ -593,10 +595,9 @@ function periodFields(dateValue) {
 __name(periodFields, "periodFields");
 
 // --- Backend MIS auto-recompute (delegation bucket) -------------------------------
-// Keeps mis_weekly's CURRENT week row for one assignee fresh the moment a One Time
-// task write changes their completion state, so the frontend only ever reads the DB
-// (cheap) instead of recomputing scores on every page view. Scoped by assigned_to
-// (indexed: idx_tasks_assignee_created), so this is an index seek, not a table scan.
+// Refresh the affected person's saved delegation bucket after a One Time task
+// write. Closed weeks are updated only when a published snapshot exists.
+// The assignee filter uses idx_tasks_assignee_created.
 // Checklist/FMS buckets are preserved from the last stored snapshot — this task write
 // can only have changed the delegation bucket, and FMS comes from an external sheet
 // that isn't re-read on every task write.
@@ -607,8 +608,8 @@ function addDaysKeyUtc(dateKey, days) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 __name(addDaysKeyUtc, "addDaysKeyUtc");
-function currentMisWeekPeriod() {
-  const todayKey = new Date(Date.now() + 19800000).toISOString().slice(0, 10);
+function currentMisWeekPeriod(anchorKey) {
+  const todayKey = anchorKey || new Date(Date.now() + 19800000).toISOString().slice(0, 10);
   const [y, m, d] = todayKey.split("-").map(Number);
   const day = new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).getUTCDay();
   const daysSinceWednesday = (day - 3 + 7) % 7;
@@ -630,10 +631,22 @@ function gapPercentCalc(done, planned) {
   return Math.round(value * 100) / 100;
 }
 __name(gapPercentCalc, "gapPercentCalc");
-async function refreshDelegationMisSnapshot(env, uid) {
+function misWeekForDate(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  const key = new Date(parsed.getTime() + 19800000).toISOString().slice(0, 10);
+  const week = currentMisWeekPeriod(key);
+  const current = currentMisWeekPeriod();
+  return { ...week, isCurrent: week.weekStart === current.weekStart };
+}
+function taskMisDate(row) {
+  return row && (row.delayed_date || row.end_date || row.start_date || row.completed_at);
+}
+async function refreshDelegationMisSnapshot(env, uid, targetWeek) {
   if (!uid) return;
   try {
-    const week = currentMisWeekPeriod();
+    const week = targetWeek || currentMisWeekPeriod();
     const final = "date(COALESCE(NULLIF(t.delayed_date,''),NULLIF(t.end_date,''),NULLIF(t.start_date,''),NULLIF(t.completed_at,'')),'+5 hours','+30 minutes')";
     const first = "date(t.start_date,'+5 hours','+30 minutes')";
     const revised = "date(COALESCE(NULLIF(t.delayed_date,''),NULLIF(t.end_date,'')),'+5 hours','+30 minutes')";
@@ -649,9 +662,17 @@ async function refreshDelegationMisSnapshot(env, uid) {
     const name = row?.name || (await env.DB.prepare("SELECT name FROM users WHERE uid=?").bind(uid).first())?.name || uid;
     const delegation = { planned: Number(row?.planned || 0), done: Number(row?.done || 0), onTime: Number(row?.onTime || 0) };
     const id = `${week.weekKey}_${normalizePersonName(name).replace(/\s+/g, "-") || "unknown"}`;
-    const existing = await env.DB.prepare("SELECT checklist_json, fms_json FROM mis_weekly WHERE id=?").bind(id).first();
+    const existing = await env.DB.prepare("SELECT checklist_json, delegation_json, fms_json FROM mis_weekly WHERE id=?").bind(id).first();
+    // Closed weeks are snapshots: only revise a row that was already published.
+    if (targetWeek && !targetWeek.isCurrent && !existing) return;
+    if (!existing && delegation.planned === 0) return;
+    const previousDelegation = existing?.delegation_json ? JSON.parse(existing.delegation_json) : null;
+    if (previousDelegation && ['planned','done','onTime'].every(field => Number(previousDelegation[field] || 0) === delegation[field])) return;
     const emptyBucket = { planned: 0, done: 0, onTime: 0 };
     const checklist = existing?.checklist_json ? JSON.parse(existing.checklist_json) : emptyBucket;
+    if (Array.isArray(checklist.parameters)) checklist.parameters = checklist.parameters.map(param =>
+      param.id === 'delegation' ? { ...param, ...delegation, gapPercent: gapPercentCalc(delegation.done, delegation.planned) } : param);
+    if (targetWeek && !targetWeek.isCurrent) checklist.correctedAt = nowIso();
     const fms = existing?.fms_json ? JSON.parse(existing.fms_json) : emptyBucket;
     const totalPlanned = checklist.planned + delegation.planned + fms.planned;
     const totalDone = checklist.done + delegation.done + fms.done;
@@ -669,6 +690,7 @@ async function refreshDelegationMisSnapshot(env, uid) {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         uid = excluded.uid, name = excluded.name, department = excluded.department, wa_number = excluded.wa_number,
+        checklist_json = excluded.checklist_json,
         delegation_json = excluded.delegation_json,
         planned = excluded.planned, done = excluded.done, on_time = excluded.on_time,
         gap_percent = excluded.gap_percent, gap_decimal = excluded.gap_decimal, on_time_gap_percent = excluded.on_time_gap_percent,
@@ -687,6 +709,62 @@ async function refreshDelegationMisSnapshot(env, uid) {
   }
 }
 __name(refreshDelegationMisSnapshot, "refreshDelegationMisSnapshot");
+async function refreshDelegationForTaskChange(env, before, after) {
+  const targets = new Map();
+  for (const row of [before, after]) {
+    if (!row?.assigned_to || ["daily", "weekly", "monthly"].includes(String(row.category || "").toLowerCase())) continue;
+    const week = misWeekForDate(taskMisDate(row));
+    if (week && !week.isCurrent) targets.set(`${row.assigned_to}:${week.weekStart}`, { uid: row.assigned_to, week });
+    targets.set(`${row.assigned_to}:current`, { uid: row.assigned_to, week: null });
+  }
+  for (const { uid, week } of targets.values()) await refreshDelegationMisSnapshot(env, uid, week);
+}
+__name(refreshDelegationForTaskChange, "refreshDelegationForTaskChange");
+async function refreshChecklistMisSnapshot(env, periodRow) {
+  const week = misWeekForDate(periodRow?.due_date || periodRow?.period_key);
+  if (!week || week.isCurrent) return;
+  const uid = String(periodRow.assigned_to || "");
+  const name = String(periodRow.assigned_to_name || "").trim();
+  if (!uid && !name) return;
+  const id = `${week.weekKey}_${normalizePersonName(name).replace(/\s+/g, "-") || "unknown"}`;
+  const existing = await env.DB.prepare("SELECT * FROM mis_weekly WHERE week_start=? AND (uid=? OR id=?) LIMIT 1")
+    .bind(week.weekStart, uid, id).first();
+  if (!existing) return;
+  const rows = await env.DB.prepare(`SELECT category,COUNT(*) AS planned,
+    SUM(CASE WHEN status IN ('Completed','Verified') THEN 1 ELSE 0 END) AS done,
+    SUM(CASE WHEN status IN ('Completed','Verified') AND COALESCE(is_on_time,1)=1 THEN 1 ELSE 0 END) AS onTime
+    FROM recurring_period_rows WHERE id IN (
+      SELECT id FROM recurring_period_rows WHERE is_deleted=0 AND status!='Deleted' AND due_date>=? AND due_date<=? AND assigned_to=? AND ?!=''
+      UNION SELECT id FROM recurring_period_rows WHERE is_deleted=0 AND status!='Deleted' AND due_date>=? AND due_date<=? AND TRIM(LOWER(assigned_to_name))=LOWER(?) AND ?!=''
+    ) GROUP BY category`).bind(week.weekStart, week.weekEnd, uid, uid, week.weekStart, week.weekEnd, name, name).all();
+  const checklist = { planned: 0, done: 0, onTime: 0 };
+  const byCategory = { daily: { planned: 0, done: 0, onTime: 0 }, weekly: { planned: 0, done: 0, onTime: 0 } };
+  for (const row of rows.results || []) {
+    const bucket = String(row.category || '').toLowerCase() === 'daily' ? byCategory.daily : byCategory.weekly;
+    for (const field of ['planned','done','onTime']) {
+      const value = Number(row[field] || 0);
+      checklist[field] += value;
+      bucket[field] += value;
+    }
+  }
+  const old = JSON.parse(existing.checklist_json || '{"planned":0,"done":0,"onTime":0}');
+  if (Array.isArray(old.parameters)) checklist.parameters = old.parameters.map(param => {
+    const bucket = byCategory[param.id];
+    return bucket ? { ...param, ...bucket, gapPercent: gapPercentCalc(bucket.done, bucket.planned) } : param;
+  });
+  if (checklist.planned === Number(old.planned || 0) && checklist.done === Number(old.done || 0) && checklist.onTime === Number(old.onTime || 0)
+      && JSON.stringify(checklist.parameters || []) === JSON.stringify(old.parameters || [])) return;
+  checklist.correctedAt = nowIso();
+  const delegation = JSON.parse(existing.delegation_json || '{"planned":0,"done":0,"onTime":0}');
+  const fms = JSON.parse(existing.fms_json || '{"planned":0,"done":0,"onTime":0}');
+  const planned = checklist.planned + Number(delegation.planned || 0) + Number(fms.planned || 0);
+  const done = checklist.done + Number(delegation.done || 0) + Number(fms.done || 0);
+  const onTime = checklist.onTime + Number(delegation.onTime || 0) + Number(fms.onTime || 0);
+  const gap = gapPercentCalc(done, planned);
+  await env.DB.prepare(`UPDATE mis_weekly SET checklist_json=?,planned=?,done=?,on_time=?,gap_percent=?,gap_decimal=?,on_time_gap_percent=?,updated_at=? WHERE id=?`)
+    .bind(JSON.stringify(checklist), planned, done, onTime, gap, gap == null ? null : gap / 100, gapPercentCalc(onTime, done), nowIso(), existing.id).run();
+}
+__name(refreshChecklistMisSnapshot, "refreshChecklistMisSnapshot");
 async function routeTasks(req, env, url) {
   if (url.pathname === "/tasks" && req.method === "GET") {
     const scope = url.searchParams.get("scope") || "all";
@@ -704,6 +782,9 @@ async function routeTasks(req, env, url) {
     if (scope === "handoff" && uid) {
       clauses.push("handoff_uid = ?");
       binds.push(uid);
+    }
+    if (url.searchParams.get("excludeRecurring") === "true") {
+      clauses.push("LOWER(COALESCE(category,'')) NOT IN ('daily','weekly','monthly')");
     }
     if (status) {
       if (status === "open") {
@@ -726,6 +807,7 @@ async function routeTasks(req, env, url) {
       clauses.push("department = ?");
       binds.push(department);
     }
+    clauses.push("status!='Deleted'");
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const limitClause = "LIMIT ?";
     const orderClause = status === "Completed" ? "ORDER BY COALESCE(completed_at, updated_at, created_at) DESC, created_at DESC, task_id DESC" : "ORDER BY created_at DESC, task_id DESC";
@@ -753,7 +835,7 @@ async function routeTasks(req, env, url) {
   if (url.pathname === "/tasks/by-ids" && req.method === "GET") {
     const ids = [...new Set(url.searchParams.getAll("id").filter(Boolean))].slice(0, 100);
     if (!ids.length) return json({ success: true, data: [] });
-    const rows = await env.DB.prepare(`SELECT * FROM tasks_current WHERE task_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all();
+    const rows = await env.DB.prepare(`SELECT * FROM tasks_current WHERE status!='Deleted' AND task_id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
   if (url.pathname === "/tasks/calendar" && req.method === "GET") {
@@ -764,7 +846,7 @@ async function routeTasks(req, env, url) {
     const next = new Date(`${start}T00:00:00.000Z`);
     next.setUTCMonth(next.getUTCMonth() + 1);
     const end = next.toISOString().slice(0, 10);
-    const rows = await env.DB.prepare("SELECT * FROM tasks_current WHERE department=? AND ((delayed_date>=? AND delayed_date<?) OR ((delayed_date IS NULL OR delayed_date='') AND end_date>=? AND end_date<?)) ORDER BY COALESCE(delayed_date,end_date),task_id LIMIT 150").bind(department,start,end,start,end).all();
+    const rows = await env.DB.prepare("SELECT * FROM tasks_current WHERE status!='Deleted' AND department=? AND ((delayed_date>=? AND delayed_date<?) OR ((delayed_date IS NULL OR delayed_date='') AND end_date>=? AND end_date<?)) ORDER BY COALESCE(delayed_date,end_date),task_id LIMIT 150").bind(department,start,end,start,end).all();
     return json({ success: true, data: rows.results.map(taskFromRow) });
   }
   if (url.pathname === "/tasks/next-id" && req.method === "GET") {
@@ -774,7 +856,7 @@ async function routeTasks(req, env, url) {
   if (url.pathname.startsWith("/tasks/") && req.method === "GET") {
     const id = decodeURIComponent(url.pathname.slice("/tasks/".length));
     const task = taskFromRow(await env.DB.prepare("SELECT * FROM tasks_current WHERE task_id = ? LIMIT 1").bind(id).first());
-    return task ? json({ success: true, data: task }) : json({ success: false, error: "Not found" }, { status: 404 });
+    return task && task.status !== 'Deleted' ? json({ success: true, data: task }) : json({ success: false, error: "Not found" }, { status: 404 });
   }
   if (url.pathname === "/tasks" && req.method === "POST") {
     try {
@@ -821,7 +903,10 @@ async function routeTasks(req, env, url) {
       await log(env, "TASK_CREATED", `Task ${taskId} created`, { taskId, uid: creatorUid }).catch(() => {});
       await adjustTaskCount(env, null, { assigned_to: assigneeUid, department: assigneeDept, status }).catch(() => {});
       if (!["daily", "weekly", "monthly"].includes(String(data.category || "One Time").toLowerCase())) {
-        await refreshDelegationMisSnapshot(env, assigneeUid).catch(() => {});
+        await refreshDelegationForTaskChange(env, null, {
+          assigned_to: assigneeUid, category: data.category || "One Time",
+          start_date: startDateVal, end_date: endDateVal
+        }).catch(() => {});
       }
 
       // Return constructed task in memory without requiring an extra DB SELECT read (saves quota and works even if read limits are hit)
@@ -959,6 +1044,7 @@ async function routeTasks(req, env, url) {
     const open = new Set(["Pending", "Pending Accept", "In Progress", "Delay Requested", "Overdue"]);
     const affectedUsers = new Set();
     let updated = 0, skipped = 0;
+    const changedTasks = [];
     for (const item of items) {
       const existing = await env.DB.prepare("SELECT * FROM tasks_current WHERE task_id=?").bind(item.taskId).first();
       if (!existing || !open.has(existing.status) || existing.assigned_to !== item.assignedTo ||
@@ -994,8 +1080,15 @@ async function routeTasks(req, env, url) {
         ).bind(onTime ? 1 : 0, onTime ? 0 : 1, onTime ? 1 : 0, now, existing.assigned_to).run().catch(() => {});
       }
       if (existing.assigned_to) affectedUsers.add(existing.assigned_to);
+      changedTasks.push([existing, { ...existing, status: nextStatus, end_date: nextEndDate }]);
     }
     for (const uid of affectedUsers) await refreshDelegationMisSnapshot(env, uid);
+    const closedTargets = new Map();
+    for (const pair of changedTasks) for (const row of pair) {
+      const week = misWeekForDate(taskMisDate(row));
+      if (week && !week.isCurrent && row.assigned_to) closedTargets.set(`${row.assigned_to}:${week.weekStart}`, { uid: row.assigned_to, week });
+    }
+    for (const { uid, week } of closedTargets.values()) await refreshDelegationMisSnapshot(env, uid, week);
     return json({ success: true, data: { updated, skipped } });
   }
   if (url.pathname.startsWith("/tasks/") && req.method === "PATCH") {
@@ -1045,8 +1138,8 @@ async function routeTasks(req, env, url) {
         const col = data.scoreIncrement.field === "tasksCompleted" ? "tasks_completed" : data.scoreIncrement.field === "onTimeCount" ? "on_time_count" : data.scoreIncrement.field === "lateCount" ? "late_count" : "tasks_assigned";
         await env.DB.prepare(`UPDATE scores SET ${col} = ${col} + 1, last_updated = ? WHERE uid = ?`).bind(nowIso(), data.scoreIncrement.uid).run();
       }
-      if (!recurring && existing?.assigned_to) {
-        await refreshDelegationMisSnapshot(env, existing.assigned_to);
+      if (!recurring && (existing?.assigned_to || updatedRow?.assigned_to)) {
+        await refreshDelegationForTaskChange(env, existing, updatedRow);
       }
       return json({ success: true, data: taskFromRow(updatedRow) });
     } catch (err) {
@@ -1054,26 +1147,7 @@ async function routeTasks(req, env, url) {
     }
   }
   if (url.pathname.startsWith("/tasks/") && req.method === "DELETE") {
-    try {
-      const id = decodeURIComponent(url.pathname.slice("/tasks/".length));
-      const existing = await env.DB.prepare("SELECT * FROM tasks_current WHERE task_id = ? LIMIT 1").bind(id).first();
-      if (!existing) return json({ success: false, error: "Not found" }, { status: 404 });
-      await env.DB.batch([
-        env.DB.prepare("DELETE FROM revisions WHERE task_id = ?").bind(id),
-        env.DB.prepare("DELETE FROM tasks_current WHERE task_id = ?").bind(id)
-      ]);
-      await adjustTaskCount(env, existing, null);
-      try {
-        await log(env, "TASK_DELETED", `Task ${id} deleted`, { taskId: id });
-      } catch {
-      }
-      if (!["daily", "weekly", "monthly"].includes(String(existing.category || "").toLowerCase()) && existing.assigned_to) {
-        await refreshDelegationMisSnapshot(env, existing.assigned_to);
-      }
-      return json({ success: true, data: { taskId: id, deleted: true } });
-    } catch (err) {
-      return json({ success: false, error: err.message || String(err) }, { status: 500 });
-    }
+    return json({ success: false, error: 'Use reversible task deletion' }, { status: 409 });
   }
   return null;
 }
@@ -1325,6 +1399,9 @@ function parseBucketJson(raw) {
 __name(parseBucketJson, "parseBucketJson");
 function misWeeklyFromRow(row) {
   if (!row) return null;
+  let parameters = [];
+  let correctedAt = '';
+  try { const stored = JSON.parse(row.checklist_json || '{}'); if (Array.isArray(stored.parameters)) parameters = stored.parameters; correctedAt = String(stored.correctedAt || ''); } catch {}
   return {
     id: row.id,
     uid: row.uid || null,
@@ -1332,6 +1409,8 @@ function misWeeklyFromRow(row) {
     department: row.department || "",
     waNumber: row.wa_number || "",
     checklist: parseBucketJson(row.checklist_json),
+    parameters,
+    correctedAt,
     delegation: parseBucketJson(row.delegation_json),
     fms: parseBucketJson(row.fms_json),
     planned: Number(row.planned ?? 0),
@@ -1369,11 +1448,29 @@ function misArchiveFromRow(row) {
 }
 __name(misArchiveFromRow, "misArchiveFromRow");
 async function mergeReconciledWeekly(env, rows, url) {
-  const records=await env.DB.prepare('SELECT score_json, updated_at FROM mis_reconciled_people WHERE verified=1').all();
+  const conditions=['verified=1'],binds=[];
+  const weekKey=url.searchParams.get('weekKey');
+  if(weekKey){
+    const match=weekKey.match(/^(\d{4})-W(\d{2})$/);
+    if(!match)return rows;
+    const year=Number(match[1]),weekNumber=Number(match[2]);
+    const jan1=`${year}-01-01`;
+    const jan1Dow=new Date(`${jan1}T12:00:00Z`).getUTCDay();
+    const firstWeek=addDaysKeyUtc(jan1,-((jan1Dow-3+7)%7));
+    conditions.push('week_start=?');binds.push(addDaysKeyUtc(firstWeek,(weekNumber-1)*7));
+  }else if(url.searchParams.get('year')){
+    const year=url.searchParams.get('year');
+    conditions.push('week_end>=? AND week_end<?');binds.push(`${year}-01-01`,`${Number(year)+1}-01-01`);
+  }
+  const name=url.searchParams.get('name');
+  if(name){conditions.push('name_key=?');binds.push(normalizePersonName(name));}
+  const records=await env.DB.prepare(`SELECT score_json,updated_at FROM mis_reconciled_people WHERE ${conditions.join(' AND ')}`).bind(...binds).all();
   const merged=new Map(rows.map(row=>[row.weekKey+':'+normalizePersonName(row.name),row]));
   const selected=(records.results||[]).filter(record=>{const row=JSON.parse(record.score_json);return ['weekKey','name','year','monthName'].every(field=>{const value=url.searchParams.get(field);if(!value)return true;if(field==='name')return normalizePersonName(row.name)===normalizePersonName(value);if(field==='year')return row.weekEnd.slice(0,4)===value;if(field==='monthName')return new Intl.DateTimeFormat('en-US',{month:'long',timeZone:'Asia/Kolkata'}).format(new Date(row.weekEnd+'T12:00:00Z'))===value;return String(row[field])===value;});});
   for(const record of selected) {
     const row=JSON.parse(record.score_json);
+    const saved=merged.get(row.weekKey+':'+normalizePersonName(row.name));
+    if(saved?.correctedAt && saved.correctedAt > String(record.updated_at || '')) continue;
     merged.set(row.weekKey+':'+normalizePersonName(row.name),{...row,id:row.weekKey+'_'+normalizePersonName(row.name).replace(/\s+/g,'-'),weekNumber:Number(row.weekKey.split('W')[1]),monthName:new Intl.DateTimeFormat('en-US',{month:'long',timeZone:'Asia/Kolkata'}).format(new Date(row.weekEnd+'T12:00:00Z')),year:Number(row.weekEnd.slice(0,4)),combinedWeek:row.weekStart+' - '+row.weekEnd,createdAt:'',updatedAt:''});
   }
   let result=Array.from(merged.values());
@@ -1387,7 +1484,11 @@ async function routeMis(req, env, url) {
   if (url.pathname === '/mis/reconciled' && req.method === 'GET') {
     const weekStart=url.searchParams.get('weekStart'),weekEnd=url.searchParams.get('weekEnd');
     if(!weekStart || !weekEnd) return json({success:false,error:'weekStart and weekEnd required'},{status:400});
-    const result=await env.DB.prepare('SELECT score_json FROM mis_reconciled_people WHERE week_start = ? AND week_end = ? AND verified = 1').bind(weekStart,weekEnd).all();
+    const result=await env.DB.prepare(`SELECT r.score_json FROM mis_reconciled_people r
+      WHERE r.week_start=? AND r.week_end=? AND r.verified=1
+        AND NOT EXISTS (SELECT 1 FROM mis_weekly w
+          WHERE w.id=json_extract(r.score_json,'$.weekKey') || '_' || REPLACE(r.name_key,' ','-')
+            AND json_extract(w.checklist_json,'$.correctedAt')>COALESCE(r.updated_at,''))`).bind(weekStart,weekEnd).all();
     return json({success:true,data:(result.results||[]).map(record=>JSON.parse(record.score_json))});
   }
 
@@ -1455,7 +1556,9 @@ async function routeMis(req, env, url) {
             name = excluded.name,
             department = excluded.department,
             wa_number = excluded.wa_number,
-            checklist_json = excluded.checklist_json,
+            checklist_json = CASE WHEN json_extract(mis_weekly.checklist_json,'$.correctedAt') IS NOT NULL
+              THEN json_set(excluded.checklist_json,'$.correctedAt',json_extract(mis_weekly.checklist_json,'$.correctedAt'))
+              ELSE excluded.checklist_json END,
             delegation_json = excluded.delegation_json,
             fms_json = excluded.fms_json,
             planned = excluded.planned,
@@ -1478,7 +1581,7 @@ async function routeMis(req, env, url) {
           row.name,
           row.department || "",
           row.waNumber || "",
-          JSON.stringify(row.checklist || { planned: 0, done: 0, onTime: 0 }),
+          JSON.stringify({ ...(row.checklist || { planned: 0, done: 0, onTime: 0 }), parameters: Array.isArray(row.parameters) ? row.parameters : [] }),
           JSON.stringify(row.delegation || { planned: 0, done: 0, onTime: 0 }),
           JSON.stringify(row.fms || { planned: 0, done: 0, onTime: 0 }),
           Number(row.planned ?? 0),
@@ -1997,6 +2100,58 @@ function taskAsRecurringTemplate(row) {
   };
 }
 __name(taskAsRecurringTemplate, "taskAsRecurringTemplate");
+async function deleteRecurringDefinition(env, templateId) {
+  const today = getIstDateParts().dateStr;
+  const [templateRow, sourceTask, periodRow] = await Promise.all([
+    env.DB.prepare("SELECT * FROM recurring_templates WHERE id=?").bind(templateId).first(),
+    env.DB.prepare("SELECT * FROM tasks_current WHERE task_id=? AND LOWER(category) IN ('daily','weekly','monthly')").bind(templateId).first(),
+    env.DB.prepare("SELECT * FROM recurring_period_rows WHERE template_id=? LIMIT 1").bind(templateId).first()
+  ]);
+  if (!templateRow && !sourceTask && !periodRow) return null;
+  if (templateRow && JSON.parse(templateRow.metadata_json || '{}').deleted) return { deletedId: templateId, deletedPeriods: 0, permanent: false, alreadyDeleted: true };
+
+  const definition = templateRow ? recurringTemplateFromRow(templateRow) : sourceTask
+    ? taskAsRecurringTemplate(sourceTask) : taskAsRecurringTemplate({
+      task_id: templateId, category: periodRow.category, description: periodRow.description || periodRow.title,
+      assigned_to: periodRow.assigned_to, assigned_to_name: periodRow.assigned_to_name,
+      department: periodRow.department, end_date: periodRow.due_date,
+      created_at: periodRow.created_at, updated_at: periodRow.updated_at
+    });
+  const now = nowIso();
+  const metadata = { ...definition.metadata, deleted: true, deletedAt: now, deletedPreviousActive: templateRow ? templateRow.is_active !== 0 : true };
+  const deletePeriods = "template_id=? AND is_deleted=0 AND (COALESCE(NULLIF(period_end,''),NULLIF(due_date,''),substr(period_key,1,10))>=? OR status NOT IN ('Completed','Verified'))";
+  const changedHistory = await env.DB.prepare(`SELECT assigned_to,assigned_to_name,due_date,period_key FROM recurring_period_rows WHERE ${deletePeriods} AND due_date<?`)
+    .bind(templateId, today, currentMisWeekPeriod().weekStart).all();
+  if (sourceTask && sourceTask.status !== 'Deleted') await ensureDeletionsTable(env);
+  const statements = [
+    env.DB.prepare(`INSERT INTO recurring_templates
+      (id,category,title,description,assigned_to,assigned_to_name,department,frequency,day_of_week,day_of_month,time_of_day,is_active,metadata_json,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET is_active=0,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`)
+      .bind(templateId, definition.category, definition.title, definition.description,
+        definition.assignedTo, definition.assignedToName, definition.department, definition.frequency,
+        definition.dayOfWeek, definition.dayOfMonth, definition.timeOfDay,
+        JSON.stringify(metadata), definition.createdAt || now, now),
+    env.DB.prepare(`UPDATE recurring_period_rows SET is_deleted=1,deleted_at=?,updated_at=? WHERE ${deletePeriods}`).bind(now, now, templateId, today),
+    env.DB.prepare("UPDATE tasks_current SET status='Deleted',updated_at=? WHERE task_id=? AND LOWER(category) IN ('daily','weekly','monthly') AND status!='Deleted'").bind(now, templateId)
+  ];
+  if (sourceTask && sourceTask.status !== 'Deleted') {
+    statements.push(env.DB.prepare('INSERT INTO task_deletions(task_id,previous_status,deleted_at) VALUES (?,?,?) ON CONFLICT(task_id) DO UPDATE SET previous_status=excluded.previous_status,deleted_at=excluded.deleted_at').bind(templateId, sourceTask.status, now));
+  }
+  const results = await env.DB.batch(statements);
+  if (sourceTask && sourceTask.status !== 'Deleted') {
+    await adjustTaskCount(env, sourceTask, null);
+  }
+  const affectedWeeks = new Map();
+  for (const row of changedHistory.results || []) {
+    const week = misWeekForDate(row.due_date || row.period_key);
+    if (week) affectedWeeks.set(`${row.assigned_to || row.assigned_to_name}:${week.weekStart}`, row);
+  }
+  for (const row of affectedWeeks.values()) await refreshChecklistMisSnapshot(env, row);
+  activeTemplateIdsCache = null;
+  return { deletedId: templateId, deletedPeriods: Number(results[1]?.meta?.changes || 0), permanent: false, keptPastCompletions: true };
+}
+__name(deleteRecurringDefinition, "deleteRecurringDefinition");
 function recurringTitleKey(row) {
   const title = String(row.description || "").split("\n")[0].toLowerCase().replace(/\s+/g, " ").trim();
   const name = String(row.assigned_to_name || "").trim().toLowerCase();
@@ -2236,22 +2391,11 @@ async function routeRecurring(req, env, url) {
   }
   if (templateMatch && req.method === "DELETE") {
     const id = templateMatch[1];
-    await ensurePeriodRowsTable(env);
-    const today = getIstDateParts().dateStr;
-    await env.DB.prepare(
-      `DELETE FROM recurring_period_rows
-       WHERE template_id = ?
-         AND (
-           (LOWER(category) = 'monthly' AND period_key >= ?)
-           OR (LOWER(category) = 'weekly' AND COALESCE(period_end, due_date, period_key) >= ?)
-           OR (LOWER(category) = 'daily' AND period_key >= ?)
-           OR (LOWER(category) NOT IN ('daily', 'weekly', 'monthly') AND period_key >= ?)
-         )`
-    ).bind(id, today.slice(0, 7), today, today, today).run().catch(() => null);
-    await env.DB.prepare("DELETE FROM recurring_templates WHERE id = ?").bind(id).run();
+    const result = await deleteRecurringDefinition(env, id);
+    if (!result) return json({ success: false, error: "Recurring task not found" }, { status: 404 });
     return json({
       success: true,
-      data: { deletedId: id, permanent: true, keptPastPeriodRows: true, keptPastCompletions: true }
+      data: result
     });
   }
   if (path === "/recurring/materialize-month" && req.method === "POST") {
@@ -2532,58 +2676,53 @@ async function routeRecurring(req, env, url) {
   if (path === "/recurring/checklist/batch-delete" && req.method === "POST") {
     const data = await body(req);
     const mode = data.mode; // 'day' | 'whole'
-    const today = getIstDateParts().dateStr;
     if (mode === 'day') {
       const ids = Array.isArray(data.ids) ? data.ids.filter(Boolean) : [];
       if (!ids.length) return json({ success: false, error: 'No item IDs provided' }, { status: 400 });
       let deleted = 0;
+      const changedWeeks = new Map();
       for (let i = 0; i < ids.length; i += 50) {
         const chunk = ids.slice(i, i + 50);
         const placeholders = chunk.map(() => '?').join(',');
-        await env.DB.prepare(`DELETE FROM recurring_period_rows WHERE id IN (${placeholders})`).bind(...chunk).run();
-        await env.DB.prepare(`DELETE FROM recurring_completions WHERE id IN (${placeholders})`).bind(...chunk).run().catch(() => null);
-        deleted += chunk.length;
+        const affected = await env.DB.prepare(`SELECT assigned_to,assigned_to_name,due_date,period_key FROM recurring_period_rows WHERE id IN (${placeholders})`).bind(...chunk).all();
+        for (const row of affected.results || []) {
+          const week = misWeekForDate(row.due_date || row.period_key);
+          if (week && !week.isCurrent) changedWeeks.set(`${row.assigned_to || row.assigned_to_name}:${week.weekStart}`, row);
+        }
+        const result = await env.DB.prepare(`UPDATE recurring_period_rows SET is_deleted=1,deleted_at=?,updated_at=? WHERE id IN (${placeholders}) AND is_deleted=0`).bind(nowIso(), nowIso(), ...chunk).run();
+        deleted += Number(result.meta?.changes || 0);
       }
+      for (const row of changedWeeks.values()) await refreshChecklistMisSnapshot(env, row);
       return json({ success: true, data: { deleted, mode: 'day' } });
     } else if (mode === 'whole') {
-      const templateIds = Array.isArray(data.templateIds) ? data.templateIds.filter(Boolean) : [];
+      const templateIds = Array.isArray(data.templateIds) ? [...new Set(data.templateIds.filter(id => typeof id === 'string' && id.trim()))] : [];
       if (!templateIds.length) return json({ success: false, error: 'No template IDs provided' }, { status: 400 });
-      let deleted = 0;
+      if (templateIds.length > 25) return json({ success: false, error: 'Delete at most 25 recurring tasks at once' }, { status: 400 });
+      let deleted = 0, deletedPeriods = 0;
       for (const tId of templateIds) {
-        await env.DB.prepare(
-          `DELETE FROM recurring_period_rows
-           WHERE template_id = ?
-             AND (
-               (LOWER(category) = 'monthly' AND period_key >= ?)
-               OR (LOWER(category) = 'weekly' AND COALESCE(period_end, due_date, period_key) >= ?)
-               OR (LOWER(category) = 'daily' AND period_key >= ?)
-             )`
-        ).bind(tId, today.slice(0, 7), today, today, today).run().catch(() => null);
-        await env.DB.prepare("DELETE FROM recurring_templates WHERE id = ?").bind(tId).run();
-        await env.DB.prepare("DELETE FROM recurring_completions WHERE template_id = ?").bind(tId).run().catch(() => null);
-        deleted++;
+        const result = await deleteRecurringDefinition(env, tId);
+        if (result) { deleted++; deletedPeriods += result.deletedPeriods; }
       }
-      return json({ success: true, data: { deleted, mode: 'whole' } });
+      return json({ success: true, data: { deleted, deletedPeriods, mode: 'whole' } });
     }
     return json({ success: false, error: 'Invalid batch delete mode' }, { status: 400 });
   }
   if (path === "/recurring/checklist" && req.method === "GET") {
     try {
-    const tomorrowStr = addDaysDateStr(getIstDateParts().dateStr, 1);
     const startDate = url.searchParams.get('startDate'), endDate = url.searchParams.get('endDate');
+    const hasDateRange=Boolean(startDate&&endDate);
     const category = url.searchParams.get('category') || 'Daily';
     const date = url.searchParams.get('date') || getIstDateParts().dateStr;
-    const due="due_date";
     const clauses=["is_deleted=0","status!='Deleted'"],binds=[];
+    const scope=[],scopeBinds=[];
     const paged=url.searchParams.has('limit');
     const scopeUid=url.searchParams.get('scopeUid')||url.searchParams.get('uid');
     const scopeName=url.searchParams.get('scopeName')||url.searchParams.get('userName');
     const scopeDepartment=url.searchParams.get('scopeDepartment');
     if(scopeUid||scopeName||scopeDepartment){
-      const scope=[];
       if(scopeUid){
-        scope.push('(assigned_to=? OR LOWER(assigned_to)=LOWER(?))');
-        binds.push(scopeUid, scopeUid);
+        scope.push('assigned_to=?');
+        scopeBinds.push(scopeUid);
       }
       if(scopeName){
         const cleanName = scopeName.trim();
@@ -2594,25 +2733,22 @@ async function routeRecurring(req, env, url) {
         // rely on (admin/leader filtering by a typed name alone).
         if (normName && !scopeUid) {
           scope.push('(TRIM(LOWER(assigned_to_name))=LOWER(?) OR LOWER(assigned_to_name) LIKE ?)');
-          binds.push(cleanName, `%${normName}%`);
+          scopeBinds.push(cleanName, `%${normName}%`);
         } else {
           scope.push('TRIM(LOWER(assigned_to_name))=LOWER(?)');
-          binds.push(cleanName);
+          scopeBinds.push(cleanName);
         }
       }
       if(scopeDepartment){
         const cleanDept = scopeDepartment.trim();
         scope.push('(department=? OR TRIM(LOWER(department))=LOWER(?))');
-        binds.push(cleanDept, cleanDept);
+        scopeBinds.push(cleanDept, cleanDept);
       }
-      clauses.push('('+scope.join(' OR ')+')');
     }
-    if (startDate && endDate) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) return json({success:false,error:'Invalid date range'},{status:400});
-      const startMonth = startDate.slice(0, 7), endMonth = endDate.slice(0, 7);
-      const months = [startMonth];
-      if (endMonth !== startMonth) months.push(endMonth);
-      clauses.push('month_key IN ('+months.map(()=>'?').join(',')+')');binds.push(...months);
+    if (hasDateRange) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate>endDate) return json({success:false,error:'Invalid date range'},{status:400});
+      // due_date is the source of truth. A two-month month_key filter used to
+      // hide the middle months of longer history ranges and added index work.
       clauses.push('due_date>=? AND due_date<=?');binds.push(startDate, endDate);
       const catParam = url.searchParams.get('category');
       if (catParam && catParam.toLowerCase() !== 'all') { clauses.push('category=?'); binds.push(catParam); }
@@ -2638,7 +2774,12 @@ async function routeRecurring(req, env, url) {
     }
     if(paged){
       const cursor=url.searchParams.get('cursor');
-      if(cursor){clauses.push('id>?');binds.push(cursor);}
+      const cursorMatch=cursor?.match(/^(\d{4}-\d{2}-\d{2})\|(.+)$/);
+      const legacyCursor=Boolean(cursor&&!cursorMatch);
+      const noDueDateFilter=!hasDateRange&&(category==='Monthly'||(category.toLowerCase()==='all'&&url.searchParams.get('exactDate')!=='true'));
+      const legacyOrder=legacyCursor||noDueDateFilter;
+      if(cursorMatch&&!noDueDateFilter){clauses.push('(due_date>? OR (due_date=? AND id>?))');binds.push(cursorMatch[1],cursorMatch[1],cursorMatch[2]);}
+      else if(cursor){clauses.push('id>?');binds.push(cursorMatch?cursorMatch[2]:cursor);}
       const search=String(url.searchParams.get('search')||'').trim().slice(0,100).toLowerCase();
       if(search.length>=2){
         const pattern='%'+search.replace(/[\\%_]/g,'\\$&')+'%';
@@ -2648,11 +2789,28 @@ async function routeRecurring(req, env, url) {
       const requestedLimit=Number(url.searchParams.get('limit'));
       const defaultLimit=['Weekly','Monthly'].includes(category)?300:100;
       const limit=Math.min(300,Math.max(1,requestedLimit||defaultLimit));
-      const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY id LIMIT ?').bind(...binds,limit+1).all();
+      let result;
+      if(scopeUid&&scopeName&&!scopeDepartment&&!legacyOrder){
+        const where=clauses.join(' AND ');
+        const sql=`WITH uid_rows AS (
+          SELECT id,due_date FROM recurring_period_rows WHERE ${where} AND assigned_to=? ORDER BY due_date,id LIMIT ?
+        ), name_rows AS (
+          SELECT id,due_date FROM recurring_period_rows WHERE ${where} AND TRIM(LOWER(assigned_to_name))=LOWER(?) ORDER BY due_date,id LIMIT ?
+        ), matches AS (
+          SELECT id,due_date FROM uid_rows UNION SELECT id,due_date FROM name_rows
+        ) SELECT p.* FROM matches m JOIN recurring_period_rows p ON p.id=m.id ORDER BY m.due_date,m.id LIMIT ?`;
+        result=await env.DB.prepare(sql).bind(...binds,scopeUid,limit+1,...binds,scopeName.trim(),limit+1,limit+1).all();
+      }else{
+        const where=[...clauses];
+        if(scope.length)where.push('('+scope.join(' OR ')+')');
+        result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+where.join(' AND ')+(legacyOrder?' ORDER BY id LIMIT ?':' ORDER BY due_date,id LIMIT ?')).bind(...binds,...scopeBinds,limit+1).all();
+      }
       const found=result.results||[],hasMore=found.length>limit,selected=found.slice(0,limit);
       const items=selected.map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
-      return json({success:true,data:{items,hasMore,nextCursor:hasMore?selected[selected.length-1].id:null}});
+      const last=selected[selected.length-1];
+      return json({success:true,data:{items,hasMore,nextCursor:hasMore?(legacyOrder?last.id:`${last.due_date}|${last.id}`):null}});
     }
+    if(scope.length){clauses.push('('+scope.join(' OR ')+')');binds.push(...scopeBinds);}
     const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY due_date,id LIMIT 300').bind(...binds).all();
     const data=(result.results||[]).slice(0,300).map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
     return json({success:true,data,meta:{istDate:date,count:data.length,hasMore:(result.results||[]).length>=300,readOnly:true}});
@@ -2667,6 +2825,8 @@ async function routeRecurring(req, env, url) {
       return json({ success: false, error: "Invalid sheet period update" }, { status: 400 });
     }
     const now = nowIso();
+    const ids = [...new Set(items.map(item => String(item.id)))];
+    const affected = await env.DB.prepare(`SELECT id,assigned_to,assigned_to_name,due_date,period_key FROM recurring_period_rows WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all();
     const results = await env.DB.batch(items.map(item => {
       const actualDate = /^\d{4}-\d{2}-\d{2}$/.test(String(item.actualDate || '')) ? String(item.actualDate) : null;
       const completed = item.status === 'Completed' || item.status === 'Verified';
@@ -2674,7 +2834,83 @@ async function routeRecurring(req, env, url) {
         "UPDATE recurring_period_rows SET status=?,completed_at=CASE WHEN ? THEN COALESCE(?,completed_at) ELSE NULL END,is_on_time=COALESCE(?,is_on_time),updated_at=? WHERE id=? AND status NOT IN ('Completed', 'Verified') AND is_deleted=0"
       ).bind(item.status, completed ? 1 : 0, completed && actualDate ? `${actualDate}T12:00:00+05:30` : null, completed && actualDate ? (actualDate <= String(item.dueDate || actualDate) ? 1 : 0) : null, now, String(item.id));
     }));
+    const changedIds = new Set(items.filter((_, index) => Number(results[index]?.meta?.changes || 0) > 0).map(item => String(item.id)));
+    const changedWeeks = new Map();
+    for (const row of affected.results || []) if (changedIds.has(row.id)) {
+      const week = misWeekForDate(row.due_date || row.period_key);
+      if (week && !week.isCurrent) changedWeeks.set(`${row.assigned_to || row.assigned_to_name}:${week.weekStart}`, row);
+    }
+    for (const row of changedWeeks.values()) await refreshChecklistMisSnapshot(env, row);
     return json({ success: true, data: { updated: results.reduce((n, result) => n + Number(result.meta?.changes || 0), 0) } });
+  }
+  // Complete selected checklist occurrences in one authenticated, permission-checked batch.
+  if (path === "/recurring/completions/batch" && req.method === "POST") {
+    const data = await body(req);
+    const actor = data.actor || {};
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (!items.length || items.length > 100 || !actor.uid || !actor.name || !actor.role) {
+      return json({ success: false, error: "Select between 1 and 100 valid checklist periods" }, { status: 400 });
+    }
+    const unique = new Map();
+    for (const item of items) {
+      const templateId = String(item?.templateId || "").trim();
+      const periodKey = String(item?.periodKey || "");
+      if (!templateId || !/^\d{4}-\d{2}-\d{2}$/.test(periodKey)) {
+        return json({ success: false, error: "Invalid checklist period" }, { status: 400 });
+      }
+      unique.set(`${templateId}:${periodKey}`, { templateId, periodKey });
+    }
+    const requested = [...unique.values()];
+    const rows = [];
+    for (let i = 0; i < requested.length; i += 50) {
+      const chunk = requested.slice(i, i + 50);
+      const predicates = chunk.map(() => "(template_id=? AND period_key=?)").join(" OR ");
+      const binds = chunk.flatMap(item => [item.templateId, item.periodKey]);
+      const result = await env.DB.prepare(`SELECT * FROM recurring_period_rows WHERE ${predicates}`).bind(...binds).all();
+      rows.push(...(result.results || []));
+    }
+    if (rows.length !== requested.length) return json({ success: false, error: "One or more selected checklist periods no longer exist" }, { status: 404 });
+
+    const actorName = normalizePersonName(actor.name);
+    const actorDepartment = String(actor.department || "").trim().toLowerCase();
+    const isAdmin = String(actor.role).toLowerCase() === "admin";
+    const isLeader = String(actor.role).toLowerCase() === "leader";
+    for (const row of rows) {
+      const isMine = Boolean((row.assigned_to && row.assigned_to === actor.uid) ||
+        (normalizePersonName(row.assigned_to_name) && normalizePersonName(row.assigned_to_name) === actorName));
+      const isTeam = isLeader && actorDepartment && actorDepartment === String(row.department || "").trim().toLowerCase();
+      if (!isAdmin && !isMine && !isTeam) return json({ success: false, error: "Forbidden for one or more selected checklist periods" }, { status: 403 });
+      if (row.is_deleted || row.status === "Deleted") return json({ success: false, error: "Revive deleted checklist periods before completing them" }, { status: 409 });
+      const due = String(row.due_date || row.period_key).slice(0, 10);
+      const today = getIstDateParts().dateStr;
+      if (due > today) return json({ success: false, error: "Cannot complete future checklist periods" }, { status: 409 });
+    }
+
+    const now = nowIso();
+    const updates = rows.filter(row => !["Completed", "Verified"].includes(row.status));
+    const completionValues = new Map();
+    const results = await env.DB.batch(updates.map(row => {
+      const due = String(row.due_date || row.period_key).slice(0, 10);
+      const today = getIstDateParts().dateStr;
+      const daysDiff = Math.round(((Date.parse(today + "T00:00:00Z") || 0) - (Date.parse(due + "T00:00:00Z") || 0)) / 86400000);
+      const onTime = row.completed_at ? Number(row.is_on_time ?? 1) : (daysDiff <= 1 ? 1 : 0);
+      completionValues.set(String(row.id), { completedAt: row.completed_at || now, isOnTime: onTime === 1 });
+      return env.DB.prepare("UPDATE recurring_period_rows SET status='Completed',completed_at=COALESCE(completed_at,?),is_on_time=?,updated_at=? WHERE id=? AND status NOT IN ('Completed','Verified') AND is_deleted=0")
+        .bind(now, onTime, now, row.id);
+    }));
+    const changed = new Set(updates.filter((_, index) => Number(results[index]?.meta?.changes || 0) > 0).map(row => String(row.id)));
+    const changedWeeks = new Map();
+    for (const row of rows) if (changed.has(String(row.id))) {
+      const week = misWeekForDate(row.due_date || row.period_key);
+      if (week && !week.isCurrent) changedWeeks.set(`${row.assigned_to || row.assigned_to_name}:${week.weekStart}`, row);
+    }
+    for (const row of changedWeeks.values()) await refreshChecklistMisSnapshot(env, row);
+    return json({ success: true, data: {
+      completed: rows.map(row => ({ templateId: row.template_id, periodKey: row.period_key,
+        completedAt: completionValues.get(String(row.id))?.completedAt || row.completed_at || now,
+        isOnTime: completionValues.get(String(row.id))?.isOnTime ?? (Number(row.is_on_time ?? 1) === 1) })),
+      skipped: rows.length - changed.size
+    } });
   }
   if (path === "/recurring/completions" && req.method === "POST") {
     const data=await body(req),templateId=String(data.templateId||''),periodKey=String(data.periodKey||''),action=String(data.action||'complete');
@@ -2683,35 +2919,39 @@ async function routeRecurring(req, env, url) {
     if(!row)return json({success:false,error:'Checklist period not found'},{status:404});
     if((row.is_deleted||row.status==='Deleted')&&!['revive','remark'].includes(action))return json({success:false,error:'Revive this period before changing it'},{status:409});
     if (action === 'skip_day') {
-      await env.DB.prepare('DELETE FROM recurring_period_rows WHERE template_id=? AND period_key=?').bind(templateId, periodKey).run();
-      await env.DB.prepare('DELETE FROM recurring_completions WHERE template_id=? AND period_key=?').bind(templateId, periodKey).run().catch(() => null);
-      return json({ success: true, data: { templateId, periodKey, deleted: true, permanent: true, deletedScope: 'day' } });
+      if (row.is_deleted) return json({ success: false, error: 'Checklist day is already deleted' }, { status: 409 });
+      const now = nowIso();
+      await env.DB.prepare('UPDATE recurring_period_rows SET is_deleted=1,deleted_at=?,updated_at=? WHERE template_id=? AND period_key=? AND is_deleted=0').bind(now, now, templateId, periodKey).run();
+      await refreshChecklistMisSnapshot(env, row);
+      return json({ success: true, data: { templateId, periodKey, deleted: true, permanent: false, deletedScope: 'day' } });
     }
-    const now=nowIso(),deleted=action==='dead';
-    const status=deleted?'Deleted':action==='uncomplete'||action==='revive'?'Pending':action==='remark'?row.status:'Completed';
+    const now=nowIso(),dead=action==='dead';
+    const status=dead?'Dead':action==='uncomplete'||action==='revive'?'Pending':action==='remark'?row.status:'Completed';
     const completed=status==='Completed'||status==='Verified';
     const due=String(row.due_date||periodKey).slice(0,10);
-    const cat=String(row.category||'').toLowerCase();
     const todayStr=getIstDateParts().dateStr;
-    const isDaily=cat==='daily';
     const dueMs=Date.parse(due+'T00:00:00Z')||0;
     const todayMs=Date.parse(todayStr+'T00:00:00Z')||0;
     const daysDiff=Math.round((todayMs-dueMs)/86400000);
-    const isBufferedOnTime=isDaily ? daysDiff<=1 : due>=todayStr;
-    const completedAt=action==='remark'?row.completed_at:completed?(row.completed_at||(isDaily&&daysDiff===1?`${due}T23:59:59+05:30`:now)):null;
+    if (completed && daysDiff < 0) return json({success:false,error:'Cannot complete a future checklist period'},{status:409});
+    // Every checklist frequency has the same one-calendar-day grace period.
+    // Keep the real completion timestamp; the on-time flag carries the grace rule.
+    const isBufferedOnTime=daysDiff>=0&&daysDiff<=1;
+    const completedAt=action==='remark'?row.completed_at:completed?(row.completed_at||now):null;
     const onTime=completed?(row.completed_at?row.is_on_time:(isBufferedOnTime?1:0)):row.is_on_time;
     const remark=data.remark===undefined?row.remark:String(data.remark).trim(),remarkBy=data.remarkBy?String(data.remarkBy):row.remark_by;
     // Period rows own checklist state; ordinary status changes leave the indexed
     // is_deleted column untouched and do not duplicate data in recurring_completions.
-    const changeDeletion=deleted||action==='revive';
+    const changeDeletion=dead||action==='revive';
     const sql=changeDeletion
       ? 'UPDATE recurring_period_rows SET status=?,completed_at=?,is_on_time=?,is_deleted=?,deleted_at=?,remark=?,remark_by=?,updated_at=? WHERE template_id=? AND period_key=?'
       : 'UPDATE recurring_period_rows SET status=?,completed_at=?,is_on_time=?,remark=?,remark_by=?,updated_at=? WHERE template_id=? AND period_key=?';
     const values=changeDeletion
-      ? [status,completedAt,onTime??1,deleted?1:0,deleted?now:null,remark,remarkBy,now,templateId,periodKey]
+      ? [status,completedAt,onTime??1,0,dead?now:null,remark,remarkBy,now,templateId,periodKey]
       : [status,completedAt,onTime??1,remark,remarkBy,now,templateId,periodKey];
     await env.DB.prepare(sql).bind(...values).run();
-    return json({success:true,data:{templateId,periodKey,status,completed,completedAt,remark,remarkBy,dead:deleted,deadAt:deleted?now:null,deletedScope:deleted?'day':undefined,uncompleted:action==='uncomplete'}});
+    if (status !== row.status || (completed && Number(onTime) !== Number(row.is_on_time))) await refreshChecklistMisSnapshot(env, row);
+    return json({success:true,data:{templateId,periodKey,status,completed,completedAt,isOnTime:Number(onTime)===1,remark,remarkBy,dead,deadAt:dead?now:null,uncompleted:action==='uncomplete'}});
   }
   if (path === "/recurring/mis-counts" && req.method === 'GET') {
     const weekStart=url.searchParams.get('weekStart'),weekEnd=url.searchParams.get('weekEnd');
@@ -2739,7 +2979,7 @@ var index_default = {
     if(url.searchParams.get('fresh')==='true')invalidateReadCache();
     const cached=getCachedRead(req,url);
     if(cached)return new Response(cached.body,{status:cached.status,headers:{...Object.fromEntries(cached.headers),...corsHeaders(wrappedEnv)}});
-    const response = await routeLifecycle(req,wrappedEnv,url,{nextTaskId,taskFromRow,revisionFromRow,resolveRecurringDefinition,buildMonthPeriodRows,periodRowId,adjustTaskCount}) || await routeReadOptimizations(req,wrappedEnv,url,taskFromRow) || await routeUsers(req, wrappedEnv, url) || await routeDepartments(req, wrappedEnv, url) || await routeTasks(req, wrappedEnv, url) || await routeScores(req, wrappedEnv, url) || await routeRevisions(req, wrappedEnv, url) || await routeCrm(req, wrappedEnv, url) || await routeAutomations(req, wrappedEnv, url) || await routeMis(req, wrappedEnv, url) || await routeRecurring(req, wrappedEnv, url) || await routeChecklist(req, wrappedEnv, url) || json({ success: false, error: "Not found" }, { status: 404 });
+    const response = await routeLifecycle(req,wrappedEnv,url,{nextTaskId,taskFromRow,revisionFromRow,resolveRecurringDefinition,buildMonthPeriodRows,periodRowId,adjustTaskCount,deleteRecurringDefinition,refreshDelegationForTaskChange}) || await routeTrash(req,wrappedEnv,url,{adjustTaskCount,refreshDelegationForTaskChange,refreshChecklistMisSnapshot,invalidateTemplates:()=>{activeTemplateIdsCache=null;}}) || await routeReadOptimizations(req,wrappedEnv,url,taskFromRow) || await routeUsers(req, wrappedEnv, url) || await routeDepartments(req, wrappedEnv, url) || await routeTasks(req, wrappedEnv, url) || await routeScores(req, wrappedEnv, url) || await routeRevisions(req, wrappedEnv, url) || await routeCrm(req, wrappedEnv, url) || await routeAutomations(req, wrappedEnv, url) || await routeMis(req, wrappedEnv, url) || await routeRecurring(req, wrappedEnv, url) || await routeChecklist(req, wrappedEnv, url) || json({ success: false, error: "Not found" }, { status: 404 });
     if(req.method!=='GET'&&response.ok){invalidateReadCache();await syncCachedTasksFromMutation(req,url,response);}
     await cacheRead(req,url,response);
     return new Response(response.body, { status: response.status, headers: { ...Object.fromEntries(response.headers), ...corsHeaders(wrappedEnv) } });

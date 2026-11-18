@@ -28,13 +28,14 @@ export default function VerificationNotificationBell({
   const lastLoadedAt = useRef(0);
   const isAdmin = role === 'admin';
 
-  const load = useCallback(async (silent = false) => {
+  const load = useCallback(async (silent = false, fresh = false) => {
+    if (silent && !fresh && Date.now() - lastLoadedAt.current < 15_000) return;
     if (!silent) setLoading(true);
     try {
       const baseUrl = isAdmin
         ? '/api/tasks?scope=all&filter=true&verificationPending=true&excludeRecurring=true&limit=50'
         : '/api/tasks?scope=handoff&filter=true&verificationPending=true&excludeRecurring=true&limit=50';
-      const url = `${baseUrl}&fresh=true&t=${Date.now()}`;
+      const url = fresh ? `${baseUrl}&fresh=true` : baseUrl;
       const res = await fetch(url, { cache: 'no-store' });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to load notifications');
@@ -60,38 +61,24 @@ export default function VerificationNotificationBell({
     // Initial fetch on mount
     load();
 
-    // 1. Listen for real-time task update events from the server (SSE) across any computer/user
-    let eventSource: EventSource | null = null;
-    try {
-      eventSource = new EventSource('/api/tasks/events');
-      eventSource.onmessage = () => {
-        load(true);
-      };
-      eventSource.onerror = () => {
-        // EventSource will automatically attempt reconnection
-      };
-    } catch {
-      // EventSource not supported
-    }
-
-    // 2. Listen for cross-tab task update events on the same computer
+    // Listen for cross-tab task update events on the same computer.
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel('ahl-task-updates');
       bc.onmessage = () => {
-        load(true);
+        load(true, true);
       };
     } catch {
       // BroadcastChannel not supported
     }
 
-    // 3. Listen for local window task status update events
+    // Listen for local window task status update events.
     function onTaskStatusUpdated() {
-      load(true);
+      load(true, true);
     }
     window.addEventListener('task-status-updated', onTaskStatusUpdated);
 
-    // 4. Refetch when admin focuses or returns to this tab
+    // Refetch when the user returns to this tab.
     function onFocusOrVisible() {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         load(true);
@@ -100,8 +87,15 @@ export default function VerificationNotificationBell({
     window.addEventListener('focus', onFocusOrVisible);
     document.addEventListener('visibilitychange', onFocusOrVisible);
 
+    // Periodic background sync every 60s while the tab is active so completions by other users appear automatically
+    const pollTimer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        load(true);
+      }
+    }, 60_000);
+
     return () => {
-      if (eventSource) eventSource.close();
+      clearInterval(pollTimer);
       if (bc) bc.close();
       window.removeEventListener('task-status-updated', onTaskStatusUpdated);
       window.removeEventListener('focus', onFocusOrVisible);
@@ -196,9 +190,7 @@ export default function VerificationNotificationBell({
           bc.postMessage({ type: 'task-updated' });
           bc.close();
         } catch {}
-        for (const verifiedTask of verifiedTasks) {
-          window.dispatchEvent(new CustomEvent('task-status-updated', { detail: verifiedTask }));
-        }
+        window.dispatchEvent(new CustomEvent('task-status-updated', { detail: verifiedTasks[0] || {} }));
       }
 
       setItems(prev => prev.filter(t => !verifiedIds.has(t.taskId)));
@@ -225,7 +217,7 @@ export default function VerificationNotificationBell({
           onClick={() => {
             const nextOpen = !open;
             setOpen(nextOpen);
-            if (nextOpen) load(true);
+            if (nextOpen) load(true, true);
           }}
           className={cn(
             'relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-900',

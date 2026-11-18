@@ -437,7 +437,7 @@ export async function getRecurringChecklistPage(params: {
   endDate?: string;
   includeAllPeriods?: boolean;
 }): Promise<{ items: RecurringChecklistItem[]; nextCursor: string | null; hasMore: boolean }> {
-  const query = new URLSearchParams({ category: params.category, limit: '100' });
+  const query = new URLSearchParams({ category: params.category, limit: '50' });
   if (params.date) query.set('date', params.date);
   if (params.exactDate) query.set('exactDate', 'true');
   if (params.cursor) query.set('cursor', params.cursor);
@@ -476,6 +476,16 @@ export async function completeRecurringTask(data: {
   // A checklist occurrence never changes the standing task definition.
   // Propagate write failures: an in-memory fallback must not report a persisted completion.
   return cfApi<Record<string, unknown>>('/recurring/completions', {
+    method: 'POST', body: JSON.stringify(data),
+  });
+}
+
+export async function completeRecurringTasksBatch(data: {
+  items: Array<{ templateId: string; periodKey: string }>;
+  actor: { uid: string; name: string; role: string; department: string };
+}): Promise<{ completed: Array<{ templateId: string; periodKey: string; completedAt: string; isOnTime: boolean }>; skipped: number }> {
+  if (!hasCloudflareApi()) throw new Error('Cloudflare D1 is not configured');
+  return cfApi('/recurring/completions/batch', {
     method: 'POST', body: JSON.stringify(data),
   });
 }

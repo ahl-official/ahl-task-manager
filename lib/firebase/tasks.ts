@@ -427,24 +427,13 @@ export async function adminDeleteTask(taskId: string): Promise<boolean> {
   if (hasCloudflareApi()) {
     await cfApi(`/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
     removeTaskFromReadCache(taskId);
+    clearFirestoreReadCache('tasks:counts:');
     clearFirestoreReadCache('revisions:');
     clearFirestoreReadCache('scores:');
     return true;
   }
 
-  const ref = adminDb.collection(COL).doc(taskId);
-  const snap = await ref.get();
-  if (!snap.exists) return false;
-
-  const revisionSnap = await adminDb.collection('revisions').where('taskId', '==', taskId).get();
-  const batch = adminDb.batch();
-  revisionSnap.docs.forEach(doc => batch.delete(doc.ref));
-  batch.delete(ref);
-  await batch.commit();
-  removeTaskFromReadCache(taskId);
-  clearFirestoreReadCache('revisions:');
-  clearFirestoreReadCache('scores:');
-  return true;
+  throw new Error('Cloudflare D1 is required for reversible task deletion');
 }
 
 export async function adminGetTask(taskId: string): Promise<Task | null> {
@@ -485,12 +474,12 @@ export async function adminGetTasksByIds(taskIds: string[]): Promise<Task[]> {
   return rows.filter(row => row.exists).map(row => normalizeTaskDoc(row.id, row.data()!));
 }
 
-export async function adminGetTasksByAssignee(uid: string): Promise<Task[]> {
+export async function adminGetTasksByAssignee(uid: string, excludeRecurring = false): Promise<Task[]> {
   if (hasCloudflareApi()) {
-    const key = `tasks:assignee:${uid}`;
+    const key = `tasks:assignee:${uid}:${excludeRecurring ? 'one-time' : 'all'}`;
     return cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
       try {
-        const tasks = await cfApi<any[]>(`/tasks?scope=mine&uid=${encodeURIComponent(uid)}&limit=${MAX_TASK_READ_LIMIT}`);
+        const tasks = await cfApi<any[]>(`/tasks?scope=mine&uid=${encodeURIComponent(uid)}&limit=${MAX_TASK_READ_LIMIT}${excludeRecurring ? '&excludeRecurring=true' : ''}`);
         return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
       } catch (err) {
         handleFirestoreReadError(`adminGetTasksByAssignee_cf(${uid})`, err);
@@ -701,7 +690,7 @@ export async function adminSearchTasks(queryText: string, options: TaskReadScope
   const params = taskScopeParams(department, scope);
   params.set('q', queryText.trim());
   params.set('limit', String(Math.min(Math.max(limit || 2000, 1), MAX_SEARCH_READ_LIMIT)));
-  if (options.fresh || options.verificationPending) {
+  if (options.fresh) {
     params.set('fresh', 'true');
     clearFirestoreReadCache('tasks:search:' + params.toString());
   }

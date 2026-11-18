@@ -66,6 +66,13 @@ CREATE INDEX IF NOT EXISTS idx_tasks_department_created ON tasks_current (depart
 CREATE INDEX IF NOT EXISTS idx_tasks_department_status_created ON tasks_current (department, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_due_status ON tasks_current (status, end_date);
 
+CREATE TABLE IF NOT EXISTS task_deletions (
+  task_id TEXT PRIMARY KEY,
+  previous_status TEXT NOT NULL,
+  deleted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_deletions_deleted_at ON task_deletions (deleted_at DESC, task_id);
+
 CREATE TABLE IF NOT EXISTS scores (
   uid TEXT PRIMARY KEY,
   name TEXT NOT NULL,

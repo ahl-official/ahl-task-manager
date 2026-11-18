@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const templates = await getRecurringTemplates({ category, assignedToName, isActive });
-    return NextResponse.json({ success: true, data: templates });
+    return NextResponse.json({ success: true, data: templates.filter(template => !template.metadata?.deleted) });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message || 'Failed to fetch recurring templates' }, { status: 500 });
   }

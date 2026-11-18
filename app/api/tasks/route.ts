@@ -12,7 +12,6 @@ import {
 } from '@/lib/firebase/tasks';
 import { adminIncrementScore, adminLog } from '@/lib/firebase/scores';
 import { clearFirestoreReadCache } from '@/lib/firebase/readCache';
-import { notifyTaskUpdated } from '@/lib/events/taskEvents';
 import {
   sendWhatsApp,
   msgTaskAssigned,
@@ -66,11 +65,11 @@ export async function GET(req: NextRequest) {
   const isFresh    = searchParams.get('fresh') === 'true' || searchParams.get('sync') === 'true';
   const isSearch = Boolean(searchQuery?.trim());
   const requestedLimit = searchParams.get('limit');
-  const limitParam = Number(requestedLimit);
+  const limitParam = requestedLimit === null || requestedLimit.trim() === '' ? NaN : Number(requestedLimit);
   // Search bar results have no 100 limit; standard lookups keep the 100 limit
   const maxResults = isSearch
-    ? (typeof limitParam === 'number' && Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 5000) : 5000)
-    : (typeof limitParam === 'number' && Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 100) : 100);
+    ? (Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 5000) : 100)
+    : (Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 100) : 100);
 
   if (isFresh) {
     clearFirestoreReadCache('tasks:');
@@ -109,7 +108,7 @@ export async function GET(req: NextRequest) {
         verificationPending: searchParams.get('verificationPending') === 'true',
         weekStart: searchParams.get('weekStart') || undefined,
         weekEnd: searchParams.get('weekEnd') || undefined,
-        fresh: isFresh || searchParams.get('verificationPending') === 'true' || searchParams.get('fresh') === 'true',
+        fresh: isFresh,
       });
       tasks = filterTasksForSession(session, tasks);
     } else if (scope === 'all' && (isAdmin || isLeader)) {
@@ -119,7 +118,7 @@ export async function GET(req: NextRequest) {
       tasks = await adminGetTasksByHandoff(session.uid, status as any);
     } else {
       const [databaseTasks, timelyTasks] = await Promise.all([
-        adminGetTasksByAssignee(session.uid),
+        adminGetTasksByAssignee(session.uid, true),
         getPersonalTimelyTasks(session),
       ]);
       tasks = mergePersonalDashboardTasks(databaseTasks, timelyTasks);
@@ -349,7 +348,6 @@ export async function POST(req: NextRequest) {
         ).catch(err => console.error('[Tasks API] Recurring task WAHA notification failed', err));
       }
 
-      notifyTaskUpdated();
       return NextResponse.json({
         success: true,
         data: {
@@ -442,7 +440,6 @@ export async function POST(req: NextRequest) {
       uid: session.uid,
     }).catch(err => console.error('[Tasks API] Task was created but audit log failed', err));
 
-    notifyTaskUpdated();
     return NextResponse.json({ success: true, data: serializeTask(task) }, { status: 201 });
   } catch (err: any) {
     console.error('POST /api/tasks error', err);

@@ -5,6 +5,7 @@ import { computeMisScoresForWeek, misSnapshotId } from '@/lib/mis/compute';
 import type { MisArchiveRow, MisWeeklySnapshot } from '@/lib/mis/types';
 import { formatWeekLabel, getMisWeekPeriod, getPreviousMisWeekPeriod } from '@/lib/mis/week';
 import { normalizePersonName, isVinittUser } from '@/lib/utils/names';
+import { clearMisCache } from '@/lib/mis/cache';
 
 const WEEKLY = 'misWeekly';
 const ARCHIVE = 'misArchive';
@@ -140,14 +141,20 @@ async function writeArchiveToFirebase(rows: MisArchiveRow[], weekKey: string) {
  * Upsert one weekly G4 snapshot per person.
  * Prefer Cloudflare D1 `mis_weekly`; on CF error fall back to Firestore + WAHA alert.
  */
-export async function saveMisWeeklySnapshots(input?: { weekStart?: string; weekEnd?: string }) {
+export async function saveMisWeeklySnapshots(input?: { weekStart?: string; weekEnd?: string; onlyName?: string }) {
   const weekMeta = input?.weekStart
     ? getMisWeekPeriod(input.weekStart)
     : getPreviousMisWeekPeriod();
 
   const weekStart = input?.weekStart ?? weekMeta.weekStart;
   const weekEnd = input?.weekEnd ?? weekMeta.weekEnd;
-  const scores = await computeMisScoresForWeek(weekStart, weekEnd);
+  // A stored week may have been corrected after the original PDF was created.
+  // Recompute it from the sources instead of reusing this instance's old score.
+  clearMisCache();
+  const computed = await computeMisScoresForWeek(weekStart, weekEnd, { strict: true });
+  const scores = input?.onlyName
+    ? computed.filter(row => normalizePersonName(row.name) === normalizePersonName(input.onlyName))
+    : computed;
   const nowIso = new Date().toISOString();
   const combinedWeek = formatWeekLabel(weekStart, weekEnd);
   const meta = getMisWeekPeriod(weekStart);

@@ -54,7 +54,7 @@ export async function GET(req: NextRequest) {
   const months = customMonth ? [customMonth] : getTargetMonths(todayKey);
 
   // D1 Usage Quota Guard:
-  // If writes have reached 80k or reads have reached 4.5M, don't run the trigger today.
+  // If writes have reached 80k or reads have reached 4M, don't run the trigger today.
   // The trigger is postponed to the next day's cron run (0 18 * * *).
   const budget = await checkD1RecurringBudget();
   if (!budget.allowed) {

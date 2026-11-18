@@ -44,23 +44,23 @@ function paramRow(
  * Checklist (timely Masters) + Delegation (Cloudflare One Time) + FMS (MIS Report sheets).
  * Results cached ~60s so Scores list + member detail share one compute.
  */
-export async function computeMisScoresForWeek(weekStart?: string, weekEnd?: string): Promise<MisPersonScore[]> {
+export async function computeMisScoresForWeek(weekStart?: string, weekEnd?: string, options: { strict?: boolean } = {}): Promise<MisPersonScore[]> {
   const week = weekStart && weekEnd
     ? { ...getMisWeekPeriod(weekStart), weekStart, weekEnd }
     : getMisWeekPeriod();
 
   const cacheKey = misCacheKey(['live', 'v2-params', week.weekStart, week.weekEnd]);
-  const cached = misCacheGet<MisPersonScore[]>(cacheKey);
+  const cached = options.strict ? null : misCacheGet<MisPersonScore[]>(cacheKey);
   if (cached) return cached;
-  const fallback = misCacheGetLastKnown<MisPersonScore[]>(cacheKey);
+  const fallback = options.strict ? null : misCacheGetLastKnown<MisPersonScore[]>(cacheKey);
 
   try {
     const [checklistDetailed, delegation, fms, users, reconciled] = await Promise.all([
-      getChecklistDetailedCounts(week.weekStart, week.weekEnd).catch(() => ({ byName: new Map(), paramCounts: [] })),
-      getDelegationBuckets(week.weekStart, week.weekEnd).catch(() => new Map()),
-      getFmsBuckets(week.weekStart, week.weekEnd).catch(() => new Map()),
-      adminGetAllUsers().catch(() => []),
-      getReconciledScores(week.weekStart, week.weekEnd).catch(() => []),
+      options.strict ? getChecklistDetailedCounts(week.weekStart, week.weekEnd) : getChecklistDetailedCounts(week.weekStart, week.weekEnd).catch(() => ({ byName: new Map(), paramCounts: [] })),
+      options.strict ? getDelegationBuckets(week.weekStart, week.weekEnd) : getDelegationBuckets(week.weekStart, week.weekEnd).catch(() => new Map()),
+      options.strict ? getFmsBuckets(week.weekStart, week.weekEnd) : getFmsBuckets(week.weekStart, week.weekEnd).catch(() => new Map()),
+      options.strict ? adminGetAllUsers() : adminGetAllUsers().catch(() => []),
+      options.strict ? getReconciledScores(week.weekStart, week.weekEnd) : getReconciledScores(week.weekStart, week.weekEnd).catch(() => []),
     ]);
 
     const checklist = checklistDetailed.byName;
@@ -132,7 +132,7 @@ export async function computeMisScoresForWeek(weekStart?: string, weekEnd?: stri
     }
 
     rows.sort((a, b) => a.name.localeCompare(b.name));
-    misCacheSet(cacheKey, rows, 60 * 60 * 1000); // 1 hour cache
+    if (!options.strict) misCacheSet(cacheKey, rows, 60 * 60 * 1000); // 1 hour cache
     return rows;
   } catch (err) {
     if (fallback && fallback.length > 0) {

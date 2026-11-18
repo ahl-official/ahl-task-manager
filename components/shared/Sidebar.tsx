@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard, CheckSquare, Users, Calendar,
   BarChart2, RefreshCw, PlusCircle, LogOut, Menu, X,
-  Building2, ListChecks, HelpCircle, Layers,
+  Building2, ListChecks, HelpCircle, Layers, Trash2,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
@@ -20,10 +20,12 @@ const ADMIN_NAV = [
   { href: '/admin/checklist',   icon: ListChecks,      label: 'Checklist'  },
   { href: '/admin/fms',         icon: Layers,          label: 'FMS'        },
   { href: '/admin/tasks',       icon: CheckSquare,     label: 'All Tasks'  },
+  { href: '/admin/deleted',     icon: Trash2,          label: 'Deleted'    },
   { href: '/admin/calendar',    icon: Calendar,        label: 'Calendar'   },
   { href: '/admin/create-task', icon: PlusCircle,      label: 'Create Task'},
   { href: '/admin/revisions',   icon: RefreshCw,       label: 'Revisions'  },
   { href: '/admin/scores',      icon: BarChart2,       label: 'Scores'     },
+  { href: '/admin/monthly-scores', icon: BarChart2,    label: 'Monthly Scores' },
   { href: '/admin/users',       icon: Users,           label: 'Team'       },
   { href: '/admin/help',        icon: HelpCircle,      label: 'Help'       },
 ];
