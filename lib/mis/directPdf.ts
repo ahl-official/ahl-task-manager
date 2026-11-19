@@ -34,6 +34,8 @@ export interface MisMasterPersonReportPdf {
   weekNumber?: string | number;
   weekStartLabel?: string;
   weekEndLabel?: string;
+  weekStart?: string;
+  weekEnd?: string;
   gapLabel?: string;
   lastWeekPlannedPercent?: string;
   nextWeekPlannedPercent?: string;
@@ -43,6 +45,7 @@ export interface MisMasterPersonReportPdf {
     kpi: string;
     planned: number;
     done: number;
+    onTime?: number;
     gapPercent: number | null;
   }>;
   parameters?: Array<{
@@ -114,6 +117,7 @@ export async function downloadMisWeeklyPdf(person: MisPersonViewPdf, _portalMis?
 export async function downloadMisMasterPdf(report: MisMasterPersonReportPdf) {
   const defaultPeriod = getMisWeekPeriod();
   const overall = report.rollups?.[0];
+  const onTimeRollup = report.rollups?.find(r => /on.time/i.test(r.label));
   const checklistRollup = report.rollups?.find(r => /checklist/i.test(r.label) || /checklist/i.test(r.kra));
   const delegationRollup = report.rollups?.find(r => /delegation|one.time/i.test(r.label) || /delegation|one.time/i.test(r.kra));
   const fmsRollup = report.rollups?.find(r => /fms/i.test(r.label) || /fms/i.test(r.kra));
@@ -128,8 +132,8 @@ export async function downloadMisMasterPdf(report: MisMasterPersonReportPdf) {
       ? Number(String(report.weekNumber).replace(/\D/g, '')) || defaultPeriod.weekNumber
       : defaultPeriod.weekNumber;
 
-  const weekStart = report.weekStartLabel || defaultPeriod.weekStart;
-  const weekEnd = report.weekEndLabel || defaultPeriod.weekEnd;
+  const weekStart = report.weekStart || report.weekStartLabel || defaultPeriod.weekStart;
+  const weekEnd = report.weekEnd || report.weekEndLabel || defaultPeriod.weekEnd;
 
   const pdfBuffer = await buildWeeklyMisPdfAsync(
     {
@@ -137,11 +141,12 @@ export async function downloadMisMasterPdf(report: MisMasterPersonReportPdf) {
       department: report.department,
       planned: totalPlanned,
       done: totalDone,
-      onTime: totalDone,
+      onTime: overall?.onTime ?? onTimeRollup?.done ?? 0,
       gapPercent,
-      checklist: checklistRollup ? { planned: checklistRollup.planned, done: checklistRollup.done, onTime: checklistRollup.done } : undefined,
-      delegation: delegationRollup ? { planned: delegationRollup.planned, done: delegationRollup.done, onTime: delegationRollup.done } : undefined,
-      fms: fmsRollup ? { planned: fmsRollup.planned, done: fmsRollup.done, onTime: fmsRollup.done } : undefined,
+      onTimeGapPercent: onTimeRollup?.gapPercent ?? null,
+      checklist: checklistRollup ? { planned: checklistRollup.planned, done: checklistRollup.done, onTime: checklistRollup.onTime ?? 0 } : undefined,
+      delegation: delegationRollup ? { planned: delegationRollup.planned, done: delegationRollup.done, onTime: delegationRollup.onTime ?? 0 } : undefined,
+      fms: fmsRollup ? { planned: fmsRollup.planned, done: fmsRollup.done, onTime: fmsRollup.onTime ?? 0 } : undefined,
       parameters: report.parameters as any,
     },
     {

@@ -398,11 +398,12 @@ export async function buildWeeklyMisPdfAsync(
   const params = score.parameters || [];
   const officeParam = params.find(p => p.id === 'office');
   const salonParam = params.find(p => p.id === 'salon');
+  const dailyParam = params.find(p => p.id === 'daily');
   const weeklyParam = params.find(p => p.id === 'weekly');
 
-  const dailyPlanned = (officeParam?.planned ?? 0) + (salonParam?.planned ?? 0);
-  const dailyDone = (officeParam?.done ?? 0) + (salonParam?.done ?? 0);
-  const dailyOnTime = (officeParam?.onTime ?? 0) + (salonParam?.onTime ?? 0);
+  const dailyPlanned = dailyParam?.planned ?? ((officeParam?.planned ?? 0) + (salonParam?.planned ?? 0));
+  const dailyDone = dailyParam?.done ?? ((officeParam?.done ?? 0) + (salonParam?.done ?? 0));
+  const dailyOnTime = dailyParam?.onTime ?? ((officeParam?.onTime ?? 0) + (salonParam?.onTime ?? 0));
 
   const weeklyPlanned = weeklyParam?.planned ?? (score.checklist?.planned ? score.checklist.planned - dailyPlanned : 0);
   const weeklyDone = weeklyParam?.done ?? (score.checklist?.done ? score.checklist.done - dailyDone : 0);
@@ -746,7 +747,7 @@ export async function buildWeeklyMisPdfAsync(
   }
 
   // 1. PERSON SUMMARY BLOCK (White / Light)
-  const onTimeScoreStr = score.onTimeGapPercent != null ? (typeof score.onTimeGapPercent === 'number' ? `${score.onTimeGapPercent.toFixed(2)}%` : String(score.onTimeGapPercent)) : '0.00%';
+  const onTimeScoreStr = score.onTimeGapPercent != null ? (typeof score.onTimeGapPercent === 'number' ? `${score.onTimeGapPercent.toFixed(2)}%` : String(score.onTimeGapPercent)) : calcGap(totalOnTime, totalDone);
   drawDataRow(white, white, score.name, 'All work should be done', '% Work Not Done', '', totalPlanned, totalDone, mainScoreStr, '', true);
   drawDataRow(white, white, null, 'All work should be done\nOn-Time', '% Work Not Done\nOn-Time', '', totalDone, totalOnTime, onTimeScoreStr, '', false);
 

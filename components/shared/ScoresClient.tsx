@@ -1205,7 +1205,7 @@ function MisDashboard({
           label: 'Overall (On-Time)',
           kra: 'All work should be done On-Time',
           kpi: '% Work Not Done On-Time',
-          planned: total.planned,
+          planned: total.done,
           done: total.onTime,
           onTime: total.onTime,
           gapPercent: onTimeGapPercent,
