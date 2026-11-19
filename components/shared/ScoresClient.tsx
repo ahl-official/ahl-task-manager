@@ -145,6 +145,7 @@ export default function ScoresClient({
   const [mounted, setMounted] = useState(false);
   const [isFetchingUserTasks, setIsFetchingUserTasks] = useState(false);
   const [selectedPdfUsers, setSelectedPdfUsers] = useState<string[]>([]);
+  const [pdfMemberQuery, setPdfMemberQuery] = useState('');
   const [pdfDownloadProgress, setPdfDownloadProgress] = useState<string | null>(null);
   const [isDownloadingPdfs, setIsDownloadingPdfs] = useState(false);
 
@@ -530,6 +531,13 @@ export default function ScoresClient({
     lookupMis(pdfByKey, member.uid, member.name) !== null,
   );
   const selectedReportCount = membersWithReports.filter(member => selectedPdfUsers.includes(member.uid)).length;
+  // Search only the loaded directory; existing selections survive changes to the query.
+  const pdfSearchTerms = pdfMemberQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const matchingPdfMembers = memberDirectory.filter(member => {
+    const text = `${member.name} ${member.department}`.toLowerCase();
+    return pdfSearchTerms.every(term => text.includes(term));
+  });
+  const matchingReports = matchingPdfMembers.filter(member => lookupMis(pdfByKey, member.uid, member.name) !== null);
 
   async function downloadSelectedPdfs() {
     if (isDownloadingPdfs || misLoading) return;
@@ -785,16 +793,20 @@ export default function ScoresClient({
             Select members for PDF ({selectedReportCount})
           </summary>
           <div className="absolute left-0 top-full z-40 mt-1 w-full min-w-[260px] max-w-[360px] rounded-lg border border-gray-200 bg-white p-2 shadow-lg">
+            <input type="search" aria-label="Search PDF members" placeholder="Search name or department…"
+              value={pdfMemberQuery} onChange={event => setPdfMemberQuery(event.target.value)}
+              className="input mb-2 w-full" />
             <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-2 pb-2 text-xs">
-              <button type="button" disabled={misLoading || isDownloadingPdfs} className="font-medium text-brand-700 hover:underline disabled:opacity-50" onClick={() => setSelectedPdfUsers(membersWithReports.map(member => member.uid))}>
-                Select all with reports
+              <button type="button" disabled={misLoading || isDownloadingPdfs || matchingReports.length === 0} className="font-medium text-brand-700 hover:underline disabled:opacity-50" onClick={() => setSelectedPdfUsers(current => Array.from(new Set([...current, ...matchingReports.map(member => member.uid)])))}>
+                {pdfSearchTerms.length ? 'Select matching reports' : 'Select all with reports'}
               </button>
               <button type="button" disabled={isDownloadingPdfs} className="text-gray-500 hover:underline disabled:opacity-50" onClick={() => setSelectedPdfUsers([])}>
                 Clear
               </button>
             </div>
             <div className="max-h-64 overflow-y-auto py-1">
-              {memberDirectory.map(member => {
+              {matchingPdfMembers.length === 0 && <p className="px-2 py-3 text-sm text-gray-500">No members match your search.</p>}
+              {matchingPdfMembers.map(member => {
                 const hasReport = lookupMis(pdfByKey, member.uid, member.name) !== null;
                 return (
                   <label key={member.uid} className={cn('flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-gray-50', !hasReport && 'cursor-not-allowed opacity-50')}>
