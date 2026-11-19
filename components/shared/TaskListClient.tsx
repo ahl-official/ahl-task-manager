@@ -509,9 +509,7 @@ export default function TaskListClient({
 
   const openTask = (task: TaskSerialized) => {
     if (RECURRING_CATEGORIES.has(task.category)) {
-      const taskDate = (task.endDate || task.dayKey || task.startDate || '').slice(0, 10);
       const params = new URLSearchParams({ category: task.category, taskId: task.taskId });
-      if (taskDate) params.set('date', taskDate);
       window.location.href = `/${role === 'admin' ? 'admin' : 'portal'}/checklist?${params}`;
       return;
     }

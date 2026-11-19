@@ -727,7 +727,8 @@ export default function ChecklistClient({
       setSearching(false);
       return;
     }
-    const lookupKey = `${category}:${startDate}_${endDate}:${query.toLowerCase()}`;
+    const activeRequestKey = requestKey.current;
+    const lookupKey = `${activeRequestKey}:${query.toLowerCase()}`;
     if (searchedKeys.current.has(lookupKey)) return;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
@@ -749,11 +750,21 @@ export default function ChecklistClient({
           qs.set('date', startDate);
           qs.set('exactDate', 'true');
         }
+        if (mineOnly) {
+          qs.set('mine', 'true');
+        } else if (selectedIndividuals.length === 1) {
+          qs.set('userName', selectedIndividuals[0]);
+          const individual = allUsers.find(user => namesEqual(user.name, selectedIndividuals[0]));
+          if (individual?.uid) qs.set('assignedTo', individual.uid);
+        } else if (selectedIndividuals.length > 1) {
+          qs.set('users', selectedIndividuals.join(','));
+        }
+        if (department) qs.set('department', department);
         const res = await fetch(`/api/checklist?${qs}`, { signal: controller.signal });
         const data = await res.json();
         if (!data.success) throw new Error(data.error);
         if (controller.signal.aborted) return;
-        if (requestKey.current !== `${category}:${startDate}_${endDate}`) return;
+        if (requestKey.current !== activeRequestKey) return;
         setRows(current => {
           const byId = new Map(current.map(row => [row.id, row]));
           let changed = false;
@@ -765,11 +776,10 @@ export default function ChecklistClient({
           }
           if (changed) {
             const merged = Array.from(byId.values());
-            const activeCacheKey = `${category}:${startDate}_${endDate}`;
-            if (categoryCache.current[activeCacheKey]) {
-              categoryCache.current[activeCacheKey].rows = merged;
+            if (categoryCache.current[activeRequestKey]) {
+              categoryCache.current[activeRequestKey].rows = merged;
             } else {
-              categoryCache.current[activeCacheKey] = {
+              categoryCache.current[activeRequestKey] = {
                 rows: merged,
                 elevated,
                 isAdmin,
@@ -793,7 +803,7 @@ export default function ChecklistClient({
     }, 350);
     return () => { window.clearTimeout(timer); controller.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, category, startDate, endDate, loading, visibleRows, initialTaskId]);
+  }, [search, category, startDate, endDate, loading, visibleRows, initialTaskId, mineOnly, selectedIndividuals, department, allUsers]);
 
   const selectedRowsForDelete = useMemo(() => {
     return rows.filter(r => selectedRowIds.has(r.id));
