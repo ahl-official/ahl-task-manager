@@ -1,6 +1,7 @@
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import type { MisMonthlyPersonReport } from '@/lib/mis/types';
-import { formatAppsScriptPercent } from '@/lib/mis/sheetFormula';
+import { formatAppsScriptPercent, gapPercent } from '@/lib/mis/sheetFormula';
+import { checklistPdfBuckets } from '@/lib/mis/weeklyPdfData';
 
 /**
  * Generates an executive-grade, professional MIS Monthly Performance Report PDF.
@@ -395,23 +396,10 @@ export async function buildWeeklyMisPdfAsync(
   const grayBorder = rgb(0.35, 0.35, 0.35);
 
   // Extract work stream buckets
-  const params = score.parameters || [];
-  const officeParam = params.find(p => p.id === 'office');
-  const salonParam = params.find(p => p.id === 'salon');
-  const dailyParam = params.find(p => p.id === 'daily');
-  const weeklyParam = params.find(p => p.id === 'weekly');
-
-  const dailyPlanned = dailyParam?.planned ?? ((officeParam?.planned ?? 0) + (salonParam?.planned ?? 0));
-  const dailyDone = dailyParam?.done ?? ((officeParam?.done ?? 0) + (salonParam?.done ?? 0));
-  const dailyOnTime = dailyParam?.onTime ?? ((officeParam?.onTime ?? 0) + (salonParam?.onTime ?? 0));
-
-  const weeklyPlanned = weeklyParam?.planned ?? (score.checklist?.planned ? score.checklist.planned - dailyPlanned : 0);
-  const weeklyDone = weeklyParam?.done ?? (score.checklist?.done ? score.checklist.done - dailyDone : 0);
-  const weeklyOnTime = weeklyParam?.onTime ?? (score.checklist?.onTime ? score.checklist.onTime - dailyOnTime : 0);
-
-  const checklistPlanned = score.checklist?.planned ?? (dailyPlanned + weeklyPlanned);
-  const checklistDone = score.checklist?.done ?? (dailyDone + weeklyDone);
-  const checklistOnTime = score.checklist?.onTime ?? (dailyOnTime + weeklyOnTime);
+  const buckets = checklistPdfBuckets(score);
+  const { planned: dailyPlanned, done: dailyDone, onTime: dailyOnTime } = buckets.daily;
+  const { planned: weeklyPlanned, done: weeklyDone, onTime: weeklyOnTime } = buckets.weekly;
+  const { planned: checklistPlanned, done: checklistDone, onTime: checklistOnTime } = buckets.checklist;
 
   const delegationPlanned = score.delegation?.planned ?? 0;
   const delegationDone = score.delegation?.done ?? 0;
@@ -426,9 +414,8 @@ export async function buildWeeklyMisPdfAsync(
   const totalOnTime = score.onTime;
 
   function calcGap(d: number, p: number): string {
-    if (p <= 0) return d > 0 ? '0%' : '';
-    const rawGap = ((d / p) * 100) - 100;
-    const rounded = Math.round(rawGap * 100) / 100;
+    const rounded = gapPercent(d, p);
+    if (rounded === null) return '';
     if (Math.abs(rounded) < 0.001) return '0%';
     return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(2)}%`;
   }

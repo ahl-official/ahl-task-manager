@@ -100,7 +100,7 @@ function lookupMis(
   return map[uid] || map[`name:${String(name ?? '').trim().toLowerCase()}`] || null;
 }
 
-import { downloadMisWeeklyPdf, downloadMisMasterPdf } from '@/lib/mis/directPdf';
+import { downloadMisWeeklyPdf } from '@/lib/mis/directPdf';
 
 async function downloadMisPdf(person: MisPersonView, portalMis: number) {
   try {
@@ -144,6 +144,9 @@ export default function ScoresClient({
   const [nameMenuOpen, setNameMenuOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [isFetchingUserTasks, setIsFetchingUserTasks] = useState(false);
+  const [selectedPdfUsers, setSelectedPdfUsers] = useState<string[]>([]);
+  const [pdfDownloadProgress, setPdfDownloadProgress] = useState<string | null>(null);
+  const [isDownloadingPdfs, setIsDownloadingPdfs] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -523,6 +526,36 @@ export default function ScoresClient({
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [activeUsers, normalizedScores]);
 
+  const membersWithReports = memberDirectory.filter(member =>
+    lookupMis(pdfByKey, member.uid, member.name) !== null,
+  );
+  const selectedReportCount = membersWithReports.filter(member => selectedPdfUsers.includes(member.uid)).length;
+
+  async function downloadSelectedPdfs() {
+    if (isDownloadingPdfs || misLoading) return;
+    const selected = membersWithReports.filter(member => selectedPdfUsers.includes(member.uid));
+    if (selected.length === 0) return;
+
+    setIsDownloadingPdfs(true);
+    let downloaded = 0;
+    try {
+      for (const member of selected) {
+        const report = lookupMis(pdfByKey, member.uid, member.name);
+        if (!report) continue;
+        setPdfDownloadProgress(`Preparing ${downloaded + 1} of ${selected.length}: ${member.name}`);
+        try {
+          await downloadMisWeeklyPdf(report);
+          downloaded += 1;
+        } catch (error) {
+          console.error(`Failed to download MIS PDF for ${member.name}:`, error);
+        }
+      }
+      setPdfDownloadProgress(`Started ${downloaded} of ${selected.length} PDF downloads${downloaded < selected.length ? '. Check the console for failed reports.' : '.'}`);
+    } finally {
+      setIsDownloadingPdfs(false);
+    }
+  }
+
   const nameMatches = useMemo(() => {
     const q = nameQuery.trim().toLowerCase();
     if (!q) return [];
@@ -745,6 +778,54 @@ export default function ScoresClient({
   return (
     <div className="space-y-5">
       {dateFilterBar}
+
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-white p-3">
+        <details className="relative min-w-[220px] flex-1 sm:flex-none">
+          <summary className="cursor-pointer rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+            Select members for PDF ({selectedReportCount})
+          </summary>
+          <div className="absolute left-0 top-full z-40 mt-1 w-full min-w-[260px] max-w-[360px] rounded-lg border border-gray-200 bg-white p-2 shadow-lg">
+            <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-2 pb-2 text-xs">
+              <button type="button" disabled={misLoading || isDownloadingPdfs} className="font-medium text-brand-700 hover:underline disabled:opacity-50" onClick={() => setSelectedPdfUsers(membersWithReports.map(member => member.uid))}>
+                Select all with reports
+              </button>
+              <button type="button" disabled={isDownloadingPdfs} className="text-gray-500 hover:underline disabled:opacity-50" onClick={() => setSelectedPdfUsers([])}>
+                Clear
+              </button>
+            </div>
+            <div className="max-h-64 overflow-y-auto py-1">
+              {memberDirectory.map(member => {
+                const hasReport = lookupMis(pdfByKey, member.uid, member.name) !== null;
+                return (
+                  <label key={member.uid} className={cn('flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-gray-50', !hasReport && 'cursor-not-allowed opacity-50')}>
+                    <input
+                      type="checkbox"
+                      checked={hasReport && selectedPdfUsers.includes(member.uid)}
+                      disabled={!hasReport || misLoading || isDownloadingPdfs}
+                      onChange={event => setSelectedPdfUsers(current => event.target.checked
+                        ? [...current, member.uid]
+                        : current.filter(uid => uid !== member.uid))}
+                      className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                    />
+                    <span className="min-w-0 flex-1 truncate text-gray-800">{member.name}</span>
+                    {!hasReport && <span className="text-xs text-gray-400">No report</span>}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        </details>
+        <button
+          type="button"
+          onClick={downloadSelectedPdfs}
+          disabled={misLoading || isDownloadingPdfs || selectedReportCount === 0}
+          className="btn-primary inline-flex items-center gap-2 disabled:opacity-50"
+        >
+          {isDownloadingPdfs ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+          Download selected PDFs
+        </button>
+        {pdfDownloadProgress && <p role="status" className="text-xs text-gray-500">{pdfDownloadProgress}</p>}
+      </div>
 
       <div className={cn('grid gap-4 md:grid-cols-2 xl:grid-cols-3 transition-opacity duration-200', misLoading && 'opacity-70')}>
         {departmentBlocks.length === 0 && (
@@ -1256,9 +1337,10 @@ function MisDashboard({
   const parameters = report?.parameters ?? [];
 
   async function downloadMasterPdf() {
-    if (!report) return;
+    if (!mis) return;
     try {
-      await downloadMisMasterPdf(report);
+      // Individual and bulk downloads use the same loaded MIS data, never a lossy rollup conversion.
+      await downloadMisWeeklyPdf(mis);
     } catch (err) {
       console.error('Failed to generate master PDF:', err);
     }
@@ -1275,8 +1357,8 @@ function MisDashboard({
         </div>
         <button
           type="button"
-          onClick={report ? downloadMasterPdf : onDownload}
-          disabled={!report && !mis}
+          onClick={mis ? downloadMasterPdf : onDownload}
+          disabled={loading || !mis}
           className="btn-primary inline-flex items-center gap-2 px-5 py-3 text-base disabled:opacity-50"
         >
           <Download size={18} />
