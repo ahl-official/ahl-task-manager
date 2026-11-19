@@ -29,15 +29,20 @@ export default function MonthlyScoresClient() {
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
     setError('');
-    fetch(`/api/mis?mode=monthly&year=${year}&month=${month}`, { signal: controller.signal })
+    setLoading(true);
+    setRows([]);
+    // Always fetch the selected month; cancel requests for filters no longer selected.
+    fetch(`/api/mis?mode=monthly&year=${year}&month=${month}`, { cache: 'no-store', signal: controller.signal })
       .then(async response => {
         const payload = await response.json();
         if (!response.ok || !payload.success) throw new Error(payload.error || 'Could not load monthly scores');
         return payload.data as MonthlyRow[];
       })
-      .then(data => { if (!controller.signal.aborted) setRows(data); })
+      .then(data => {
+        if (controller.signal.aborted) return;
+        setRows(data);
+      })
       .catch(err => { if (!controller.signal.aborted) setError(err.message || 'Could not load monthly scores'); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();

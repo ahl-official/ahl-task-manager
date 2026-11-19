@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo, useRef } from 'react';
 import { AlertTriangle, ArrowRight, Calendar, Check, Clock3, Loader2, Search } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS, PRIORITY_DOT, getDueBadge, normalizeBaseStatus } from '@/lib/utils';
 import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
-import { scheduleByTaskId, scheduleTasks } from '@/lib/utils/scheduling';
+import { scheduleByTaskId } from '@/lib/utils/scheduling';
 import { namesEqual } from '@/lib/utils/names';
 import TaskModal from './TaskModal';
 import { matchesTaskSearch } from '@/lib/utils/taskSearch';
@@ -353,7 +353,6 @@ export default function TaskListClient({
   );
 
   const scheduleMap = useMemo(() => scheduleByTaskId(taskItems), [taskItems]);
-  const recommendedQueue = useMemo(() => scheduleTasks(taskItems).slice(0, 5), [taskItems]);
 
   const filtered = useMemo(() => {
     const today = indiaTodayKey();
@@ -612,53 +611,6 @@ export default function TaskListClient({
                 </button>
               );
             })}
-          </div>
-        </section>
-      )}
-
-      {isDefaultView && recommendedQueue.length > 0 && (
-        <section suppressHydrationWarning className="surface-enter mb-5">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-orange-600">Recommended order</p>
-              <h2 className="text-base font-semibold text-gray-900">Dynamic task schedule</h2>
-            </div>
-            <span className="hidden rounded-full bg-white px-3 py-1 text-xs font-medium text-gray-500 shadow-card sm:inline-flex">
-              Priority + deadline
-            </span>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-            {recommendedQueue.map(item => (
-              <button
-                key={item.task.taskId}
-                type="button"
-                onClick={() => openTask(item.task)}
-                className={cn(
-                  'card flex min-h-[150px] flex-col justify-between p-4 text-left hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus:ring-2 focus:ring-brand-500',
-                  item.risk === 'blocked' && 'border-red-200 bg-red-50',
-                  item.risk === 'at-risk' && 'border-orange-200 bg-orange-50',
-                )}
-              >
-                <div>
-                  <div className="mb-3 flex items-center justify-between gap-2">
-                    <span className="rounded-full bg-gray-900 px-2 py-0.5 text-[10px] font-semibold text-white">#{item.rank}</span>
-                    <span suppressHydrationWarning className={cn('badge text-[10px]', RISK_STYLES[item.risk])}>{RISK_LABELS[item.risk]}</span>
-                  </div>
-                  <p suppressHydrationWarning className="line-clamp-2 text-sm font-semibold leading-5 text-gray-900">{item.task.description}</p>
-                  <p suppressHydrationWarning className="mt-2 truncate text-xs text-gray-400">{item.task.assignedToName} - {item.task.priority}</p>
-                </div>
-
-                <div className="mt-4 flex items-center justify-between gap-3 text-xs text-gray-500">
-                  <span suppressHydrationWarning>{item.daysLeft === null ? 'Date pending' : item.daysLeft < 0 ? `${Math.abs(item.daysLeft)}d late` : `${item.daysLeft}d left`}</span>
-                  {item.conflict && (
-                    <span className="inline-flex items-center gap-1 text-orange-600">
-                      <AlertTriangle size={12} /> Conflict
-                    </span>
-                  )}
-                </div>
-              </button>
-            ))}
           </div>
         </section>
       )}

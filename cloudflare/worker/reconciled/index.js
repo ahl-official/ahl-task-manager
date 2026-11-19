@@ -2100,7 +2100,7 @@ function taskAsRecurringTemplate(row) {
   };
 }
 __name(taskAsRecurringTemplate, "taskAsRecurringTemplate");
-async function deleteRecurringDefinition(env, templateId) {
+async function deleteRecurringDefinition(env, templateId, startDate) {
   const today = getIstDateParts().dateStr;
   const [templateRow, sourceTask, periodRow] = await Promise.all([
     env.DB.prepare("SELECT * FROM recurring_templates WHERE id=?").bind(templateId).first(),
@@ -2118,10 +2118,14 @@ async function deleteRecurringDefinition(env, templateId) {
       created_at: periodRow.created_at, updated_at: periodRow.updated_at
     });
   const now = nowIso();
-  const metadata = { ...definition.metadata, deleted: true, deletedAt: now, deletedPreviousActive: templateRow ? templateRow.is_active !== 0 : true };
-  const deletePeriods = "template_id=? AND is_deleted=0 AND (COALESCE(NULLIF(period_end,''),NULLIF(due_date,''),substr(period_key,1,10))>=? OR status NOT IN ('Completed','Verified'))";
+  const cutoff = startDate || today;
+  const metadata = { ...definition.metadata, deleted: true, deletedAt: now, deletedPreviousActive: templateRow ? templateRow.is_active !== 0 : true, deletedFrom: cutoff };
+  // Date-filter deletion preserves all completed history and unfinished dates before the selected start.
+  const deletePeriods = startDate
+    ? "template_id=? AND is_deleted=0 AND due_date>=? AND status NOT IN ('Completed','Verified')"
+    : "template_id=? AND is_deleted=0 AND (COALESCE(NULLIF(period_end,''),NULLIF(due_date,''),substr(period_key,1,10))>=? OR status NOT IN ('Completed','Verified'))";
   const changedHistory = await env.DB.prepare(`SELECT assigned_to,assigned_to_name,due_date,period_key FROM recurring_period_rows WHERE ${deletePeriods} AND due_date<?`)
-    .bind(templateId, today, currentMisWeekPeriod().weekStart).all();
+    .bind(templateId, cutoff, currentMisWeekPeriod().weekStart).all();
   if (sourceTask && sourceTask.status !== 'Deleted') await ensureDeletionsTable(env);
   const statements = [
     env.DB.prepare(`INSERT INTO recurring_templates
@@ -2132,7 +2136,7 @@ async function deleteRecurringDefinition(env, templateId) {
         definition.assignedTo, definition.assignedToName, definition.department, definition.frequency,
         definition.dayOfWeek, definition.dayOfMonth, definition.timeOfDay,
         JSON.stringify(metadata), definition.createdAt || now, now),
-    env.DB.prepare(`UPDATE recurring_period_rows SET is_deleted=1,deleted_at=?,updated_at=? WHERE ${deletePeriods}`).bind(now, now, templateId, today),
+    env.DB.prepare(`UPDATE recurring_period_rows SET is_deleted=1,deleted_at=?,updated_at=? WHERE ${deletePeriods}`).bind(now, now, templateId, cutoff),
     env.DB.prepare("UPDATE tasks_current SET status='Deleted',updated_at=? WHERE task_id=? AND LOWER(category) IN ('daily','weekly','monthly') AND status!='Deleted'").bind(now, templateId)
   ];
   if (sourceTask && sourceTask.status !== 'Deleted') {
@@ -2695,15 +2699,20 @@ async function routeRecurring(req, env, url) {
       for (const row of changedWeeks.values()) await refreshChecklistMisSnapshot(env, row);
       return json({ success: true, data: { deleted, mode: 'day' } });
     } else if (mode === 'whole') {
+      const startDate = typeof data.startDate === 'string' ? data.startDate : '';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || Number.isNaN(Date.parse(startDate+'T00:00:00Z')) ||
+        new Date(startDate+'T00:00:00Z').toISOString().slice(0,10)!==startDate) {
+        return json({ success: false, error: 'A valid filter start date is required for whole-task deletion' }, { status: 400 });
+      }
       const templateIds = Array.isArray(data.templateIds) ? [...new Set(data.templateIds.filter(id => typeof id === 'string' && id.trim()))] : [];
       if (!templateIds.length) return json({ success: false, error: 'No template IDs provided' }, { status: 400 });
       if (templateIds.length > 25) return json({ success: false, error: 'Delete at most 25 recurring tasks at once' }, { status: 400 });
       let deleted = 0, deletedPeriods = 0;
       for (const tId of templateIds) {
-        const result = await deleteRecurringDefinition(env, tId);
+        const result = await deleteRecurringDefinition(env, tId, startDate);
         if (result) { deleted++; deletedPeriods += result.deletedPeriods; }
       }
-      return json({ success: true, data: { deleted, deletedPeriods, mode: 'whole' } });
+      return json({ success: true, data: { deleted, deletedPeriods, mode: 'whole', startDate } });
     }
     return json({ success: false, error: 'Invalid batch delete mode' }, { status: 400 });
   }
@@ -2714,15 +2723,14 @@ async function routeRecurring(req, env, url) {
     const category = url.searchParams.get('category') || 'Daily';
     const date = url.searchParams.get('date') || getIstDateParts().dateStr;
     const clauses=["is_deleted=0","status!='Deleted'"],binds=[];
-    const scope=[],scopeBinds=[];
+    const scope=[];
     const paged=url.searchParams.has('limit');
     const scopeUid=url.searchParams.get('scopeUid')||url.searchParams.get('uid');
     const scopeName=url.searchParams.get('scopeName')||url.searchParams.get('userName');
     const scopeDepartment=url.searchParams.get('scopeDepartment');
     if(scopeUid||scopeName||scopeDepartment){
       if(scopeUid){
-        scope.push('assigned_to=?');
-        scopeBinds.push(scopeUid);
+        scope.push(['assigned_to=?',[scopeUid]]);
       }
       if(scopeName){
         const cleanName = scopeName.trim();
@@ -2732,17 +2740,15 @@ async function routeRecurring(req, env, url) {
         // idx_period_rows_name_due and forces a full table scan — when there is no uid to
         // rely on (admin/leader filtering by a typed name alone).
         if (normName && !scopeUid) {
-          scope.push('(TRIM(LOWER(assigned_to_name))=LOWER(?) OR LOWER(assigned_to_name) LIKE ?)');
-          scopeBinds.push(cleanName, `%${normName}%`);
+          scope.push(['TRIM(LOWER(assigned_to_name))=LOWER(?)',[cleanName]]);
+          scope.push(['LOWER(assigned_to_name) LIKE ?',[`%${normName}%`]]);
         } else {
-          scope.push('TRIM(LOWER(assigned_to_name))=LOWER(?)');
-          scopeBinds.push(cleanName);
+          scope.push(['TRIM(LOWER(assigned_to_name))=LOWER(?)',[cleanName]]);
         }
       }
       if(scopeDepartment){
         const cleanDept = scopeDepartment.trim();
-        scope.push('(department=? OR TRIM(LOWER(department))=LOWER(?))');
-        scopeBinds.push(cleanDept, cleanDept);
+        scope.push(['TRIM(LOWER(department))=LOWER(?)',[cleanDept]]);
       }
     }
     if (hasDateRange) {
@@ -2767,7 +2773,7 @@ async function routeRecurring(req, env, url) {
         const from=weekStartMonday(date),to=new Date(from+'T12:00:00Z');to.setUTCDate(to.getUTCDate()+6);
         clauses.push('due_date>=? AND due_date<=?');binds.push(from,to.toISOString().slice(0,10));
       } else if(category==='Monthly'){
-        clauses.push('month_key=?');binds.push(date.slice(0,7));
+        // The month is already constrained above.
       } else if(category==='Daily' || exactDate){
         clauses.push('due_date=?');binds.push(date);
       }
@@ -2776,9 +2782,9 @@ async function routeRecurring(req, env, url) {
       const cursor=url.searchParams.get('cursor');
       const cursorMatch=cursor?.match(/^(\d{4}-\d{2}-\d{2})\|(.+)$/);
       const legacyCursor=Boolean(cursor&&!cursorMatch);
-      const noDueDateFilter=!hasDateRange&&(category==='Monthly'||(category.toLowerCase()==='all'&&url.searchParams.get('exactDate')!=='true'));
-      const legacyOrder=legacyCursor||noDueDateFilter;
-      if(cursorMatch&&!noDueDateFilter){clauses.push('(due_date>? OR (due_date=? AND id>?))');binds.push(cursorMatch[1],cursorMatch[1],cursorMatch[2]);}
+      // New pages seek by the indexed date/id pair; old cursors retain their original ordering.
+      const legacyOrder=legacyCursor;
+      if(cursorMatch){clauses.push('(due_date,id)>(?,?)');binds.push(cursorMatch[1],cursorMatch[2]);}
       else if(cursor){clauses.push('id>?');binds.push(cursorMatch?cursorMatch[2]:cursor);}
       const search=String(url.searchParams.get('search')||'').trim().slice(0,100).toLowerCase();
       if(search.length>=2){
@@ -2790,27 +2796,37 @@ async function routeRecurring(req, env, url) {
       const defaultLimit=['Weekly','Monthly'].includes(category)?300:100;
       const limit=Math.min(300,Math.max(1,requestedLimit||defaultLimit));
       let result;
-      if(scopeUid&&scopeName&&!scopeDepartment&&!legacyOrder){
+      if(scope.length>1 && !legacyOrder && (binds.length+2)*scope.length+1<=100){
+        // Bound each match before merging and loading full rows for the page.
         const where=clauses.join(' AND ');
-        const sql=`WITH uid_rows AS (
-          SELECT id,due_date FROM recurring_period_rows WHERE ${where} AND assigned_to=? ORDER BY due_date,id LIMIT ?
-        ), name_rows AS (
-          SELECT id,due_date FROM recurring_period_rows WHERE ${where} AND TRIM(LOWER(assigned_to_name))=LOWER(?) ORDER BY due_date,id LIMIT ?
-        ), matches AS (
-          SELECT id,due_date FROM uid_rows UNION SELECT id,due_date FROM name_rows
-        ) SELECT p.* FROM matches m JOIN recurring_period_rows p ON p.id=m.id ORDER BY m.due_date,m.id LIMIT ?`;
-        result=await env.DB.prepare(sql).bind(...binds,scopeUid,limit+1,...binds,scopeName.trim(),limit+1,limit+1).all();
+        const indexes={
+          'assigned_to=?':'idx_period_active_uid_category_date_id',
+          'TRIM(LOWER(assigned_to_name))=LOWER(?)':'idx_period_rows_name_norm_due',
+          'TRIM(LOWER(department))=LOWER(?)':'idx_period_active_department_category_date_id',
+        };
+        const branches=useIndexes=>scope.map(([predicate],i)=>{
+          const index=useIndexes&&clauses.includes('category=?')&&indexes[predicate];
+          return `b${i} AS (SELECT id,due_date FROM recurring_period_rows ${index?'INDEXED BY '+index:''} WHERE ${where} AND ${predicate} ORDER BY due_date,id LIMIT ?)`;
+        });
+        const union=scope.map((_,i)=>`SELECT id,due_date FROM b${i}`).join(' UNION ');
+        const values=scope.flatMap(([,values])=>[...binds,...values,limit+1]);
+        const query=useIndexes=>env.DB.prepare(`WITH ${branches(useIndexes).join(',')}, matches AS (${union}), page AS (SELECT id,due_date FROM matches ORDER BY due_date,id LIMIT ?) SELECT p.* FROM page m JOIN recurring_period_rows p ON p.id=m.id ORDER BY m.due_date,m.id`).bind(...values,limit+1).all();
+        try { result=await query(true); }
+        catch(error) {
+          if(!/no such index|no query solution/i.test(String(error?.message||error)))throw error;
+          result=await query(false);
+        }
       }else{
         const where=[...clauses];
-        if(scope.length)where.push('('+scope.join(' OR ')+')');
-        result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+where.join(' AND ')+(legacyOrder?' ORDER BY id LIMIT ?':' ORDER BY due_date,id LIMIT ?')).bind(...binds,...scopeBinds,limit+1).all();
+        if(scope.length)where.push('('+scope.map(([predicate])=>predicate).join(' OR ')+')');
+        result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+where.join(' AND ')+(legacyOrder?' ORDER BY id LIMIT ?':' ORDER BY due_date,id LIMIT ?')).bind(...binds,...scope.flatMap(([,values])=>values),limit+1).all();
       }
       const found=result.results||[],hasMore=found.length>limit,selected=found.slice(0,limit);
       const items=selected.map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
       const last=selected[selected.length-1];
       return json({success:true,data:{items,hasMore,nextCursor:hasMore?(legacyOrder?last.id:`${last.due_date}|${last.id}`):null}});
     }
-    if(scope.length){clauses.push('('+scope.join(' OR ')+')');binds.push(...scopeBinds);}
+    if(scope.length){clauses.push('('+scope.map(([predicate])=>predicate).join(' OR ')+')');binds.push(...scope.flatMap(([,values])=>values));}
     const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY due_date,id LIMIT 300').bind(...binds).all();
     const data=(result.results||[]).slice(0,300).map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
     return json({success:true,data,meta:{istDate:date,count:data.length,hasMore:(result.results||[]).length>=300,readOnly:true}});
@@ -2957,7 +2973,7 @@ async function routeRecurring(req, env, url) {
     const weekStart=url.searchParams.get('weekStart'),weekEnd=url.searchParams.get('weekEnd');
     if(!/^\d{4}-\d{2}-\d{2}$/.test(weekStart||'')||!/^\d{4}-\d{2}-\d{2}$/.test(weekEnd||'')||weekStart>weekEnd)return json({success:false,error:'Invalid MIS week'},{status:400});
     const byName={};
-    for(const row of await aggregatePeriods(env,weekStart,weekEnd)){
+    for(const row of await aggregatePeriods(env,weekStart,weekEnd,url.searchParams.get('fresh')==='true')){
       const key=normalizePersonName(row.name);if(!key)continue;
       const person=byName[key]??={name:row.name,department:row.department||'',planned:0,done:0,onTime:0,byCategory:{office:{planned:0,done:0,onTime:0},salon:{planned:0,done:0,onTime:0},weekly:{planned:0,done:0,onTime:0}}};
       const bucket=person.byCategory[row.source_kind||misCategoryKey(String(row.category||''),String(row.department||''),row.name)];
@@ -2976,7 +2992,6 @@ var index_default = {
     const authRoute = await routeAuth(req, wrappedEnv, url.pathname);
     if (authRoute) return new Response(authRoute.body, { status: authRoute.status, headers: { ...Object.fromEntries(authRoute.headers), ...corsHeaders(wrappedEnv) } });
     if (!requireSecret(req, wrappedEnv)) return json({ success: false, error: "Unauthorized" }, { status: 401, headers: corsHeaders(wrappedEnv) });
-    if(url.searchParams.get('fresh')==='true')invalidateReadCache();
     const cached=getCachedRead(req,url);
     if(cached)return new Response(cached.body,{status:cached.status,headers:{...Object.fromEntries(cached.headers),...corsHeaders(wrappedEnv)}});
     const response = await routeLifecycle(req,wrappedEnv,url,{nextTaskId,taskFromRow,revisionFromRow,resolveRecurringDefinition,buildMonthPeriodRows,periodRowId,adjustTaskCount,deleteRecurringDefinition,refreshDelegationForTaskChange}) || await routeTrash(req,wrappedEnv,url,{adjustTaskCount,refreshDelegationForTaskChange,refreshChecklistMisSnapshot,invalidateTemplates:()=>{activeTemplateIdsCache=null;}}) || await routeReadOptimizations(req,wrappedEnv,url,taskFromRow) || await routeUsers(req, wrappedEnv, url) || await routeDepartments(req, wrappedEnv, url) || await routeTasks(req, wrappedEnv, url) || await routeScores(req, wrappedEnv, url) || await routeRevisions(req, wrappedEnv, url) || await routeCrm(req, wrappedEnv, url) || await routeAutomations(req, wrappedEnv, url) || await routeMis(req, wrappedEnv, url) || await routeRecurring(req, wrappedEnv, url) || await routeChecklist(req, wrappedEnv, url) || json({ success: false, error: "Not found" }, { status: 404 });

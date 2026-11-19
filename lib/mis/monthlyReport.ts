@@ -1,5 +1,5 @@
 import { averageWeekGaps, gapToDecimal } from '@/lib/mis/sheetFormula';
-import type { MisMonthlyPersonReport } from '@/lib/mis/types';
+import type { MisMonthlyPersonReport, MisPersonScore } from '@/lib/mis/types';
 import { getMonthWeekSlots } from '@/lib/mis/week';
 import { adminGetMisWeeklySnapshots } from '@/lib/mis/weeklySnapshot';
 import { buildMonthlyMisPdfBuffer } from '@/lib/mis/docTemplatePdf';
@@ -20,7 +20,7 @@ function shouldRunMonthlyReports(now = new Date()) {
 }
 
 export function buildMonthlyReportsFromSnapshots(
-  snapshots: Awaited<ReturnType<typeof adminGetMisWeeklySnapshots>>,
+  snapshots: Pick<MisPersonScore, 'uid' | 'name' | 'department' | 'waNumber' | 'weekKey' | 'gapPercent'>[],
   year: number,
   monthIndex0: number,
 ): MisMonthlyPersonReport[] {

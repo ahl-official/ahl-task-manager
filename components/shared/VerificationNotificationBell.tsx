@@ -26,10 +26,16 @@ export default function VerificationNotificationBell({
   const [selected, setSelected] = useState<TaskSerialized | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const lastLoadedAt = useRef(0);
+  const requestInFlight = useRef(false);
+  const lastForcedAt = useRef(0);
   const isAdmin = role === 'admin';
 
   const load = useCallback(async (silent = false, fresh = false) => {
+    // Focus, polling and task events can fire together; issue at most one read.
+    if (requestInFlight.current || (fresh && Date.now() - lastForcedAt.current < 1_000)) return;
     if (silent && !fresh && Date.now() - lastLoadedAt.current < 15_000) return;
+    requestInFlight.current = true;
+    if (fresh) lastForcedAt.current = Date.now();
     if (!silent) setLoading(true);
     try {
       const baseUrl = isAdmin
@@ -53,6 +59,7 @@ export default function VerificationNotificationBell({
     } catch {
       // Keep last good list; avoid toast spam on background polls.
     } finally {
+      requestInFlight.current = false;
       if (!silent) setLoading(false);
     }
   }, [currentUid, isAdmin]);

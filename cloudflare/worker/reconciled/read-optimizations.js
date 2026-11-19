@@ -84,9 +84,13 @@ export async function cacheRead(req, url, response) {
   if (req.method !== 'GET' || response.status !== 200 || !['/tasks/counts','/tasks/search','/users','/departments','/mis/delegation-counts','/recurring/mis-counts','/mis/reconciled','/mis/weekly','/mis/weekly/latest'].includes(url.pathname)) return;
   const body = await response.clone().text();
   if (body.length > 1_000_000) return;
-  if (cache.size >= 128) cache.delete(cache.keys().next().value);
   const cacheUrl = new URL(url.href);
   cacheUrl.searchParams.delete('fresh');
+  // A fresh GET replaces its own cache entry without evicting unrelated reads.
+  if (!cache.has(cacheUrl.href) && cache.size >= 128) {
+    if (url.searchParams.get('fresh') === 'true') return;
+    cache.delete(cache.keys().next().value);
+  }
   const ttl = url.pathname === '/tasks/search' && url.searchParams.get('verificationPending') === 'true' ? 10_000 : TTL;
   cache.set(cacheUrl.href, { body, until: Date.now() + ttl, asOf: new Date().toISOString() });
 }
@@ -333,7 +337,29 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
       const pattern='%'+q.replace(/[\\%_]/g,'\\$&')+'%';
       clauses.push("(task_id LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')");binds.push(pattern,pattern);
     }else if(!status&&url.searchParams.get('verificationPending')!=='true'&&!url.searchParams.get('assignedTo')&&!url.searchParams.get('category')&&!url.searchParams.get('priority')&&!url.searchParams.get('department')&&(url.searchParams.get('scope')||'all')==='all')return json([]);
-    const result=await env.DB.prepare(`SELECT * FROM tasks_current WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC,task_id DESC LIMIT ?`).bind(...binds,limit).all();
+    const where=clauses.join(' AND ');
+    const query=index=>{
+      if(index){
+        // Separate NULL and empty verification timestamps so both index columns can be searched.
+        const base=where.replace("status='Completed' AND (verified_at IS NULL OR verified_at='')", "status='Completed'");
+        const branch=condition=>`SELECT task_id,created_at FROM tasks_current INDEXED BY ${index} WHERE ${base} AND ${condition} ORDER BY created_at DESC,task_id DESC LIMIT ?`;
+        return env.DB.prepare(`WITH a AS (${branch('verified_at IS NULL')}), b AS (${branch("verified_at=''")}),
+          page AS (SELECT * FROM (SELECT * FROM a UNION ALL SELECT * FROM b) ORDER BY created_at DESC,task_id DESC LIMIT ?)
+          SELECT t.* FROM page p JOIN tasks_current t ON t.task_id=p.task_id ORDER BY p.created_at DESC,p.task_id DESC`)
+          .bind(...binds,limit,...binds,limit,limit).all();
+      }
+      return env.DB.prepare(`SELECT * FROM tasks_current WHERE ${where} ORDER BY created_at DESC,task_id DESC LIMIT ?`).bind(...binds,limit).all();
+    };
+    // Full status/verification indexes avoid D1 partial-index planner mismatches.
+    const verification=url.searchParams.get('verificationPending')==='true' && url.searchParams.get('excludeRecurring')==='true';
+    const scope=url.searchParams.get('scope')||'all';
+    const index=verification && !q ? (scope==='all' ? 'idx_tasks_verification_status' : scope==='handoff' ? 'idx_tasks_verification_handoff_status' : '') : '';
+    let result;
+    try { result=await query(index); }
+    catch(error) {
+      if(!index || !/no such index|no query solution/i.test(String(error?.message||error)))throw error;
+      result=await query('');
+    }
     return json((result.results||[]).map(mapTask));
   }
   if(url.pathname==='/mis/delegation-counts'){
@@ -343,23 +369,29 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     const first="date(t.start_date,'+5 hours','+30 minutes')";
     const revised="date(COALESCE(NULLIF(t.delayed_date,''),NULLIF(t.end_date,'')),'+5 hours','+30 minutes')";
     const done="t.status NOT IN ('Pending','Shifted')";
-    const result=await env.DB.prepare(`SELECT t.assigned_to AS uid,COALESCE(NULLIF(u.name,''),t.assigned_to_name) AS name,COALESCE(NULLIF(u.department,''),t.department) AS department,u.wa_number AS waNumber,COUNT(*) AS planned,SUM(CASE WHEN ${done} THEN 1 ELSE 0 END) AS done,SUM(CASE WHEN ${done} AND NOT (t.status IN ('Completed','Verified') AND COALESCE(${first}<${revised},0)) THEN 1 ELSE 0 END) AS onTime FROM tasks_current t LEFT JOIN users u ON u.uid=t.assigned_to WHERE t.status!='Deleted' AND LOWER(COALESCE(t.category,'')) NOT IN ('daily','weekly','monthly') AND ${final}>=? AND ${final}<=? GROUP BY t.assigned_to,COALESCE(NULLIF(u.name,''),t.assigned_to_name),COALESCE(NULLIF(u.department,''),t.department),u.wa_number`).bind(start,end).all();
+    const result=await env.DB.prepare(`SELECT t.assigned_to AS uid,COALESCE(NULLIF(u.name,''),t.assigned_to_name) AS name,COALESCE(NULLIF(u.department,''),t.department) AS department,u.wa_number AS waNumber,COUNT(*) AS planned,SUM(CASE WHEN t.status IN ('In Progress','Shifted (In Progress)') THEN 1 ELSE 0 END) AS active,SUM(CASE WHEN t.status IN ('Pending','Pending Accept','Shifted (Pending Accept)') THEN 1 ELSE 0 END) AS pending,SUM(CASE WHEN t.status IN ('Completed','Verified','Shifted (Completed)','Shifted (Verified)') THEN 1 ELSE 0 END) AS completed,SUM(CASE WHEN t.status='Overdue' OR (t.status IN ('Pending','Pending Accept','In Progress','Delay Requested','Shifted (In Progress)') AND date(t.end_date,'+5 hours','+30 minutes')<date('now','+5 hours','+30 minutes')) THEN 1 ELSE 0 END) AS overdue,SUM(CASE WHEN ${done} THEN 1 ELSE 0 END) AS done,SUM(CASE WHEN ${done} AND NOT (t.status IN ('Completed','Verified') AND COALESCE(${first}<${revised},0)) THEN 1 ELSE 0 END) AS onTime FROM tasks_current t LEFT JOIN users u ON u.uid=t.assigned_to WHERE t.status!='Deleted' AND LOWER(COALESCE(t.category,'')) NOT IN ('daily','weekly','monthly') AND ${final}>=? AND ${final}<=? GROUP BY t.assigned_to,COALESCE(NULLIF(u.name,''),t.assigned_to_name),COALESCE(NULLIF(u.department,''),t.department),u.wa_number`).bind(start,end).all();
     return json(result.results||[]);
   }
   return null;
 }
-export async function aggregatePeriods(env,start,end){
+export async function aggregatePeriods(env,start,end,fresh=false){
   const key=start+':'+end,cached=periodCache.get(key);
-  if(cached&&cached.until>Date.now())return cached.promise;
-  const promise=loadPeriodAggregates(env,start,end).catch(error=>{periodCache.delete(key);throw error;});
-  if(periodCache.size>=32)periodCache.delete(periodCache.keys().next().value);
+  if(!fresh&&cached&&cached.until>Date.now())return cached.promise;
+  const promise=loadPeriodAggregates(env,start,end).catch(error=>{
+    if(periodCache.get(key)?.promise===promise)periodCache.delete(key);
+    throw error;
+  });
+  if(!periodCache.has(key)&&periodCache.size>=32){
+    if(fresh)return promise;
+    periodCache.delete(periodCache.keys().next().value);
+  }
   periodCache.set(key,{promise,until:Date.now()+TTL});
   return promise;
 }
 async function loadPeriodAggregates(env,start,end){
   // Resolve provenance only for periods in the requested week. The old LEFT
   // JOIN grouped every source row in the database on every MIS request.
-  const result=await env.DB.prepare(`WITH periods AS (
+  const result=await env.DB.prepare(`WITH periods AS MATERIALIZED (
     SELECT p.assigned_to_name AS name,p.department,p.category,p.status,p.is_on_time,
       (SELECT MIN(s.source_kind) FROM recurring_period_sources s WHERE s.period_row_id=p.id) AS source_kind
     FROM recurring_period_rows p

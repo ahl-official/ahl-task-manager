@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { createTabCache } from '@/lib/utils/tabCache';
 
 type DeletedRow = {
   id: string;
@@ -20,7 +21,9 @@ const labels: Record<DeletedRow['kind'], string> = {
   'recurring-whole': 'Whole recurring task',
 };
 
-export default function DeletedTasksClient() {
+const deletedPages = createTabCache<{ items: DeletedRow[]; hasMore: boolean; nextCursor: string | null }>(15_000);
+
+export default function DeletedTasksClient({ viewerUid }: { viewerUid: string }) {
   const [kind, setKind] = useState<'all' | 'one-time' | 'recurring'>('all');
   const [rows, setRows] = useState<DeletedRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,20 +36,27 @@ export default function DeletedTasksClient() {
     setLoading(true);
     setError('');
     try {
-      const response = await fetch(`/api/deleted?kind=${kind}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { cache: 'no-store', signal });
-      const payload = await response.json();
-      if (!response.ok || !payload.success) throw new Error(payload.error || 'Could not load deleted tasks');
+      const key = JSON.stringify([viewerUid, kind, cursor]);
+      let page = deletedPages.get(key);
+      if (!page) {
+        const response = await fetch(`/api/deleted?kind=${kind}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { cache: 'no-store', signal });
+        const payload = await response.json();
+        if (!response.ok || !payload.success) throw new Error(payload.error || 'Could not load deleted tasks');
+        page = payload.data as NonNullable<typeof page>;
+        if (!signal?.aborted) deletedPages.set(key, page);
+      }
       if (!signal?.aborted) {
-        setRows(current => cursor ? [...current, ...payload.data.items] : payload.data.items);
-        setHasMore(Boolean(payload.data.hasMore));
-        setNextCursor(payload.data.nextCursor || null);
+        const { items, hasMore: more, nextCursor: next } = page;
+        setRows(current => cursor ? [...current, ...items] : items);
+        setHasMore(Boolean(more));
+        setNextCursor(next || null);
       }
     } catch (err: any) {
       if (!signal?.aborted) setError(err.message || 'Could not load deleted tasks');
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [kind]);
+  }, [kind, viewerUid]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -61,6 +71,7 @@ export default function DeletedTasksClient() {
       const response = await fetch('/api/deleted', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: row.id, kind: row.kind }) });
       const payload = await response.json();
       if (!response.ok || !payload.success) throw new Error(payload.error || 'Could not restore task');
+      deletedPages.clear();
       sessionStorage.setItem('ahl-checklist-restored-at', String(Date.now()));
       window.dispatchEvent(new CustomEvent('app-global-refresh', { detail: { scope: 'all' } }));
       toast.success('Task restored');

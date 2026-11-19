@@ -98,6 +98,7 @@ export async function routeTrash(req, env, url, helpers) {
       const affected = await env.DB.prepare('SELECT assigned_to,assigned_to_name,due_date,period_key FROM recurring_period_rows WHERE template_id=? AND is_deleted=1 AND deleted_at=? AND due_date<?').bind(id, deletedAt, new Date().toISOString().slice(0, 10)).all();
       delete metadata.deleted;
       delete metadata.deletedAt;
+      delete metadata.deletedFrom;
       const wasActive = metadata.deletedPreviousActive !== false;
       delete metadata.deletedPreviousActive;
       const now = new Date().toISOString();

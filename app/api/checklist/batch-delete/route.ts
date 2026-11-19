@@ -35,17 +35,25 @@ export async function POST(req: NextRequest) {
     }
 
     const remark = typeof body.remark === 'string' ? body.remark.trim() : '';
+    const startDate = typeof body.startDate === 'string' ? body.startDate : '';
+    if (mode === 'whole' && (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) ||
+      Number.isNaN(Date.parse(startDate + 'T00:00:00Z')) ||
+      new Date(startDate + 'T00:00:00Z').toISOString().slice(0, 10) !== startDate)) {
+      return NextResponse.json({ success: false, error: 'A valid filter start date is required for whole-task deletion' }, { status: 400 });
+    }
 
     const result = await batchDeleteChecklistTasks({
       mode,
       ids: mode === 'day' ? ids : undefined,
       templateIds: mode === 'whole' ? templateIds : undefined,
+      startDate: mode === 'whole' ? startDate : undefined,
     });
 
     await adminLog('TASK_DELETED', `Admin batch deleted ${result.deleted} checklist task(s) (mode: ${mode}${remark ? `, reason: ${remark}` : ''})`, {
       uid: session.uid,
       meta: {
         mode,
+        startDate: mode === 'whole' ? startDate : undefined,
         remark: remark || undefined,
         deletedCount: result.deleted,
         ids: mode === 'day' ? ids.slice(0, 50) : undefined,

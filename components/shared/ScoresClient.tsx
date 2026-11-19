@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createTabCache } from '@/lib/utils/tabCache';
 import { createPortal } from 'react-dom';
 import { cn, STATUS_COLORS, normalizeBaseStatus } from '@/lib/utils';
 import { addDaysKey, dateKeyInRange, formatWeekLabel, getMisWeekPeriod, getPreviousMisWeekPeriod, listRecentMisWeeks } from '@/lib/mis/week';
@@ -117,6 +118,9 @@ function escapeHtml(value: string) {
     .replace(/"/g, '&quot;');
 }
 
+type WeeklyTaskCount = { uid: string; name: string; department: string; planned: number; active: number; pending: number; completed: number; overdue: number };
+const weeklyReports = createTabCache<{ map: Record<string, MisPersonView>; weekLabel: string; counts: WeeklyTaskCount[] }>(60_000);
+
 export default function ScoresClient({
   scores,
   users = [],
@@ -127,6 +131,7 @@ export default function ScoresClient({
   showDepartments = false,
 }: Props) {
   const [taskItems, setTaskItems] = useState(tasks);
+  const [weeklyTaskCounts, setWeeklyTaskCounts] = useState<WeeklyTaskCount[] | null>(null);
   const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [filter, setFilter] = useState<TaskFilter>('all');
@@ -149,7 +154,7 @@ export default function ScoresClient({
   const [weekStart, setWeekStart] = useState(() => defaultWeek.weekStart);
   const [calendarDate, setCalendarDate] = useState(() => defaultWeek.weekEnd);
   const nameBoxRef = useRef<HTMLDivElement>(null);
-  const weekCacheRef = useRef<Map<string, { map: Record<string, MisPersonView>; weekLabel: string }>>(new Map());
+  const weekCacheKey = JSON.stringify([viewerRole, currentUid, weekStart]);
 
   const selectedWeekMeta = useMemo(() => getMisWeekPeriod(weekStart || defaultWeek.weekStart), [weekStart, defaultWeek.weekStart]);
   const isCurrentWeek = weekOptions[0]?.weekKey === selectedWeekMeta.weekKey;
@@ -222,13 +227,13 @@ export default function ScoresClient({
     const handleGlobalRefresh = (e: any) => {
       const scope = e?.detail?.scope;
       if (!scope || scope === 'scores' || scope === 'all') {
-        weekCacheRef.current.clear();
+        weeklyReports.clear();
         setPdfByKey({});
         setMisRefreshVersion(version => version + 1);
       }
     };
     const handleTaskUpdate = () => {
-      weekCacheRef.current.clear();
+      weeklyReports.clear();
       setMisRefreshVersion(version => version + 1);
     };
     window.addEventListener('app-global-refresh', handleGlobalRefresh);
@@ -242,22 +247,25 @@ export default function ScoresClient({
   useEffect(() => {
     if (!weekStart) return;
 
-    if (weekCacheRef.current.has(weekStart)) {
-      const cached = weekCacheRef.current.get(weekStart)!;
+    const cached = currentUid ? weeklyReports.get(weekCacheKey) : undefined;
+    if (cached) {
       setPdfByKey(cached.map);
+      setWeeklyTaskCounts(cached.counts);
       setPdfWeekLabel(cached.weekLabel);
       setMisLoading(false);
       return;
     }
 
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     setMisLoading(true);
+    setWeeklyTaskCounts(null);
     (async () => {
       try {
         const params = new URLSearchParams({ mode: 'live', weekStart });
-        const res = await fetch(`/api/mis?${params.toString()}`);
+        const res = await fetch(`/api/mis?${params.toString()}`, { signal });
         const json = await res.json();
-        if (!res.ok || !json.success || cancelled) return;
+        if (!res.ok || !json.success || signal.aborted) return;
         const map: Record<string, MisPersonView> = {};
         for (const row of json.data ?? []) {
           const payload: MisPersonView = {
@@ -284,17 +292,19 @@ export default function ScoresClient({
         const label = json.meta?.weekStart && json.meta?.weekEnd
           ? formatWeekLabel(json.meta.weekStart, json.meta.weekEnd)
           : formatWeekLabel(selectedWeekMeta.weekStart, selectedWeekMeta.weekEnd);
-        weekCacheRef.current.set(weekStart, { map, weekLabel: label });
+        const counts = Array.isArray(json.meta?.taskCounts) ? json.meta.taskCounts as WeeklyTaskCount[] : null;
+        setWeeklyTaskCounts(counts);
+        if (currentUid && counts) weeklyReports.set(weekCacheKey, { map, weekLabel: label, counts });
         setPdfByKey(map);
         if (label) setPdfWeekLabel(label);
       } catch {
         // PDF MIS is additive; portal on-time scores still render
       } finally {
-        if (!cancelled) setMisLoading(false);
+        if (!signal.aborted) setMisLoading(false);
       }
     })();
-    return () => { cancelled = true; };
-  }, [weekStart, selectedWeekMeta, misRefreshVersion]);
+    return () => controller.abort();
+  }, [weekStart, weekCacheKey, currentUid, selectedWeekMeta, misRefreshVersion]);
 
   function updateTask(updated?: TaskSerialized) {
     if (!updated) {
@@ -391,6 +401,14 @@ export default function ScoresClient({
     const rows = filteredTaskItems.filter(task => task.assignedTo === uid);
     const identity = users.find(user => user.uid === uid) ?? scores.find(score => score.uid === uid);
     const delegation = lookupMis(pdfByKey, uid, identity?.name ?? '')?.delegation;
+    const counts = weeklyTaskCounts?.filter(row => row.uid === uid);
+    if (counts) return {
+      total: counts.reduce((sum, row) => sum + Number(row.planned || 0), 0),
+      pending: counts.reduce((sum, row) => sum + Number(row.pending || 0), 0),
+      active: counts.reduce((sum, row) => sum + Number(row.active || 0), 0),
+      completed: counts.reduce((sum, row) => sum + Number(row.completed || 0), 0),
+      overdue: counts.reduce((sum, row) => sum + Number(row.overdue || 0), 0),
+    };
     return {
       total: delegation?.planned ?? 0,
       pending: rows.filter(task => ['Pending Accept', 'Shifted (Pending Accept)'].includes(task.status)).length,
@@ -435,6 +453,7 @@ export default function ScoresClient({
     const departmentScores = departmentUsers.map(user => scoreForIdentity(user));
     const userIds = new Set(departmentUsers.map(user => user.uid));
     const departmentTasks = filteredTaskItems.filter(task => userIds.has(task.assignedTo));
+    const statusCounts = weeklyTaskCounts?.filter(row => sameDepartment(row.department, department));
     const averageScore = departmentScores.length
       ? Math.round(departmentScores.reduce((sum, score) => sum + (score.monthlyScore ?? 0), 0) / departmentScores.length)
       : 0;
@@ -471,7 +490,13 @@ export default function ScoresClient({
       averageScore,
       users: departmentUsers,
       scores: departmentScores,
-      counts: {
+      counts: statusCounts ? {
+        total: statusCounts.reduce((sum, row) => sum + Number(row.planned || 0), 0),
+        pending: statusCounts.reduce((sum, row) => sum + Number(row.pending || 0), 0),
+        active: statusCounts.reduce((sum, row) => sum + Number(row.active || 0), 0),
+        completed: statusCounts.reduce((sum, row) => sum + Number(row.completed || 0), 0),
+        overdue: statusCounts.reduce((sum, row) => sum + Number(row.overdue || 0), 0),
+      } : {
         total: departmentTasks.length,
         pending: departmentTasks.filter(task => task.status === 'Pending Accept').length,
         active: departmentTasks.filter(task => task.status === 'In Progress').length,
@@ -770,7 +795,7 @@ export default function ScoresClient({
                 { label: 'Late', value: block.counts.overdue, color: 'text-red-700' },
               ].map(item => (
                 <div key={item.label} className="rounded-lg bg-gray-50 px-2 py-2 text-center">
-                  <p className={cn('text-sm font-bold', item.color)}>{item.value}</p>
+                  <p className={cn('text-sm font-bold', item.color)}>{weeklyTaskCounts === null ? '—' : item.value}</p>
                   <p className="text-[10px] text-gray-400">{item.label}</p>
                 </div>
               ))}

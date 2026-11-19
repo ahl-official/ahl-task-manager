@@ -597,6 +597,7 @@ export default function ChecklistClient({
     if (selectedRows.length === 0) return;
     const ids = selectedRows.map(r => r.id);
     const templateIds = Array.from(new Set(selectedRows.map(r => r.taskId)));
+    const deleteFrom = startDate || selectedRows.map(row => (row.dueDate || row.periodKey).slice(0, 10)).sort()[0];
 
     setIsDeleting(true);
     try {
@@ -607,6 +608,7 @@ export default function ChecklistClient({
           mode,
           ids,
           templateIds,
+          startDate: mode === 'whole' ? deleteFrom : undefined,
           remark: batchDeleteRemark.trim() || undefined,
         }),
       });
@@ -626,9 +628,8 @@ export default function ChecklistClient({
         toast.success(`Deleted ${data.data.deleted} occurrence(s). Restore them from Deleted Tasks.`);
       } else {
         const templateSet = new Set(templateIds);
-        const today = indiaTodayKey();
         const keepRow = (r: ChecklistRow) => !templateSet.has(r.taskId) ||
-          (r.completed && (r.periodEnd || r.dueDate || r.periodKey).slice(0, 10) < today);
+          r.completed || r.status === 'Verified' || (r.dueDate || r.periodKey).slice(0, 10) < deleteFrom;
         setRows(prev => prev.filter(keepRow));
         for (const key of Object.keys(categoryCache.current)) {
           categoryCache.current[key].rows = categoryCache.current[key].rows.filter(keepRow);
@@ -1517,7 +1518,7 @@ export default function ChecklistClient({
                       {uniqueTemplatesForDelete.length === 1 ? 'Delete whole recurring task' : `Delete whole recurring tasks (${uniqueTemplatesForDelete.length})`}
                     </span>
                     <span className="text-xs text-red-700">
-                      Removes all unfinished occurrences, including past dates. Past completed history stays.
+                      Removes unfinished occurrences from {startDate || 'the earliest selected date'} onward and stops future recurrence. Completed history and earlier dates stay.
                     </span>
                   </button>
                 )}
@@ -1538,7 +1539,7 @@ export default function ChecklistClient({
                 <p className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
                   {batchDeleteMode === 'day'
                     ? `Delete ${selectedRowsForDelete.length} selected occurrence(s)? You can restore them from Deleted Tasks.`
-                    : `Delete ${uniqueTemplatesForDelete.length} recurring task(s), all unfinished occurrences, and current or future occurrences? Past completed history stays. You can undo this from Deleted Tasks.`}
+                    : `Stop ${uniqueTemplatesForDelete.length} recurring task(s) and delete unfinished occurrences from ${startDate || selectedRowsForDelete.map(row => (row.dueDate || row.periodKey).slice(0, 10)).sort()[0]} onward? Completed/Verified occurrences and earlier history stay. You can undo this from Deleted Tasks.`}
                 </p>
                 <div>
                   <label className="label text-gray-700">Reason / Remark (optional)</label>

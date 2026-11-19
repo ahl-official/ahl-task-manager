@@ -3,13 +3,37 @@ import { getSession } from '@/lib/utils/auth';
 import { computeMisScoresForWeek, overlayLiveFmsOnScores } from '@/lib/mis/compute';
 import { buildMisMasterReport } from '@/lib/mis/masterReport';
 import { formatGapPercent } from '@/lib/mis/sheetFormula';
-import { getMisWeekPeriod } from '@/lib/mis/week';
+import { getMisWeekPeriod, getMonthWeekSlots } from '@/lib/mis/week';
 import { adminGetLatestMisByPerson, adminGetMisWeeklySnapshots } from '@/lib/mis/weeklySnapshot';
-import { buildMonthlyMisReports } from '@/lib/mis/monthlyReport';
+import { buildMonthlyReportsFromSnapshots } from '@/lib/mis/monthlyReport';
+import type { MisPersonScore, MisWeeklySnapshot } from '@/lib/mis/types';
+import { misCacheKey, misCacheSet } from '@/lib/mis/cache';
+import { adminGetAllUsers } from '@/lib/firebase/users';
+import { cfApi } from '@/lib/cloudflare/api';
 import { normalizePersonName } from '@/lib/utils/names';
 
 function canViewAll(session: { role: string }) {
   return session.role === 'admin' || session.role === 'leader';
+}
+
+// Resolve weekly scores the same way for the weekly and monthly views.
+async function loadWeekScores(
+  week: ReturnType<typeof getMisWeekPeriod>,
+  options: { snapshots?: MisWeeklySnapshot[]; preferSnapshot: boolean; fresh?: boolean },
+): Promise<{ rows: MisPersonScore[]; source: 'snapshot' | 'live' }> {
+  if (options.preferSnapshot) {
+    const snapshots = options.snapshots ?? await adminGetMisWeeklySnapshots({ weekKey: week.weekKey });
+    const withParams = snapshots.filter(row => row.parameters?.length);
+    if (withParams.length) {
+      const rows = await overlayLiveFmsOnScores(withParams, week.weekStart, week.weekEnd, { fresh: options.fresh });
+      if (!options.fresh) misCacheSet(misCacheKey(['live', 'v2-params', week.weekStart, week.weekEnd]), rows, 60_000);
+      return { rows, source: 'snapshot' };
+    }
+  }
+  return {
+    rows: await computeMisScoresForWeek(week.weekStart, week.weekEnd, { strict: options.fresh }),
+    source: 'live',
+  };
 }
 
 // GET /api/mis?mode=live|master|latest|weekly|monthly&name=&weekStart=&weekEnd=
@@ -76,7 +100,28 @@ export async function GET(req: NextRequest) {
       if (!Number.isInteger(year) || year < 2020 || year > 2100 || !Number.isInteger(month) || month < 1 || month > 12) {
         return NextResponse.json({ success: false, error: 'Invalid month or year' }, { status: 400 });
       }
-      let reports = await buildMonthlyMisReports({ year, monthIndex0: month - 1 });
+      const current = getMisWeekPeriod();
+      const slots = getMonthWeekSlots(year, month - 1).filter(slot => slot.weekEnd < current.weekStart);
+      const snapshots = slots.length
+        ? await adminGetMisWeeklySnapshots({ year, monthName: slots[0].monthName, fresh: true })
+        : [];
+      const scores: MisPersonScore[] = [];
+      // Fetch the month's snapshots once and cap concurrent weekly source reads.
+      for (let index = 0; index < slots.length; index += 2) {
+        const weeks = await Promise.all(slots.slice(index, index + 2).map(slot => loadWeekScores(slot, {
+          snapshots: snapshots.filter(row => row.weekKey === slot.weekKey),
+          preferSnapshot: true,
+          fresh: true,
+        })));
+        for (const result of weeks) scores.push(...result.rows);
+      }
+      const users = await adminGetAllUsers();
+      const byUid = new Map(users.map(user => [user.uid, user]));
+      const byName = new Map(users.map(user => [normalizePersonName(user.name), user]));
+      let reports = buildMonthlyReportsFromSnapshots(scores, year, month - 1).filter(row => {
+        const user = (row.uid ? byUid.get(row.uid) : undefined) ?? byName.get(normalizePersonName(row.name));
+        return user?.isActive === true && row.ms !== null;
+      });
       if (!canViewAll(session)) {
         reports = reports.filter(row =>
           row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name),
@@ -94,54 +139,14 @@ export async function GET(req: NextRequest) {
           msLabel: formatGapPercent(row.ms),
         })),
         meta: { year, month, elevated: canViewAll(session) },
-      });
+      }, { headers: { 'Cache-Control': 'private, no-store' } });
     }
 
-    // live current (or requested) week — prefer saved snapshots for past weeks (fast)
     const currentWeek = getMisWeekPeriod();
-    const preferSnapshot = week.weekKey !== currentWeek.weekKey || searchParams.get('source') === 'snapshot';
-    let rows: Awaited<ReturnType<typeof computeMisScoresForWeek>> = [];
-    let source: 'live' | 'snapshot' = 'live';
-
-    // Allow forcing full live recompute (skips stale weekly snapshots).
     const forceLive = searchParams.get('source') === 'live';
-
-    if (preferSnapshot && !forceLive) {
-      const snapshots = await adminGetMisWeeklySnapshots({ weekKey: week.weekKey });
-      // Only use snapshots that include parameter breakdown (Office/Salon/Weekly).
-      const withParams = snapshots.filter(row => Array.isArray(row.parameters) && row.parameters.length > 0);
-      if (withParams.length > 0) {
-        source = 'snapshot';
-        rows = withParams.map(row => ({
-          uid: row.uid,
-          name: row.name,
-          department: row.department,
-          waNumber: row.waNumber,
-          checklist: row.checklist,
-          delegation: row.delegation,
-          fms: row.fms,
-          parameters: row.parameters,
-          planned: row.planned,
-          done: row.done,
-          onTime: row.onTime,
-          gapPercent: row.gapPercent,
-          gapDecimal: row.gapDecimal,
-          onTimeGapPercent: row.onTimeGapPercent,
-          weekKey: row.weekKey,
-          weekStart: row.weekStart,
-          weekEnd: row.weekEnd,
-        }));
-        // Snapshots often store stale FMS; refresh from MIS Report sheets (no D1).
-        rows = await overlayLiveFmsOnScores(rows, week.weekStart, week.weekEnd);
-        const { misCacheKey, misCacheSet } = await import('@/lib/mis/cache');
-        misCacheSet(misCacheKey(['live', 'v2-params', week.weekStart, week.weekEnd]), rows, 60_000);
-      }
-    }
-
-    if (rows.length === 0) {
-      rows = await computeMisScoresForWeek(week.weekStart, week.weekEnd);
-      source = 'live';
-    }
+    let { rows, source } = await loadWeekScores(week, {
+      preferSnapshot: !forceLive && (week.weekKey !== currentWeek.weekKey || searchParams.get('source') === 'snapshot'),
+    });
 
     if (!canViewAll(session)) {
       rows = rows.filter(row =>
@@ -149,10 +154,18 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    // Status counts come from grouped rows, not a partially loaded task list.
+    let taskCounts = await cfApi<Array<{ uid: string; name: string; department: string; planned: number; active: number; pending: number; completed: number; overdue: number }>>(
+      '/mis/delegation-counts?' + new URLSearchParams({ weekStart: week.weekStart, weekEnd: week.weekEnd }),
+    );
+    if (!canViewAll(session)) taskCounts = taskCounts.filter(row => row.uid === session.uid);
+    else if (session.role === 'leader') taskCounts = taskCounts.filter(row =>
+      normalizePersonName(row.department) === normalizePersonName(session.department));
     return NextResponse.json({
       success: true,
       data: rows.map(row => ({ ...row, gapLabel: formatGapPercent(row.gapPercent) })),
       meta: {
+        taskCounts,
         weekKey: week.weekKey,
         weekStart: week.weekStart,
         weekEnd: week.weekEnd,

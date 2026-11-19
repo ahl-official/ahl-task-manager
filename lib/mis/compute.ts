@@ -58,7 +58,7 @@ export async function computeMisScoresForWeek(weekStart?: string, weekEnd?: stri
     const [checklistDetailed, delegation, fms, users, reconciled] = await Promise.all([
       options.strict ? getChecklistDetailedCounts(week.weekStart, week.weekEnd) : getChecklistDetailedCounts(week.weekStart, week.weekEnd).catch(() => ({ byName: new Map(), paramCounts: [] })),
       options.strict ? getDelegationBuckets(week.weekStart, week.weekEnd) : getDelegationBuckets(week.weekStart, week.weekEnd).catch(() => new Map()),
-      options.strict ? getFmsBuckets(week.weekStart, week.weekEnd) : getFmsBuckets(week.weekStart, week.weekEnd).catch(() => new Map()),
+      options.strict ? getFmsBuckets(week.weekStart, week.weekEnd, { fresh: true }) : getFmsBuckets(week.weekStart, week.weekEnd).catch(() => new Map()),
       options.strict ? adminGetAllUsers() : adminGetAllUsers().catch(() => []),
       options.strict ? getReconciledScores(week.weekStart, week.weekEnd) : getReconciledScores(week.weekStart, week.weekEnd).catch(() => []),
     ]);
@@ -156,10 +156,11 @@ export async function overlayLiveFmsOnScores(
   rows: MisPersonScore[],
   weekStart: string,
   weekEnd: string,
+  options?: { fresh?: boolean },
 ): Promise<MisPersonScore[]> {
   if (!rows.length) return rows;
   const [fmsByName, reconciled] = await Promise.all([
-    getFmsBuckets(weekStart, weekEnd),
+    getFmsBuckets(weekStart, weekEnd, options),
     getReconciledScores(weekStart, weekEnd),
   ]);
   const historicalByName = new Map(reconciled.map(row => [normalizePersonName(row.name), row]));

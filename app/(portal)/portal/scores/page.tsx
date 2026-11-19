@@ -1,5 +1,5 @@
 import { getSession } from '@/lib/utils/auth';
-import { adminGetAllScores, adminGetScore } from '@/lib/firebase/scores';
+import { adminGetAllScores } from '@/lib/firebase/scores';
 import { adminGetTaskCounts } from '@/lib/firebase/tasks';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { Trophy, TrendingUp, CheckCircle2, Clock, AlertTriangle } from 'lucide-react';
@@ -66,13 +66,14 @@ export default async function PortalScorePage() {
     );
   }
 
-  const [score, taskCounts] = await Promise.all([
-    adminGetScore(session.uid),
-    adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true }),
-  ]);
-
   const week = getMisWeekPeriod();
   const prevWeek = getPreviousMisWeekPeriod();
+  const [taskCounts, stored, currentStored, history] = await Promise.all([
+    adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true }),
+    adminGetMisWeeklySnapshots({ weekKey: prevWeek.weekKey }).catch(() => []),
+    adminGetMisWeeklySnapshots({ weekKey: week.weekKey }).catch(() => []),
+    adminGetMisWeeklySnapshots({ year: week.year, monthName: week.monthName }).catch(() => []),
+  ]);
 
   // Score is last-completed-week only — the current week isn't reconciled yet, so no
   // score is calculated or shown for it anywhere. The current week's card below shows
@@ -90,11 +91,6 @@ export default async function PortalScorePage() {
   }> = [];
 
   try {
-    const [stored, currentStored] = await Promise.all([
-      adminGetMisWeeklySnapshots({ weekKey: prevWeek.weekKey }).catch(() => []),
-      adminGetMisWeeklySnapshots({ weekKey: week.weekKey }).catch(() => []),
-    ]);
-
     lastWeekSnapshot = stored.find(row => row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name));
 
     const currentSnap = currentStored.find(row => row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name));
@@ -103,7 +99,6 @@ export default async function PortalScorePage() {
     }
 
     // Weekly history: completed weeks only (never the current, still-open week).
-    const history = await adminGetMisWeeklySnapshots({ year: week.year, monthName: week.monthName }).catch(() => []);
     weeklyRows = history
       .filter(row =>
         (row.uid === session.uid || normalizePersonName(row.name) === normalizePersonName(session.name))
@@ -126,9 +121,6 @@ export default async function PortalScorePage() {
   const verified  = taskCounts.verified;
   const completed = taskCounts.completed;
   const overdue   = taskCounts.overdue;
-  const pending   = taskCounts.pending;
-
-  const mis = score?.monthlyScore ?? 0;
 
   function gapColor(gap: number | null) {
     if (gap === null) return 'text-gray-400';

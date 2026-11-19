@@ -262,6 +262,7 @@ export async function adminGetMisWeeklySnapshots(filters?: {
   monthName?: string;
   year?: number;
   name?: string;
+  fresh?: boolean;
 }): Promise<MisWeeklySnapshot[]> {
   if (hasCloudflareApi()) {
     try {
@@ -270,10 +271,12 @@ export async function adminGetMisWeeklySnapshots(filters?: {
       if (filters?.year != null) params.set('year', String(filters.year));
       if (filters?.monthName) params.set('monthName', filters.monthName);
       if (filters?.name) params.set('name', filters.name);
+      if (filters?.fresh) params.set('fresh', 'true');
       const qs = params.toString();
       const rows = await cfApi<MisWeeklySnapshot[]>(`/mis/weekly${qs ? `?${qs}` : ''}`);
       return (rows || []).map(row => serializeSnapshot(row));
     } catch (err) {
+      if (filters?.fresh) throw err;
       await notifyMisFirebaseFallback({
         operation: 'adminGetMisWeeklySnapshots',
         error: err,

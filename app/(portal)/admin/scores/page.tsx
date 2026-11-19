@@ -2,6 +2,7 @@ import { adminGetAllScores } from '@/lib/firebase/scores';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminGetDepartments, serializeDepartment } from '@/lib/firebase/departments';
 import ScoresClient from '@/components/shared/ScoresClient';
+import { getSession } from '@/lib/utils/auth';
 
 function scoreLastUpdatedIso(value: unknown): string {
   if (!value) return new Date().toISOString();
@@ -17,6 +18,8 @@ function scoreLastUpdatedIso(value: unknown): string {
 }
 
 export default async function AdminScoresPage() {
+  const session = await getSession();
+  if (session?.role !== 'admin') return null;
   const [scores, users, departments] = await Promise.all([
     adminGetAllScores(),
     adminGetAllUsers(),
@@ -48,6 +51,7 @@ export default async function AdminScoresPage() {
         tasks={[]}
         departments={departments.map(serializeDepartment)}
         viewerRole="admin"
+        currentUid={session.uid}
         showDepartments
       />
     </div>

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Pencil, Plus, Trash2, UserCheck, UserX, Loader2, X } from 'lucide-react';
+import { Pencil, Plus, Trash2, UserCheck, UserX, Loader2, Search, X } from 'lucide-react';
 import { cn, formatDate } from '@/lib/utils';
 import { roleLabel, TEAM_ROLES } from '@/lib/utils/hierarchy';
 import { toast } from 'sonner';
@@ -34,6 +34,7 @@ export default function UsersClient({
   departments: { id: string; name: string }[];
 }) {
   const [users, setUsers]       = useState(initial);
+  const [search, setSearch] = useState('');
   const [departments, setDepartments] = useState(initialDepartments);
   const [showForm, setShowForm] = useState(false);
   const [editingUser, setEditingUser] = useState<any | null>(null);
@@ -232,6 +233,14 @@ export default function UsersClient({
     }
   }
 
+  // Filter the loaded directory locally; typing never triggers a database request.
+  const searchTerms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const visibleUsers = searchTerms.length ? users.filter(user => {
+    const fields = [user.name, user.department, user.uid, user.waNumber, roleLabel(normalizeRole(user.role) as any)];
+    const searchable = fields.join(' ').toLowerCase();
+    return searchTerms.every(term => searchable.includes(term));
+  }) : users;
+
   return (
     <div className="space-y-4">
       <div className="card p-4">
@@ -427,6 +436,13 @@ export default function UsersClient({
 
       {/* Users table */}
       <div className="card overflow-hidden">
+        <div className="border-b border-gray-100 p-4">
+          <div className="relative max-w-sm">
+            <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input type="search" aria-label="Search team members" placeholder="Search team members…"
+              value={search} onChange={event => setSearch(event.target.value)} className="input w-full pl-9" />
+          </div>
+        </div>
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50/50">
@@ -436,7 +452,12 @@ export default function UsersClient({
             </tr>
           </thead>
           <tbody>
-            {users.map(user => (
+            {visibleUsers.length === 0 && (
+              <tr><td colSpan={7} className="px-4 py-6 text-center text-gray-500">
+                {searchTerms.length ? 'No team members match your search.' : 'No team members yet.'}
+              </td></tr>
+            )}
+            {visibleUsers.map(user => (
               <tr key={user.uid} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2.5">

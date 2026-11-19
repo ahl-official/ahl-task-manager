@@ -88,12 +88,12 @@ const fmsCache = new Map<string, { expiresAt: number; data: { byName: Map<string
 export async function getFmsDetailedCounts(
   weekStart: string,
   weekEnd: string,
-  options?: { includeSteps?: boolean },
+  options?: { includeSteps?: boolean; fresh?: boolean },
 ) {
   const includeSteps = options?.includeSteps !== false;
   const cacheKey = `${weekStart}_${weekEnd}_${includeSteps}`;
   const cached = fmsCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (!options?.fresh && cached && cached.expiresAt > Date.now()) {
     return cached.data;
   }
 
@@ -156,6 +156,7 @@ export async function getFmsDetailedCounts(
         });
       }
     } catch (err) {
+      if (options?.fresh) throw err;
       console.error(`Failed to batch read FMS sheets from spreadsheet ${sId}`, err);
     }
   }
@@ -233,7 +234,7 @@ export async function getFmsDetailedCounts(
 }
 
 /** FMS bucket (E20/F20): totals only (no per-step maps) — used by live Scores. */
-export async function getFmsBuckets(weekStart: string, weekEnd: string) {
-  const { byName } = await getFmsDetailedCounts(weekStart, weekEnd, { includeSteps: false });
+export async function getFmsBuckets(weekStart: string, weekEnd: string, options?: { fresh?: boolean }) {
+  const { byName } = await getFmsDetailedCounts(weekStart, weekEnd, { includeSteps: false, fresh: options?.fresh });
   return byName;
 }
