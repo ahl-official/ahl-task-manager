@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cfApi } from '@/lib/cloudflare/api';
 import { readSpreadsheetValues } from '@/lib/google/sheets';
 import { normalizePersonName } from '@/lib/utils/names';
-import { checkD1RecurringBudget } from '@/lib/cloudflare/d1Usage';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -108,10 +107,6 @@ export async function GET(req: NextRequest) {
   const phase = req.nextUrl.searchParams.get('phase') || 'all';
   if (!['all', 'delegation', 'recurring'].includes(phase)) {
     return NextResponse.json({ success: false, error: 'Invalid sheet sync phase' }, { status: 400 });
-  }
-  const budget = await checkD1RecurringBudget();
-  if (!budget.allowed) {
-    return NextResponse.json({ success: true, skipped: true, reason: budget.reason, rowsRead: budget.rowsRead, rowsWritten: budget.rowsWritten });
   }
   const runDelegation = phase !== 'recurring';
   const runRecurring = phase !== 'delegation';

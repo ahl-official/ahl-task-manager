@@ -1,12 +1,6 @@
 const ACCOUNT_ID = 'b20892b35b7ece3670ecaf46e879d5c7';
 
-/**
- * Cloudflare D1 Daily Usage Guard Thresholds
- * - Writes soft limit: 80,000 writes / day (Cloudflare hard limit is 100,000)
- * - Reads soft limit: 4,000,000 reads / day (Cloudflare hard limit is 5,000,000)
- */
-export const D1_READ_SOFT_LIMIT = 4_000_000;
-export const D1_WRITE_SOFT_LIMIT = 80_000;
+// Usage reporting is informational; paid-plan jobs are not gated by free-plan thresholds.
 
 export async function getTodayD1Usage(): Promise<{ rowsRead: number; rowsWritten: number }> {
   const token = process.env.CLOUDFLARE_ANALYTICS_TOKEN;
@@ -45,61 +39,4 @@ export async function getTodayD1Usage(): Promise<{ rowsRead: number; rowsWritten
     }
     return { rowsRead: total.rowsRead + rowsRead, rowsWritten: total.rowsWritten + rowsWritten };
   }, { rowsRead: 0, rowsWritten: 0 });
-}
-
-export type D1BudgetStatus = {
-  allowed: boolean;
-  rowsRead?: number;
-  rowsWritten?: number;
-  reason?: string;
-  source: 'cloudflare_analytics' | 'untracked';
-};
-
-/**
- * Checks if the recurring materialization trigger should run based on D1 usage:
- * - Block if daily writes >= 80,000 (80k)
- * - Block if daily reads >= 4,000,000 (4M)
- * If blocked, returns allowed: false so the trigger halts and defers to next day's cron.
- */
-export async function checkD1RecurringBudget(): Promise<D1BudgetStatus> {
-  const token = process.env.CLOUDFLARE_ANALYTICS_TOKEN;
-  if (!token) {
-    return { allowed: false, reason: 'CLOUDFLARE_ANALYTICS_TOKEN is not configured; D1 usage cannot be checked.', source: 'untracked' };
-  }
-
-  try {
-    const usage = await getTodayD1Usage();
-    if (usage.rowsWritten >= D1_WRITE_SOFT_LIMIT) {
-      return {
-        allowed: false,
-        rowsRead: usage.rowsRead,
-        rowsWritten: usage.rowsWritten,
-        reason: `D1 write limit reached: ${usage.rowsWritten.toLocaleString()} writes today (threshold: ${D1_WRITE_SOFT_LIMIT.toLocaleString()}). Postponing materialization trigger to next day.`,
-        source: 'cloudflare_analytics',
-      };
-    }
-    if (usage.rowsRead >= D1_READ_SOFT_LIMIT) {
-      return {
-        allowed: false,
-        rowsRead: usage.rowsRead,
-        rowsWritten: usage.rowsWritten,
-        reason: `D1 read limit reached: ${usage.rowsRead.toLocaleString()} reads today (threshold: ${D1_READ_SOFT_LIMIT.toLocaleString()}). Postponing materialization trigger to next day.`,
-        source: 'cloudflare_analytics',
-      };
-    }
-    return {
-      allowed: true,
-      rowsRead: usage.rowsRead,
-      rowsWritten: usage.rowsWritten,
-      source: 'cloudflare_analytics',
-    };
-  } catch (err: any) {
-    console.warn('[checkD1RecurringBudget] Analytics check error:', err.message);
-    // Bulk work must not run when the daily budget cannot be verified.
-    return {
-      allowed: false,
-      reason: `D1 usage could not be checked: ${err.message}`,
-      source: 'untracked',
-    };
-  }
 }
