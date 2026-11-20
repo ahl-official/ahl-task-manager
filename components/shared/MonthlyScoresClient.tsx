@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
+import { createTabCache } from '@/lib/utils/tabCache';
 
 type MonthlyRow = {
   uid: string | null;
@@ -18,7 +19,9 @@ type MonthlyRow = {
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-export default function MonthlyScoresClient() {
+const monthlyReports = createTabCache<MonthlyRow[]>(Infinity);
+
+export default function MonthlyScoresClient({ currentUid }: { currentUid: string }) {
   const today = indiaTodayKey();
   const currentYear = Number(today.slice(0, 4));
   const [year, setYear] = useState(currentYear);
@@ -26,14 +29,37 @@ export default function MonthlyScoresClient() {
   const [rows, setRows] = useState<MonthlyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const forceRefresh = useRef(false);
+  const cacheKey = JSON.stringify([currentUid, year, month]);
+
+  // Score mutations update the server; only an explicit refresh replaces this browser's snapshot.
+  useEffect(() => {
+    const refresh = (event: Event) => {
+      const scope = (event as CustomEvent).detail?.scope;
+      if (scope && scope !== 'all' && scope !== 'scores') return;
+      monthlyReports.clear();
+      forceRefresh.current = true;
+      setRefreshVersion(value => value + 1);
+    };
+    window.addEventListener('app-global-refresh', refresh);
+    return () => window.removeEventListener('app-global-refresh', refresh);
+  }, []);
 
   useEffect(() => {
+    const cached = monthlyReports.get(cacheKey);
+    if (cached) {
+      setRows(cached);
+      setLoading(false);
+      setError('');
+      return;
+    }
     const controller = new AbortController();
     setError('');
     setLoading(true);
     setRows([]);
-    // Always fetch the selected month; cancel requests for filters no longer selected.
-    fetch(`/api/mis?mode=monthly&year=${year}&month=${month}`, { cache: 'no-store', signal: controller.signal })
+    // Cache each month separately; cancel requests for filters no longer selected.
+    fetch(`/api/mis?mode=monthly&year=${year}&month=${month}${forceRefresh.current ? '&fresh=true' : ''}`, { cache: 'no-store', signal: controller.signal })
       .then(async response => {
         const payload = await response.json();
         if (!response.ok || !payload.success) throw new Error(payload.error || 'Could not load monthly scores');
@@ -42,11 +68,13 @@ export default function MonthlyScoresClient() {
       .then(data => {
         if (controller.signal.aborted) return;
         setRows(data);
+        monthlyReports.set(cacheKey, data);
+        forceRefresh.current = false;
       })
       .catch(err => { if (!controller.signal.aborted) setError(err.message || 'Could not load monthly scores'); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [year, month]);
+  }, [year, month, cacheKey, refreshVersion]);
 
   const ranked = useMemo(() => [...rows].sort((a, b) => {
     if (a.ms === null) return 1;

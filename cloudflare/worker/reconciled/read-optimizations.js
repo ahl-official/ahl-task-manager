@@ -1,3 +1,4 @@
+import { pendingVerification } from './pending-verification.js';
 // Read-only reporting routes. No schema creation, materialization, or database writes.
 const cache = new Map();
 const periodCache = new Map();
@@ -5,7 +6,7 @@ const TTL = 300_000;
 export function invalidateReadCache() {
   periodCache.clear();
   for (const key of cache.keys()) {
-    if (['/tasks/counts','/mis/weekly','/mis/weekly/latest','/mis/reconciled','/mis/delegation-counts','/recurring/mis-counts'].includes(new URL(key).pathname)) cache.delete(key);
+    if (['/tasks/counts','/mis/weekly','/mis/weekly/latest','/mis/reconciled','/mis/delegation-counts','/recurring/mis-counts','/recurring/task-dates'].includes(new URL(key).pathname)) cache.delete(key);
   }
 }
 
@@ -76,22 +77,25 @@ export async function syncCachedTasksFromMutation(req, url, response) {
 }
 export function getCachedRead(req, url) {
   if (req.method !== 'GET' || url.searchParams.get('fresh') === 'true') return null;
-  const entry = cache.get(url.href);
-  if (!entry || entry.until <= Date.now()) { cache.delete(url.href); return null; }
+  const keyUrl = new URL(url.href);
+  if (url.pathname === '/recurring/task-dates') keyUrl.searchParams.set('asOfDay', today());
+  const entry = cache.get(keyUrl.href);
+  if (!entry || entry.until <= Date.now()) { cache.delete(keyUrl.href); return null; }
   return new Response(entry.body, { status: 200, headers: { 'content-type': 'application/json', 'x-data-as-of': entry.asOf } });
 }
 export async function cacheRead(req, url, response) {
-  if (req.method !== 'GET' || response.status !== 200 || !['/tasks/counts','/tasks/search','/users','/departments','/mis/delegation-counts','/recurring/mis-counts','/mis/reconciled','/mis/weekly','/mis/weekly/latest'].includes(url.pathname)) return;
+  if (req.method !== 'GET' || response.status !== 200 || !['/tasks/counts','/tasks/search','/users','/departments','/mis/delegation-counts','/recurring/mis-counts','/recurring/task-dates','/mis/reconciled','/mis/weekly','/mis/weekly/latest'].includes(url.pathname)) return;
   const body = await response.clone().text();
   if (body.length > 1_000_000) return;
   const cacheUrl = new URL(url.href);
   cacheUrl.searchParams.delete('fresh');
+  if (url.pathname === '/recurring/task-dates') cacheUrl.searchParams.set('asOfDay', today());
   // A fresh GET replaces its own cache entry without evicting unrelated reads.
   if (!cache.has(cacheUrl.href) && cache.size >= 128) {
     if (url.searchParams.get('fresh') === 'true') return;
     cache.delete(cache.keys().next().value);
   }
-  const ttl = url.pathname === '/tasks/search' && url.searchParams.get('verificationPending') === 'true' ? 10_000 : TTL;
+  const ttl = url.pathname === '/recurring/task-dates' ? 60_000 : url.pathname === '/tasks/search' && url.searchParams.get('verificationPending') === 'true' ? 10_000 : TTL;
   cache.set(cacheUrl.href, { body, until: Date.now() + ttl, asOf: new Date().toISOString() });
 }
 const json = data => new Response(JSON.stringify({success:true,data,meta:{asOf:new Date().toISOString()}}),{headers:{'content-type':'application/json'}});
@@ -197,6 +201,28 @@ export async function adjustTaskCount(env, oldTask, newTask) {
 }
 
 export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
+  if (req.method === 'GET' && url.pathname === '/tasks/verification-pending') return pendingVerification(env, url, mapTask);
+  if (url.pathname === '/recurring/task-dates' && req.method === 'GET') {
+    const ids = [...new Set((url.searchParams.get('ids') || '').split(',').filter(Boolean))];
+    if (!ids.length || ids.length > 100 || ids.some(id => !/^T-[a-z0-9-]+$/i.test(id))) throw new Error('Invalid recurring task IDs');
+    const output = [];
+    // Pick one actual occurrence per template; status, due date and navigation always share it.
+    for (let offset = 0; offset < ids.length; offset += 90) {
+      const batch = ids.slice(offset, offset + 90);
+      const lookup = (operator, direction) => `(SELECT p.id FROM recurring_period_rows p
+        WHERE p.template_id=w.template_id AND p.is_deleted=0 AND p.status!='Deleted'
+        AND p.due_date${operator}ctx.day ORDER BY p.due_date ${direction},p.id ${direction} LIMIT 1)`;
+      const result = await env.DB.prepare(`WITH wanted(template_id) AS (VALUES ${batch.map(() => '(?)').join(',')}), ctx(day) AS (VALUES (?)),
+        picked AS MATERIALIZED (SELECT w.template_id,COALESCE(${lookup('<=','DESC')},${lookup('>','ASC')}) AS row_id FROM wanted w CROSS JOIN ctx)
+        SELECT picked.template_id,p.due_date,p.status FROM picked LEFT JOIN recurring_period_rows p ON p.id=picked.row_id`)
+        .bind(...batch, today()).all();
+      for (const row of result.results || []) output.push({
+        taskId: row.template_id, recurringDueDate: row.due_date || null,
+        recurringOpenDate: row.due_date || null, recurringStatus: row.status || null,
+      });
+    }
+    return json(output);
+  }
   if(req.method!=='GET')return null;
   if(url.pathname==='/sheet-sync/candidates'){
     const kind=url.searchParams.get('kind'),cursor=url.searchParams.get('after')||'';

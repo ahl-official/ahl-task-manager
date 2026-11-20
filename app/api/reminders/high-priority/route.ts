@@ -16,7 +16,7 @@ import { indiaTodayKey } from '@/lib/utils/indiaDate';
 /**
  * GET /api/reminders/high-priority
  * Replaces newdelegation 2hourRedBallReminder (High priority 🔴).
- * Only sends during IST 11:00–19:00 unless ?force=1.
+ * Only sends during IST 11:00–17:59 unless ?force=1.
  */
 
 export async function GET(req: NextRequest) {
@@ -27,11 +27,11 @@ export async function GET(req: NextRequest) {
 
   const force = new URL(req.url).searchParams.get('force') === '1';
   const hour = indiaHourNow();
-  if (!force && (hour < 11 || hour >= 19)) {
+  if (!force && (hour < 11 || hour >= 18)) {
     return NextResponse.json({
       success: true,
       skipped: true,
-      reason: `Outside IST working hours (11–19); hour=${hour}`,
+      reason: `Outside IST working hours (11–18); hour=${hour}`,
       sent: 0,
     });
   }

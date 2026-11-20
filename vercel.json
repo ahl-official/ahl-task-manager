@@ -1,31 +1,24 @@
 {
-  "env": {
-    "DISABLE_WHATSAPP": "true"
-  },
   "crons": [
     {
       "path": "/api/reminders/high-priority?slot=11am",
       "schedule": "30 5 * * *"
     },
     {
-      "path": "/api/reminders/high-priority?slot=1pm",
-      "schedule": "30 7 * * *"
-    },
-    {
-      "path": "/api/reminders/high-priority?slot=3pm",
-      "schedule": "30 9 * * *"
+      "path": "/api/reminders/high-priority?slot=2pm",
+      "schedule": "30 8 * * *"
     },
     {
       "path": "/api/reminders/high-priority?slot=5pm",
       "schedule": "30 11 * * *"
     },
     {
-      "path": "/api/reminders/high-priority?slot=7pm",
-      "schedule": "30 13 * * *"
-    },
-    {
       "path": "/api/cron/recurring-morning-reminders",
       "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/cron/recurring-morning-reminders?slot=4pm",
+      "schedule": "30 10 * * *"
     },
     {
       "path": "/api/reminders/daily-priority?mode=today",

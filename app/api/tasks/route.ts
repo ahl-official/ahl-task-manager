@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { withRecurringTaskDates } from '@/lib/cloudflare/recurringTaskDates';
 import { getSession } from '@/lib/utils/auth';
 import {
   adminCreateTask,
@@ -124,7 +125,9 @@ export async function GET(req: NextRequest) {
       tasks = mergePersonalDashboardTasks(databaseTasks, timelyTasks);
     }
 
-    return NextResponse.json({ success: true, data: tasks.slice(0, maxResults).map(serializeTask) }, { headers: responseHeaders });
+    const page = tasks.slice(0, maxResults);
+    const displayedTasks = searchParams.get('recurringSummary') === 'true' ? await withRecurringTaskDates(page, isFresh) : page;
+    return NextResponse.json({ success: true, data: displayedTasks.map(serializeTask) }, { headers: responseHeaders });
   } catch (err) {
     console.error('GET /api/tasks error', err);
     return NextResponse.json({ success: false, error: 'Failed to fetch tasks' }, { status: 500, headers: NO_CACHE_HEADERS });

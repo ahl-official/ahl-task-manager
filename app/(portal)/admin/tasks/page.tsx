@@ -4,6 +4,7 @@ import { adminGetAllUsers } from '@/lib/firebase/users';
 import TaskListClient from '@/components/shared/TaskListClient';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 import { shouldRefreshTasks } from '@/lib/utils/taskRefresh';
+import { withRecurringTaskDates } from '@/lib/cloudflare/recurringTaskDates';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
@@ -18,7 +19,7 @@ export default async function AdminTasksPage() {
 
   const hydratedTasks = hydrateTasksWithUsers(tasks, users);
 
-  const serialized = hydratedTasks.map(serializeTask);
+  const serialized = (await withRecurringTaskDates(hydratedTasks, fresh)).map(serializeTask);
   const serializedUsers = users.map(u => ({
     uid: u.uid,
     name: u.name,

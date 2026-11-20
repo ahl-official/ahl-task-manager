@@ -22,7 +22,7 @@ async function loadWeekScores(
   options: { snapshots?: MisWeeklySnapshot[]; preferSnapshot: boolean; fresh?: boolean },
 ): Promise<{ rows: MisPersonScore[]; source: 'snapshot' | 'live' }> {
   if (options.preferSnapshot) {
-    const snapshots = options.snapshots ?? await adminGetMisWeeklySnapshots({ weekKey: week.weekKey });
+    const snapshots = options.snapshots ?? await adminGetMisWeeklySnapshots({ weekKey: week.weekKey, fresh: options.fresh });
     const withParams = snapshots.filter(row => row.parameters?.length);
     if (withParams.length) {
       const rows = await overlayLiveFmsOnScores(withParams, week.weekStart, week.weekEnd, { fresh: options.fresh });
@@ -43,6 +43,7 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const mode = searchParams.get('mode') || 'live';
+  const fresh = searchParams.get('fresh') === 'true';
   const weekStart = searchParams.get('weekStart') || undefined;
   const week = weekStart ? getMisWeekPeriod(weekStart) : getMisWeekPeriod();
 
@@ -146,6 +147,7 @@ export async function GET(req: NextRequest) {
     const forceLive = searchParams.get('source') === 'live';
     let { rows, source } = await loadWeekScores(week, {
       preferSnapshot: !forceLive && (week.weekKey !== currentWeek.weekKey || searchParams.get('source') === 'snapshot'),
+      fresh,
     });
 
     if (!canViewAll(session)) {
@@ -156,7 +158,7 @@ export async function GET(req: NextRequest) {
 
     // Status counts come from grouped rows, not a partially loaded task list.
     let taskCounts = await cfApi<Array<{ uid: string; name: string; department: string; planned: number; active: number; pending: number; completed: number; overdue: number }>>(
-      '/mis/delegation-counts?' + new URLSearchParams({ weekStart: week.weekStart, weekEnd: week.weekEnd }),
+      '/mis/delegation-counts?' + new URLSearchParams({ weekStart: week.weekStart, weekEnd: week.weekEnd, ...(fresh ? { fresh: 'true' } : {}) }),
     );
     if (!canViewAll(session)) taskCounts = taskCounts.filter(row => row.uid === session.uid);
     else if (session.role === 'leader') taskCounts = taskCounts.filter(row =>

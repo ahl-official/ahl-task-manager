@@ -97,9 +97,14 @@ export default function Sidebar({
               key={href}
               href={href}
               prefetch={false}
-              onClick={() => {
+              onClick={event => {
                 setPendingHref(href);
                 setOpen(false);
+                // Other visits refresh via pathname; only an ordinary click on the current tab needs an event.
+                if (role === 'admin' && href === pathname && ['/admin', '/admin/tasks', '/admin/create-task'].includes(href)
+                  && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+                  window.dispatchEvent(new CustomEvent('verification-bell-refresh'));
+                }
               }}
               className={cn(
                 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors',

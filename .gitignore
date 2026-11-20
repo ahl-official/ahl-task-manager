@@ -100,4 +100,5 @@ cloudflare/err.txt
 /TASK_FLOW_AUDIT.md
 scripts/
 *.sql
+!cloudflare/d1_migrations/recurring_task_date_lookup.sql
 *.mjs

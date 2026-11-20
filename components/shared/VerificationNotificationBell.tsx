@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { Bell, CheckCircle2, CheckSquare, Loader2, Square, X } from 'lucide-react';
 import { cn, formatDateTime } from '@/lib/utils';
 import TaskModal from '@/components/shared/TaskModal';
@@ -25,27 +26,32 @@ export default function VerificationNotificationBell({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<TaskSerialized | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
-  const lastLoadedAt = useRef(0);
   const requestInFlight = useRef(false);
-  const lastForcedAt = useRef(0);
   const isAdmin = role === 'admin';
+  const pathname = usePathname();
 
-  const load = useCallback(async (silent = false, fresh = false) => {
-    // Focus, polling and task events can fire together; issue at most one read.
-    if (requestInFlight.current || (fresh && Date.now() - lastForcedAt.current < 1_000)) return;
-    if (silent && !fresh && Date.now() - lastLoadedAt.current < 15_000) return;
+  const load = useCallback(async () => {
+    // Bell clicks and selected tab visits refresh the queue; overlapping requests share the active fetch.
+    if (requestInFlight.current) return;
     requestInFlight.current = true;
-    if (fresh) lastForcedAt.current = Date.now();
-    if (!silent) setLoading(true);
+    setLoading(true);
     try {
-      const baseUrl = isAdmin
-        ? '/api/tasks?scope=all&filter=true&verificationPending=true&excludeRecurring=true&limit=50'
-        : '/api/tasks?scope=handoff&filter=true&verificationPending=true&excludeRecurring=true&limit=50';
-      const url = fresh ? `${baseUrl}&fresh=true` : baseUrl;
-      const res = await fetch(url, { cache: 'no-store' });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Failed to load notifications');
-      const pending = (data.data as TaskSerialized[])
+      // Fetch every indexed page on demand, without a total queue-size cap.
+      const byId = new Map<string, TaskSerialized>();
+      const seenCursors = new Set<string>();
+      let cursor: string | null = null;
+      do {
+        const params = new URLSearchParams();
+        if (cursor) params.set('cursor', cursor);
+        const res = await fetch(`/api/tasks/verification-pending?${params}`, { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || 'Failed to load notifications');
+        for (const task of data.data.items as TaskSerialized[]) byId.set(task.taskId, task);
+        cursor = data.data.hasMore ? data.data.nextCursor : null;
+        if (data.data.hasMore && (!cursor || seenCursors.has(cursor))) throw new Error('Invalid queue pagination');
+        if (cursor) seenCursors.add(cursor);
+      } while (cursor);
+      const pending = Array.from(byId.values())
         .filter(task =>
           task.status === 'Completed'
           && !task.verifiedAt
@@ -55,60 +61,26 @@ export default function VerificationNotificationBell({
         )
         .sort((a, b) => new Date(b.completedAt || b.updatedAt).getTime() - new Date(a.completedAt || a.updatedAt).getTime());
       setItems(pending);
-      lastLoadedAt.current = Date.now();
+      setSelectedIds(previous => new Set(Array.from(previous).filter(id => pending.some(task => task.taskId === id))));
     } catch {
-      // Keep last good list; avoid toast spam on background polls.
+      toast.error('Could not refresh tasks waiting for verification');
     } finally {
       requestInFlight.current = false;
-      if (!silent) setLoading(false);
+      setLoading(false);
     }
   }, [currentUid, isAdmin]);
 
+  // Refresh on these page visits (including direct entry), never on a timer or unrelated tabs.
   useEffect(() => {
-    // Initial fetch on mount
-    load();
+    if (isAdmin && ['/admin', '/admin/tasks', '/admin/create-task'].includes(pathname)) void load();
+  }, [pathname, isAdmin, load]);
 
-    // Listen for cross-tab task update events on the same computer.
-    let bc: BroadcastChannel | null = null;
-    try {
-      bc = new BroadcastChannel('ahl-task-updates');
-      bc.onmessage = () => {
-        load(true, true);
-      };
-    } catch {
-      // BroadcastChannel not supported
-    }
-
-    // Listen for local window task status update events.
-    function onTaskStatusUpdated() {
-      load(true, true);
-    }
-    window.addEventListener('task-status-updated', onTaskStatusUpdated);
-
-    // Refetch when the user returns to this tab.
-    function onFocusOrVisible() {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        load(true);
-      }
-    }
-    window.addEventListener('focus', onFocusOrVisible);
-    document.addEventListener('visibilitychange', onFocusOrVisible);
-
-    // Periodic background sync every 60s while the tab is active so completions by other users appear automatically
-    const pollTimer = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        load(true);
-      }
-    }, 60_000);
-
-    return () => {
-      clearInterval(pollTimer);
-      if (bc) bc.close();
-      window.removeEventListener('task-status-updated', onTaskStatusUpdated);
-      window.removeEventListener('focus', onFocusOrVisible);
-      document.removeEventListener('visibilitychange', onFocusOrVisible);
-    };
-  }, [load]);
+  // Clicking the already-active sidebar tab doesn't change the pathname, so handle it explicitly.
+  useEffect(() => {
+    const refresh = () => { if (isAdmin) void load(); };
+    window.addEventListener('verification-bell-refresh', refresh);
+    return () => window.removeEventListener('verification-bell-refresh', refresh);
+  }, [isAdmin, load]);
 
   useEffect(() => {
     function onPointerDown(event: MouseEvent) {
@@ -176,41 +148,44 @@ export default function VerificationNotificationBell({
     if (targetIds.length === 0 || batchVerifying) return;
 
     setBatchVerifying(true);
-
+    let verifiedCount = 0;
     try {
-      const res = await fetch('/api/tasks/batch-verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskIds: targetIds }),
-      });
-      const data = await res.json();
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to verify tasks');
+      // Keep each write bounded, but process the entire selection; retain successful batches on failure.
+      for (let offset = 0; offset < targetIds.length; offset += 100) {
+        const res = await fetch('/api/tasks/batch-verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskIds: targetIds.slice(offset, offset + 100) }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Failed to verify tasks');
+        }
+
+        const verifiedIds = new Set<string>(data.data?.verifiedIds || []);
+        const verifiedTasks: TaskSerialized[] = data.data?.tasks || [];
+
+        if (verifiedTasks.length > 0) {
+          try {
+            const bc = new BroadcastChannel('ahl-task-updates');
+            bc.postMessage({ type: 'task-updated' });
+            bc.close();
+          } catch {}
+          window.dispatchEvent(new CustomEvent('task-status-updated', { detail: verifiedTasks[0] || {} }));
+        }
+
+        setItems(prev => prev.filter(t => !verifiedIds.has(t.taskId)));
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          verifiedIds.forEach(id => next.delete(id));
+          return next;
+        });
+
+        verifiedCount += verifiedIds.size;
       }
-
-      const verifiedIds = new Set<string>(data.data?.verifiedIds || []);
-      const verifiedTasks: TaskSerialized[] = data.data?.tasks || [];
-
-      if (verifiedTasks.length > 0) {
-        try {
-          const bc = new BroadcastChannel('ahl-task-updates');
-          bc.postMessage({ type: 'task-updated' });
-          bc.close();
-        } catch {}
-        window.dispatchEvent(new CustomEvent('task-status-updated', { detail: verifiedTasks[0] || {} }));
-      }
-
-      setItems(prev => prev.filter(t => !verifiedIds.has(t.taskId)));
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        verifiedIds.forEach(id => next.delete(id));
-        return next;
-      });
-
-      const count = verifiedIds.size;
-      toast.success(`${count} task${count === 1 ? '' : 's'} verified successfully`);
+      toast.success(`${verifiedCount} task${verifiedCount === 1 ? '' : 's'} verified successfully`);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to batch verify tasks');
+      toast.error(`${verifiedCount ? `${verifiedCount} verified; remaining tasks stay selected. ` : ''}${err.message || 'Failed to batch verify tasks'}`);
     } finally {
       setBatchVerifying(false);
     }
@@ -224,19 +199,19 @@ export default function VerificationNotificationBell({
           onClick={() => {
             const nextOpen = !open;
             setOpen(nextOpen);
-            if (nextOpen) load(true, true);
+            if (nextOpen) void load();
           }}
           className={cn(
             'relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm transition-colors hover:bg-gray-50 hover:text-gray-900',
             open && 'border-brand-200 bg-brand-50 text-brand-700',
           )}
           aria-label="Verification notifications"
-          title="Tasks waiting for verification"
+          title="Click to refresh tasks waiting for verification"
         >
           <Bell size={18} />
           {count > 0 && (
             <span className="absolute -right-1 -top-1 inline-flex min-w-[18px] items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold leading-4 text-white">
-              {count > 99 ? '99+' : count}
+              {count}
             </span>
           )}
         </button>
@@ -247,7 +222,7 @@ export default function VerificationNotificationBell({
             <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
               <div>
                 <p className="text-sm font-semibold text-gray-900">Awaiting verification</p>
-                <p className="text-[11px] text-gray-400">{count} completed task{count === 1 ? '' : 's'}</p>
+                <p className="text-[11px] text-gray-400">{loading ? 'Refreshing…' : `${count} completed task${count === 1 ? '' : 's'}`}</p>
               </div>
               <button
                 type="button"
@@ -295,7 +270,7 @@ export default function VerificationNotificationBell({
                 <button
                   type="button"
                   onClick={handleBatchVerify}
-                  disabled={selectedCount === 0 || batchVerifying}
+                  disabled={selectedCount === 0 || batchVerifying || loading}
                   className={cn(
                     'inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-semibold text-white shadow-sm transition-all',
                     selectedCount > 0 && !batchVerifying

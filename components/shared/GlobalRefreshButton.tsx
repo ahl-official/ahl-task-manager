@@ -10,7 +10,7 @@ type TabScope = 'scores' | 'tasks' | 'checklist' | 'fms' | 'users' | 'revisions'
 
 function getTabScope(pathname: string): { scope: TabScope; label: string } {
   const p = pathname.toLowerCase();
-  if (p.includes('/scores')) return { scope: 'scores', label: 'Scores' };
+  if (p.includes('/scores') || p.includes('/monthly-scores')) return { scope: 'scores', label: 'Scores' };
   if (p.includes('/checklist')) return { scope: 'checklist', label: 'Checklist' };
   if (p.includes('/fms')) return { scope: 'fms', label: 'FMS' };
   if (p.includes('/users')) return { scope: 'users', label: 'Team' };

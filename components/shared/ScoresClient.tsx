@@ -119,7 +119,8 @@ function escapeHtml(value: string) {
 }
 
 type WeeklyTaskCount = { uid: string; name: string; department: string; planned: number; active: number; pending: number; completed: number; overdue: number };
-const weeklyReports = createTabCache<{ map: Record<string, MisPersonView>; weekLabel: string; counts: WeeklyTaskCount[] }>(60_000);
+// Keep a bounded set of viewed weeks until explicit refresh or a full browser reload.
+const weeklyReports = createTabCache<{ map: Record<string, MisPersonView>; weekLabel: string; counts: WeeklyTaskCount[] }>(Infinity);
 
 export default function ScoresClient({
   scores,
@@ -140,6 +141,7 @@ export default function ScoresClient({
   const [pdfWeekLabel, setPdfWeekLabel] = useState('');
   const [misLoading, setMisLoading] = useState(true);
   const [misRefreshVersion, setMisRefreshVersion] = useState(0);
+  const forceMisRefresh = useRef(false);
   const [nameQuery, setNameQuery] = useState('');
   const [nameMenuOpen, setNameMenuOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -232,19 +234,14 @@ export default function ScoresClient({
       const scope = e?.detail?.scope;
       if (!scope || scope === 'scores' || scope === 'all') {
         weeklyReports.clear();
+        forceMisRefresh.current = true;
         setPdfByKey({});
         setMisRefreshVersion(version => version + 1);
       }
     };
-    const handleTaskUpdate = () => {
-      weeklyReports.clear();
-      setMisRefreshVersion(version => version + 1);
-    };
     window.addEventListener('app-global-refresh', handleGlobalRefresh);
-    window.addEventListener('task-status-updated', handleTaskUpdate);
     return () => {
       window.removeEventListener('app-global-refresh', handleGlobalRefresh);
-      window.removeEventListener('task-status-updated', handleTaskUpdate);
     };
   }, []);
 
@@ -267,6 +264,7 @@ export default function ScoresClient({
     (async () => {
       try {
         const params = new URLSearchParams({ mode: 'live', weekStart });
+        if (forceMisRefresh.current) params.set('fresh', 'true');
         const res = await fetch(`/api/mis?${params.toString()}`, { signal });
         const json = await res.json();
         if (!res.ok || !json.success || signal.aborted) return;
@@ -301,6 +299,7 @@ export default function ScoresClient({
         if (currentUid && counts) weeklyReports.set(weekCacheKey, { map, weekLabel: label, counts });
         setPdfByKey(map);
         if (label) setPdfWeekLabel(label);
+        forceMisRefresh.current = false;
       } catch {
         // PDF MIS is additive; portal on-time scores still render
       } finally {

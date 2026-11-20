@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useMemo, useRef } from 'react';
-import { AlertTriangle, ArrowRight, Calendar, Check, Clock3, Loader2, Search } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Calendar, Check, Clock3, Loader2, RotateCcw, Search } from 'lucide-react';
 import { cn, formatDate, STATUS_COLORS, PRIORITY_DOT, getDueBadge, normalizeBaseStatus } from '@/lib/utils';
 import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import { scheduleByTaskId } from '@/lib/utils/scheduling';
@@ -126,11 +126,26 @@ export default function TaskListClient({
   const [departmentFilter, setDepartment] = useState('all');
   const [userFilter, setUserFilter] = useState('all');
   const [categoryFilter, setCategory] = useState('all');
-  const [sortMode, setSortMode] = useState<'recommended' | 'newest'>('recommended');
+  const [sortMode, setSortMode] = useState<'recommended' | 'newest'>(role === 'user' ? 'newest' : 'recommended');
   const [selectedTask, setSelected] = useState<TaskSerialized | null>(null);
+  const [weekOnly, setWeekOnly] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [isSearchingServer, setIsSearchingServer] = useState(false);
   const [isFetchingFilter, setIsFetchingFilter] = useState(false);
+  const recurringDefinitionView = headerTitle === 'All Tasks';
+  // Reset only local filter state; reuse loaded tasks rather than making a fresh database request.
+  function resetAllTaskFilters() {
+    setSearch('');
+    setStatus('all');
+    setPriority('all');
+    setDepartment('all');
+    setUserFilter('all');
+    setCategory('all');
+    setMineOnly(false);
+    setSortMode('recommended');
+    setIsFetchingFilter(false);
+    setIsSearchingServer(false);
+  }
   const fetchedFilterKeys = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -164,6 +179,7 @@ export default function TaskListClient({
       setIsSearchingServer(true);
       try {
         const params = new URLSearchParams({ search: q, limit: '100', filter: 'true', scope: mineOnly ? 'mine' : 'all' });
+        if (recurringDefinitionView) params.set('recurringSummary', 'true');
         for (const [key, value] of [['department', departmentFilter], ['status', statusFilter], ['assignedTo', userFilter], ['category', categoryFilter], ['priority', priorityFilter]]) if (value !== 'all') params.set(key, value);
         const response = await fetch('/api/tasks?' + params, { signal: controller.signal });
         const json = await response.json();
@@ -172,7 +188,7 @@ export default function TaskListClient({
           let changed = false;
           for (const task of json.data) {
             const previous = byId.get(task.taskId);
-            if (!previous || previous.updatedAt !== task.updatedAt) { byId.set(task.taskId, task); changed = true; }
+            if (!previous || previous.updatedAt !== task.updatedAt || previous.recurringDueDate !== task.recurringDueDate || previous.recurringOpenDate !== task.recurringOpenDate || previous.recurringStatus !== task.recurringStatus) { byId.set(task.taskId, task); changed = true; }
           }
           return changed ? Array.from(byId.values()) : current;
         });
@@ -180,7 +196,7 @@ export default function TaskListClient({
       finally { if (!controller.signal.aborted) setIsSearchingServer(false); }
     }, 500);
     return () => { clearTimeout(timer); controller.abort(); setIsSearchingServer(false); };
-  }, [search, departmentFilter, statusFilter, userFilter, categoryFilter, priorityFilter, mineOnly, currentUid]);
+  }, [search, departmentFilter, statusFilter, userFilter, categoryFilter, priorityFilter, mineOnly, currentUid, recurringDefinitionView]);
 
   const countsCache = useRef<Record<string, Props['initialCounts']>>({});
 
@@ -303,6 +319,7 @@ export default function TaskListClient({
         if (departmentFilter !== 'all') params.set('department', departmentFilter);
         if (categoryFilter !== 'all') params.set('category', categoryFilter);
         if (priorityFilter !== 'all') params.set('priority', priorityFilter);
+        if (recurringDefinitionView) params.set('recurringSummary', 'true');
 
         const response = await fetch('/api/tasks?' + params.toString(), { signal: controller.signal });
         const json = await response.json();
@@ -312,7 +329,7 @@ export default function TaskListClient({
             let changed = false;
             for (const task of json.data) {
               const prev = byId.get(task.taskId);
-              if (!prev || prev.updatedAt !== task.updatedAt) {
+              if (!prev || prev.updatedAt !== task.updatedAt || prev.recurringDueDate !== task.recurringDueDate || prev.recurringOpenDate !== task.recurringOpenDate || prev.recurringStatus !== task.recurringStatus) {
                 byId.set(task.taskId, task);
                 changed = true;
               }
@@ -335,7 +352,7 @@ export default function TaskListClient({
     return () => {
       controller.abort();
     };
-  }, [statusFilter, mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, currentUid]);
+  }, [statusFilter, mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, currentUid, recurringDefinitionView]);
 
   const departments = useMemo(() =>
     deduplicateDepartments([
@@ -352,25 +369,39 @@ export default function TaskListClient({
     [departmentFilter, users]
   );
 
-  const scheduleMap = useMemo(() => scheduleByTaskId(taskItems), [taskItems]);
+  const scheduleMap = useMemo(() => scheduleByTaskId(recurringDefinitionView
+    ? taskItems.filter(task => !RECURRING_CATEGORIES.has(normalizeCategory(task.category)))
+    : taskItems), [taskItems, recurringDefinitionView]);
 
   const filtered = useMemo(() => {
     const today = indiaTodayKey();
+    const todayDate = new Date(`${today}T12:00:00`);
+    const weekStartDate = new Date(todayDate);
+    weekStartDate.setDate(todayDate.getDate() - ((todayDate.getDay() + 6) % 7));
+    const weekStart = indiaDateKey(weekStartDate);
     const rows = taskItems.filter(t => {
       const isOverdueTask = t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(today, indiaDateKey(t.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status));
       const matchMine = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
       const matchSearch = matchesTaskSearch(t, search);
-      const matchStatus = statusFilter === 'all'
-        || (statusFilter === 'Overdue'
+      const recurringDefinition = recurringDefinitionView && RECURRING_CATEGORIES.has(normalizeCategory(t.category));
+      const isAllPending = ['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Shifted (Pending)', 'Shifted (Pending Accept)', 'Shifted (In Progress)'].includes(t.status);
+      const normalStatusMatch = statusFilter === 'all' || (statusFilter === 'All Pending' ? isAllPending : statusFilter === 'Overdue'
           ? isOverdueTask
           : statusFilter === 'Completed'
             ? ['Completed', 'Verified'].includes(t.status)
             : (!isOverdueTask && (t.status === statusFilter || normalizeBaseStatus(t.status) === statusFilter)));
+      const matchStatus = recurringDefinition
+        ? statusFilter === 'all' || (statusFilter === 'Completed' ? ['Completed', 'Verified'].includes(t.recurringStatus || '')
+          : statusFilter === 'In Progress' ? ['Pending', 'In Progress'].includes(t.recurringStatus || '')
+            : t.recurringStatus === statusFilter)
+        : normalStatusMatch;
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
       const matchDepartmentFilter = departmentFilter === 'all' || matchDepartment(t.department, departmentFilter);
       const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
       const matchCategory = categoryFilter === 'all' || normalizeCategory(t.category) === normalizeCategory(categoryFilter);
-      return matchMine && matchSearch && matchStatus && matchPriority && matchDepartmentFilter && matchUser && matchCategory;
+      const createdDate = indiaDateKey(t.createdAt);
+      const matchWeek = !weekOnly || (createdDate >= weekStart && createdDate <= today);
+      return matchMine && matchSearch && matchStatus && matchPriority && matchDepartmentFilter && matchUser && matchCategory && matchWeek;
     });
 
     if (sortMode === 'recommended') {
@@ -394,7 +425,7 @@ export default function TaskListClient({
       if (diff !== 0) return diff;
       return left.taskId.localeCompare(right.taskId);
     });
-  }, [taskItems, mineOnly, currentUid, currentUserName, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter, sortMode, scheduleMap]);
+  }, [taskItems, mineOnly, currentUid, currentUserName, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter, sortMode, scheduleMap, recurringDefinitionView, weekOnly]);
 
   const loadedCardCounts = useMemo(() => {
     const today = indiaTodayKey();
@@ -475,13 +506,27 @@ export default function TaskListClient({
     total: aggregateCards?.total ?? loadedCardCounts.total,
   };
 
-  const justAssignedTasks = useMemo(() =>
-    [...taskItems]
+  const newestWeekTasks = useMemo(() => {
+    if (role !== 'user') return [];
+    const today = indiaTodayKey();
+    const todayDate = new Date(`${today}T12:00:00`);
+    const weekStartDate = new Date(todayDate);
+    weekStartDate.setDate(todayDate.getDate() - ((todayDate.getDay() + 6) % 7));
+    const weekStart = indiaDateKey(weekStartDate);
+    return [...taskItems].filter(task => {
+      const created = indiaDateKey(task.createdAt);
+      return created >= weekStart && created <= today;
+    }).sort((a, b) => parseTime(b.createdAt) - parseTime(a.createdAt));
+  }, [taskItems, role]);
+
+  const justAssignedTasks = useMemo(() => {
+    const newest = [...taskItems]
       .filter(task => ACTIVE_STATUSES.has(task.status))
       .sort((a, b) => (parseTime(b.createdAt) - parseTime(a.createdAt)) || a.taskId.localeCompare(b.taskId))
-      .slice(0, 4),
-    [taskItems]
-  );
+      .slice(0, 3);
+    return role === 'user' ? newest : [...newest, ...taskItems.filter(task => !newest.some(item => item.taskId === task.taskId))
+      .sort((a,b) => parseTime(b.createdAt)-parseTime(a.createdAt)).slice(0,1)];
+  }, [taskItems, role]);
 
   const selectedUser = users.find(user => user.uid === userFilter);
   const scopeLabel = mineOnly
@@ -508,8 +553,9 @@ export default function TaskListClient({
   }, [isDefaultView, initialCounts, totalCount, filtered]);
 
   const openTask = (task: TaskSerialized) => {
-    if (RECURRING_CATEGORIES.has(task.category)) {
-      const params = new URLSearchParams({ category: task.category, taskId: task.taskId });
+    if (RECURRING_CATEGORIES.has(normalizeCategory(task.category))) {
+      const params = new URLSearchParams({ category: normalizeCategory(task.category), taskId: task.taskId });
+      if (recurringDefinitionView) params.set('date', task.recurringOpenDate || indiaTodayKey());
       window.location.href = `/${role === 'admin' ? 'admin' : 'portal'}/checklist?${params}`;
       return;
     }
@@ -563,7 +609,7 @@ export default function TaskListClient({
         </div>
       )}
 
-      {isDefaultView && justAssignedTasks.length > 0 && (
+      {role === 'user' && justAssignedTasks.length > 0 && (
         <section suppressHydrationWarning className="surface-enter mb-5">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
@@ -577,8 +623,9 @@ export default function TaskListClient({
             </span>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className={cn('grid gap-3', role === 'user' ? 'md:grid-cols-2 xl:grid-cols-4' : 'md:grid-cols-2 xl:grid-cols-4')}>
             {justAssignedTasks.map(task => {
+              const recurringDefinition = recurringDefinitionView && RECURRING_CATEGORIES.has(normalizeCategory(task.category));
               const createdAtMs = new Date(task.createdAt).getTime();
               const isFresh = Date.now() - createdAtMs <= NEW_ASSIGNMENT_WINDOW_MS;
               return (
@@ -602,20 +649,36 @@ export default function TaskListClient({
                   <div className="mt-4 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-1.5 text-xs text-gray-500">
                       <Clock3 size={13} />
-                      <span suppressHydrationWarning>{formatDate(task.endDate)}</span>
+                      <span suppressHydrationWarning>{recurringDefinition
+                        ? `${normalizeCategory(task.category)} · ${task.recurringDueDate ? formatDate(task.recurringDueDate) : '—'}`
+                        : formatDate(task.endDate)}</span>
                     </div>
                     <ArrowRight size={15} className="text-gray-300 transition-transform group-hover:translate-x-0.5 group-hover:text-brand-600" />
                   </div>
                 </button>
               );
             })}
+            {role === 'user' && (
+              <button type="button" onClick={() => setWeekOnly(value => !value)}
+                className={cn('card flex min-h-[150px] flex-col items-center justify-center gap-2 border border-dashed p-4 text-center', weekOnly ? 'border-brand-500 bg-brand-50 text-brand-800 ring-2 ring-brand-300' : 'border-brand-300 text-brand-700 hover:bg-brand-50')}>
+                <span className="text-sm font-semibold">This Week’s Newest Tasks</span>
+                <span className="text-xs text-gray-500">{newestWeekTasks.length} task{newestWeekTasks.length === 1 ? '' : 's'} · {weekOnly ? 'Showing this week · Clear' : 'Show in task list'}</span>
+              </button>
+            )}
           </div>
         </section>
       )}
 
       {/* 3 Interactive Stat Filter Cards */}
-      <div className="surface-enter mb-3.5 grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
+      <div className={cn('surface-enter mb-3.5 grid grid-cols-1 gap-2.5 sm:gap-3', role === 'user' ? 'sm:grid-cols-2 xl:grid-cols-4' : 'sm:grid-cols-3')}>
         {[
+          ...(role === 'user' ? [{
+            id: 'All Pending', label: 'All Pending',
+            value: taskItems.filter(task => ['Pending Accept', 'Pending', 'In Progress', 'Delay Requested', 'Overdue', 'Shifted (Pending)', 'Shifted (Pending Accept)', 'Shifted (In Progress)'].includes(task.status)).length,
+            activeBg: 'bg-amber-100/90 border-amber-400 ring-2 ring-amber-400/40 shadow-xs',
+            defaultBg: 'bg-amber-50/80 border-amber-200/80 hover:bg-amber-100/50',
+            textVal: 'text-amber-950', textLabel: 'text-amber-700',
+          }] : []),
           {
             id: 'In Progress',
             label: 'In Progress',
@@ -667,6 +730,14 @@ export default function TaskListClient({
 
       {/* Filters Bar */}
       <div className="surface-enter mb-3.5 flex flex-wrap items-center gap-2.5">
+        {recurringDefinitionView && (
+          <button type="button" onClick={resetAllTaskFilters}
+            disabled={!search && statusFilter === 'all' && priorityFilter === 'all' && departmentFilter === 'all' && userFilter === 'all' && categoryFilter === 'all' && !mineOnly && sortMode === 'recommended'}
+            className="btn-secondary inline-flex h-9 items-center gap-1.5 px-3 py-1.5 text-xs disabled:opacity-40 sm:h-10 sm:text-sm"
+            title="Clear search and reset all filters" aria-label="Reset search and all filters">
+            <RotateCcw size={14} /> Reset
+          </button>
+        )}
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
@@ -743,7 +814,7 @@ export default function TaskListClient({
           onChange={e => setSortMode(e.target.value as typeof sortMode)}
           className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
-          <option value="recommended">Recommended Order</option>
+          {role === 'admin' && <option value="recommended">Recommended Order</option>}
           <option value="newest">Newest First</option>
         </select>
 
@@ -780,6 +851,7 @@ export default function TaskListClient({
                 </tr>
               )}
               {filtered.map(task => {
+                const recurringDefinition = recurringDefinitionView && RECURRING_CATEGORIES.has(normalizeCategory(task.category));
                 const due = getDueBadge(task.endDate, task.status);
                 const scheduled = scheduleMap.get(task.taskId);
                 const today = indiaTodayKey();
@@ -813,14 +885,21 @@ export default function TaskListClient({
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      {(() => {
+                      {recurringDefinition ? (task.recurringStatus ? (
+                        <span className={cn('badge', task.recurringStatus === 'Pending' ? 'bg-amber-100 text-amber-700'
+                          : STATUS_COLORS[(task.recurringStatus === 'Verified' ? 'Completed' : task.recurringStatus) as TaskSerialized['status']] || 'bg-gray-100 text-gray-700')}>
+                          {task.recurringStatus === 'Verified' ? 'Completed' : task.recurringStatus}
+                        </span>
+                      ) : <span className="text-gray-400">—</span>) : (() => {
                         const isRec = RECURRING_CATEGORIES.has(normalizeCategory(task.category));
                         const displayStatus = isOverdue ? 'Overdue' : (isRec && task.status === 'Verified' ? 'Completed' : task.status);
                         return <span className={cn('badge', STATUS_COLORS[displayStatus] || STATUS_COLORS[task.status])}>{displayStatus}</span>;
                       })()}
                     </td>
                     <td className="px-4 py-3">
-                      {['Completed', 'Verified'].includes(task.status) ? (
+                      {recurringDefinition ? (
+                        <span className="badge bg-gray-100 text-gray-700">{normalizeCategory(task.category)}</span>
+                      ) : ['Completed', 'Verified'].includes(task.status) ? (
                         (() => {
                           const isRec = RECURRING_CATEGORIES.has(normalizeCategory(task.category));
                           const displayStatus = isRec && task.status === 'Verified' ? 'Completed' : task.status;
@@ -843,7 +922,9 @@ export default function TaskListClient({
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {!task.endDate && ['Pending Accept', 'In Progress', 'Shifted (Pending Accept)', 'Shifted (In Progress)'].includes(task.status) ? (
+                      {recurringDefinition ? (
+                        <span className="text-xs text-gray-700">{task.recurringDueDate ? formatDate(task.recurringDueDate) : '—'}</span>
+                      ) : !task.endDate && ['Pending Accept', 'In Progress', 'Shifted (Pending Accept)', 'Shifted (In Progress)'].includes(task.status) ? (
                         <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200/80">
                           <Calendar size={11} className="text-amber-500 shrink-0" /> Set Date
                         </span>
@@ -854,7 +935,7 @@ export default function TaskListClient({
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <button
-                          onClick={e => { e.stopPropagation(); setSelected(task); }}
+                          onClick={e => { e.stopPropagation(); if (recurringDefinitionView) openTask(task); else setSelected(task); }}
                           className="text-xs text-brand-600 hover:underline font-medium"
                         >
                           View

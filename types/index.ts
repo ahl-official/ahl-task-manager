@@ -71,6 +71,9 @@ export interface Task {
   createdAt: FirestoreTimestamp;
   updatedAt: FirestoreTimestamp;
   dayKey?: string;
+  recurringDueDate?: string | null;
+  recurringOpenDate?: string | null;
+  recurringStatus?: string | null;
   weekKey?: string;
   weekStart?: FirestoreTimestamp;
   weekEnd?: FirestoreTimestamp;
