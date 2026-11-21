@@ -43,7 +43,12 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const checklistItems = await getRecurringChecklist({ date: todayKey });
+    // Only send Weekly and Monthly recurring tasks due on the EXACT date (Daily recurring tasks excluded)
+    const [weeklyItems, monthlyItems] = await Promise.all([
+      getRecurringChecklist({ startDate: todayKey, endDate: todayKey, category: 'Weekly' }),
+      getRecurringChecklist({ startDate: todayKey, endDate: todayKey, category: 'Monthly' }),
+    ]);
+    const checklistItems = [...weeklyItems, ...monthlyItems];
 
     for (const user of activeUsers) {
       try {

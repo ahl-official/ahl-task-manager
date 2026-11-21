@@ -106,7 +106,7 @@ function enqueueSend<T>(fn: () => Promise<T>): Promise<T> {
   });
 }
 
-let cachedVinittWa: string | null = null;
+let cachedVinittWa: string | null = '919820188505';
 let lastVinittWaFetch = 0;
 
 export async function getVinittWa(): Promise<string | null> {
@@ -116,7 +116,7 @@ export async function getVinittWa(): Promise<string | null> {
   }
   try {
     if (hasCloudflareApi()) {
-      const u = await cfApi<{ waNumber?: string; wa_number?: string }>(`/users/${encodeURIComponent(VINITT_UID)}`).catch(() => null);
+      const u = await cfApi<{ waNumber?: string; wa_number?: string }>(`/users/by-uid?uid=${encodeURIComponent(VINITT_UID)}`).catch(() => null);
       if (u) {
         cachedVinittWa = String(u.waNumber || u.wa_number || '').replace(/\D/g, '');
         lastVinittWaFetch = now;
@@ -124,12 +124,13 @@ export async function getVinittWa(): Promise<string | null> {
       }
     }
   } catch {}
-  return cachedVinittWa;
+  return cachedVinittWa || '919820188505';
 }
 
 export function isVinittWa(waNumber: unknown, recipientUid?: string): boolean {
   if (recipientUid === VINITT_UID || recipientUid === 'user-vinitt') return true;
   const digits = String(waNumber ?? '').replace(/\D/g, '');
+  if (digits.length >= 10 && digits.endsWith('9820188505')) return true;
   if (cachedVinittWa && digits.length >= 10 && cachedVinittWa.endsWith(digits.slice(-10))) return true;
   return false;
 }

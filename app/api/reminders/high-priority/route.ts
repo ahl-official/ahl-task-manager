@@ -71,9 +71,10 @@ export async function GET(req: NextRequest) {
 
     for (const [uid, userTasks] of Array.from(byUid.entries())) {
       const user = usersByUid.get(uid);
-      if (user?.isActive === false) continue;
+      if (!user || user.isActive === false || isVinittUser(user)) continue;
       const phone = user?.waNumber || userTasks[0]?.assignedToWa || '';
       const name = user?.name || userTasks[0]?.assignedToName || 'there';
+      if (isVinittUser({ uid, name, waNumber: phone })) continue;
       if (!phone) {
         errors.push(`${uid}: no WhatsApp number`);
         continue;
