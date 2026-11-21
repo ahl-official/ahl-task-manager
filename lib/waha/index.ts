@@ -2,10 +2,10 @@ import { adminLog } from '@/lib/firebase/scores';
 import { VINITT_UID } from '@/lib/utils/names';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 
-const WAHA_URL     = process.env.WAHA_URL!;
+const WAHA_URL = process.env.WAHA_URL!;
 const WAHA_SESSION = process.env.WAHA_SESSION ?? 'default';
 const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
-const PORTAL_URL   = process.env.NEXT_PUBLIC_APP_URL || 'https://ahl-task-manager.vercel.app';
+const PORTAL_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://ahl-task-manager.vercel.app';
 
 export function automatedWhatsAppDisabled(): boolean {
   return process.env.DISABLE_WHATSAPP === 'true' || process.env.DISABLE_WHATSAPP === '1';
@@ -94,7 +94,8 @@ function enqueueSend<T>(fn: () => Promise<T>): Promise<T> {
       .then(async () => {
         try {
           const res = await fn();
-          await new Promise(r => setTimeout(r, 1500));
+          // Noticeable 4-second gap between each employee's message so they never arrive at the same second
+          await new Promise(r => setTimeout(r, 4000));
           resolve(res);
         } catch (err) {
           reject(err);
@@ -123,7 +124,7 @@ export async function getVinittWa(): Promise<string | null> {
         return cachedVinittWa;
       }
     }
-  } catch {}
+  } catch { }
   return cachedVinittWa || '919820188505';
 }
 
@@ -176,7 +177,7 @@ export async function sendWhatsApp(
     }
 
     // Ensure Vinitt's WA number is dynamically loaded by user-vinitt
-    await getVinittWa().catch(() => {});
+    await getVinittWa().catch(() => { });
 
     // DISABLE_WHATSAPP=true only suppresses background triggers/reminders/crons.
     // OTP sending and Task Creation notifications always send.
@@ -248,7 +249,7 @@ export async function sendWhatsAppFile(input: {
   taskId?: string;
   recipientUid?: string;
 }): Promise<SendWhatsAppResult> {
-  await getVinittWa().catch(() => {});
+  await getVinittWa().catch(() => { });
   if (automatedWhatsAppDisabled() || !process.env.WAHA_URL || isVinittWa(input.waNumber, input.recipientUid)) {
     return { ok: true, chatId: formatWaId(input.waNumber) };
   }
@@ -305,7 +306,7 @@ export async function sendWhatsAppPdfFromDriveLink(
   message: string,
   recipientUid?: string,
 ): Promise<SendWhatsAppResult> {
-  await getVinittWa().catch(() => {});
+  await getVinittWa().catch(() => { });
   if (automatedWhatsAppDisabled() || !process.env.WAHA_URL || isVinittWa(waNumber, recipientUid)) {
     return { ok: true, chatId: formatWaId(waNumber) };
   }
@@ -479,10 +480,10 @@ export function msgReminder(task: {
   urgency: '48h' | '24h' | 'today' | 'overdue';
 }): string {
   const urgencyText = {
-    '48h':    '⏰ Due in 48 hours',
-    '24h':    '⚠️ Due tomorrow',
-    'today':  '🔴 Due TODAY',
-    'overdue':'🚨 OVERDUE',
+    '48h': '⏰ Due in 48 hours',
+    '24h': '⚠️ Due tomorrow',
+    'today': '🔴 Due TODAY',
+    'overdue': '🚨 OVERDUE',
   }[task.urgency];
 
   return [
