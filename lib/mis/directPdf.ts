@@ -275,7 +275,7 @@ export async function downloadMonthlySummaryTablePdf(
 
     // Color Legend on header
     page.drawRectangle({
-      x: width - 365,
+      x: width - 395,
       y: height - 47,
       width: 10,
       height: 10,
@@ -283,8 +283,8 @@ export async function downloadMonthlySummaryTablePdf(
       borderColor: rgb(0.90, 0.40, 0.40),
       borderWidth: 0.5,
     });
-    page.drawText('Bad Score (< -20%)', {
-      x: width - 350,
+    page.drawText('Bad (< -50%)', {
+      x: width - 380,
       y: height - 45,
       size: 7.5,
       font: fontRegular,
@@ -292,7 +292,24 @@ export async function downloadMonthlySummaryTablePdf(
     });
 
     page.drawRectangle({
-      x: width - 250,
+      x: width - 295,
+      y: height - 47,
+      width: 10,
+      height: 10,
+      color: rgb(0.99, 0.85, 0.65),
+      borderColor: rgb(0.95, 0.65, 0.25),
+      borderWidth: 0.5,
+    });
+    page.drawText('Mid (-50% to -20%)', {
+      x: width - 280,
+      y: height - 45,
+      size: 7.5,
+      font: fontRegular,
+      color: rgb(0.98, 0.90, 0.80),
+    });
+
+    page.drawRectangle({
+      x: width - 180,
       y: height - 47,
       width: 10,
       height: 10,
@@ -300,8 +317,8 @@ export async function downloadMonthlySummaryTablePdf(
       borderColor: rgb(0.40, 0.80, 0.50),
       borderWidth: 0.5,
     });
-    page.drawText('Good Score (>= -20%)', {
-      x: width - 235,
+    page.drawText('Good (>= -20%)', {
+      x: width - 165,
       y: height - 45,
       size: 7.5,
       font: fontRegular,
@@ -358,25 +375,36 @@ export async function downloadMonthlySummaryTablePdf(
       const rank = pageIdx * rowsPerPage + rIdx + 1;
       const isAlt = rIdx % 2 === 1;
 
-      const isRowGood = row.ms !== null && row.ms !== undefined && row.ms >= -20;
-      const isRowBad = row.ms !== null && row.ms !== undefined && row.ms < -20;
-
-      if (isRowGood) {
-        page.drawRectangle({
-          x: 36,
-          y: rowY - 22,
-          width: width - 72,
-          height: 22,
-          color: rgb(0.97, 0.995, 0.97),
-        });
-      } else if (isRowBad) {
-        page.drawRectangle({
-          x: 36,
-          y: rowY - 22,
-          width: width - 72,
-          height: 22,
-          color: rgb(0.995, 0.97, 0.97),
-        });
+      // Highlight whole row based on final monthly score (ms)
+      if (row.ms !== null && row.ms !== undefined) {
+        if (row.ms >= -20) {
+          // Good -> Green whole row
+          page.drawRectangle({
+            x: 36,
+            y: rowY - 22,
+            width: width - 72,
+            height: 22,
+            color: rgb(0.91, 0.97, 0.92),
+          });
+        } else if (row.ms >= -50) {
+          // Mid -> Orange whole row
+          page.drawRectangle({
+            x: 36,
+            y: rowY - 22,
+            width: width - 72,
+            height: 22,
+            color: rgb(0.99, 0.94, 0.86),
+          });
+        } else {
+          // Bad -> Red whole row
+          page.drawRectangle({
+            x: 36,
+            y: rowY - 22,
+            width: width - 72,
+            height: 22,
+            color: rgb(0.99, 0.90, 0.90),
+          });
+        }
       } else if (isAlt) {
         page.drawRectangle({
           x: 36,
@@ -391,56 +419,21 @@ export async function downloadMonthlySummaryTablePdf(
         start: { x: 36, y: rowY - 22 },
         end: { x: width - 36, y: rowY - 22 },
         thickness: 0.5,
-        color: rgb(0.88, 0.90, 0.94),
+        color: rgb(0.85, 0.88, 0.92),
       });
 
       page.drawText(String(rank), { x: colX.rank, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.4, 0.45, 0.55) });
       page.drawText((row.name || '—').slice(0, 26), { x: colX.name, y: rowY - 15, size: 8.5, font: fontBold, color: rgb(0.1, 0.15, 0.25) });
       page.drawText((row.department || '—').slice(0, 20), { x: colX.dept, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.4, 0.45, 0.55) });
 
-      // Draw light red / light green pill for scores
-      const drawScorePill = (
-        scoreVal: number | null | undefined,
-        labelVal: string | undefined,
-        colKey: keyof typeof colX,
-        isMonthly = false,
-      ) => {
-        const text = labelVal || '—';
-        const x = colX[colKey];
-        if (scoreVal === null || scoreVal === undefined || Number.isNaN(scoreVal) || text === '—') {
-          page.drawText('—', { x: x + 6, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.55, 0.60, 0.70) });
-          return;
-        }
-        const isGood = scoreVal >= -20;
-        const boxWidth = isMonthly ? 56 : 48;
-        const boxHeight = 15;
+      // Clean numbers (not pills)
+      page.drawText(row.w1Label || '—', { x: colX.w1, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.2, 0.25, 0.35) });
+      page.drawText(row.w2Label || '—', { x: colX.w2, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.2, 0.25, 0.35) });
+      page.drawText(row.w3Label || '—', { x: colX.w3, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.2, 0.25, 0.35) });
+      page.drawText(row.w4Label || '—', { x: colX.w4, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.2, 0.25, 0.35) });
+      page.drawText(row.w5Label || '—', { x: colX.w5, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.2, 0.25, 0.35) });
 
-        // Light Green vs Light Red pill
-        page.drawRectangle({
-          x: x - 4,
-          y: rowY - 19,
-          width: boxWidth,
-          height: boxHeight,
-          color: isGood ? rgb(0.88, 0.96, 0.90) : rgb(0.99, 0.89, 0.89),
-          borderColor: isGood ? rgb(0.65, 0.88, 0.70) : rgb(0.96, 0.68, 0.68),
-          borderWidth: 0.5,
-        });
-
-        page.drawText(text, {
-          x,
-          y: rowY - 15,
-          size: isMonthly ? 8.5 : 7.5,
-          font: isMonthly ? fontBold : fontRegular,
-          color: isGood ? rgb(0.08, 0.50, 0.22) : rgb(0.78, 0.12, 0.12),
-        });
-      };
-
-      drawScorePill(row.w1, row.w1Label, 'w1');
-      drawScorePill(row.w2, row.w2Label, 'w2');
-      drawScorePill(row.w3, row.w3Label, 'w3');
-      drawScorePill(row.w4, row.w4Label, 'w4');
-      drawScorePill(row.w5, row.w5Label, 'w5');
-      drawScorePill(row.ms, row.msLabel, 'ms', true);
+      page.drawText(row.msLabel || '—', { x: colX.ms, y: rowY - 15, size: 9, font: fontBold, color: rgb(0.08, 0.12, 0.20) });
 
       rowY -= 22;
     }
