@@ -1,5 +1,6 @@
 import { buildWeeklyMisPdfAsync, weeklyMisPdfFilename } from '@/lib/mis/pdfReport';
 import { getMisWeekPeriod } from '@/lib/mis/week';
+import { isVinittUser } from '@/lib/utils/names';
 
 export interface MisPersonViewPdf {
   uid?: string | null;
@@ -202,7 +203,8 @@ export async function downloadMisMonthlyPdf(report: MisMonthlyPersonReportPdf) {
  * Generates and downloads the complete Monthly Leaderboard Summary Table as a landscape PDF.
  */
 export async function downloadMonthlySummaryTablePdf(
-  rows: Array<{
+  rawRows: Array<{
+    uid?: string | null;
     name: string;
     department?: string;
     w1Label?: string;
@@ -215,6 +217,7 @@ export async function downloadMonthlySummaryTablePdf(
   monthName: string,
   year: number,
 ) {
+  const rows = rawRows.filter(r => !isVinittUser({ uid: r.uid, name: r.name }));
   const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
   const pdfDoc = await PDFDocument.create();
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -256,7 +259,7 @@ export async function downloadMonthlySummaryTablePdf(
       color: rgb(1, 1, 1),
     });
 
-    page.drawText(`MONTHLY MIS PERFORMANCE SUMMARY  |  ${monthName.toUpperCase()} ${year}`, {
+    page.drawText(`MONTHLY MIS PERFORMANCE REPORT  |  ${monthName.toUpperCase()} ${year}`, {
       x: 36,
       y: height - 48,
       size: 10,
@@ -348,6 +351,6 @@ export async function downloadMonthlySummaryTablePdf(
   }
 
   const pdfBytes = await pdfDoc.save();
-  const filename = `Monthly_Scores_Summary_${monthName}_${year}.pdf`;
+  const filename = `Monthly_Scores_${monthName}_${year}.pdf`;
   triggerBrowserDownload(pdfBytes, filename);
 }

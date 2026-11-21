@@ -10,7 +10,7 @@ import type { MisPersonScore, MisWeeklySnapshot } from '@/lib/mis/types';
 import { misCacheKey, misCacheSet } from '@/lib/mis/cache';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { cfApi } from '@/lib/cloudflare/api';
-import { normalizePersonName } from '@/lib/utils/names';
+import { normalizePersonName, isVinittUser } from '@/lib/utils/names';
 
 function canViewAll(session: { role: string }) {
   return session.role === 'admin' || session.role === 'leader';
@@ -121,6 +121,7 @@ export async function GET(req: NextRequest) {
       const byName = new Map(users.map(user => [normalizePersonName(user.name), user]));
       let reports = buildMonthlyReportsFromSnapshots(scores, year, month - 1).filter(row => {
         const user = (row.uid ? byUid.get(row.uid) : undefined) ?? byName.get(normalizePersonName(row.name));
+        if (isVinittUser(user) || isVinittUser({ uid: row.uid, name: row.name })) return false;
         return user?.isActive === true && row.ms !== null;
       });
       if (!canViewAll(session)) {
