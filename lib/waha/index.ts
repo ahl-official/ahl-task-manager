@@ -94,8 +94,8 @@ function enqueueSend<T>(fn: () => Promise<T>): Promise<T> {
       .then(async () => {
         try {
           const res = await fn();
-          // Noticeable 4-second gap between each employee's message so they never arrive at the same second
-          await new Promise(r => setTimeout(r, 4000));
+          // 2-second gap between each employee's message so they never arrive at the same second
+          await new Promise(r => setTimeout(r, 2000));
           resolve(res);
         } catch (err) {
           reject(err);
