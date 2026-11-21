@@ -696,7 +696,7 @@ export function msgUnifiedRecurringReminder(input: {
 }): string {
   if (input.tasks.length === 0) {
     return [
-      `☀️ *Good Morning ${input.name}*,`,
+      `Hello ${input.name},`,
       ``,
       `📅 *Date: ${input.dateLabel}*`,
       ``,
@@ -711,7 +711,7 @@ export function msgUnifiedRecurringReminder(input: {
   }).join('\n\n---\n\n');
 
   return [
-    `☀️ *Good Morning ${input.name}*,`,
+    `Hello ${input.name},`,
     ``,
     `📅 *Checklist for Today (${input.dateLabel})*`,
     ``,
