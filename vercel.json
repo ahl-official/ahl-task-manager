@@ -2,23 +2,23 @@
   "crons": [
     {
       "path": "/api/cron/recurring-morning-reminders",
-      "schedule": "30 5 * * *"
+      "schedule": "0 5 * * *"
     },
     {
       "path": "/api/reminders/daily-priority?mode=today",
-      "schedule": "35 5 * * *"
+      "schedule": "5 5 * * *"
     },
     {
       "path": "/api/reminders/high-priority?slot=11am",
-      "schedule": "40 5 * * *"
+      "schedule": "30 5 * * *"
     },
     {
       "path": "/api/reminders/daily-pdf",
-      "schedule": "45 5 * * *"
+      "schedule": "30 6 * * *"
     },
     {
       "path": "/api/reminders",
-      "schedule": "50 5 * * *"
+      "schedule": "45 6 * * *"
     },
     {
       "path": "/api/cron/recurring-morning-reminders?slot=4pm",
