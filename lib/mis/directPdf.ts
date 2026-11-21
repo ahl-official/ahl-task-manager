@@ -207,6 +207,12 @@ export async function downloadMonthlySummaryTablePdf(
     uid?: string | null;
     name: string;
     department?: string;
+    w1?: number | null;
+    w2?: number | null;
+    w3?: number | null;
+    w4?: number | null;
+    w5?: number | null;
+    ms?: number | null;
     w1Label?: string;
     w2Label?: string;
     w3Label?: string;
@@ -267,6 +273,41 @@ export async function downloadMonthlySummaryTablePdf(
       color: rgb(0.68, 0.82, 1),
     });
 
+    // Color Legend on header
+    page.drawRectangle({
+      x: width - 365,
+      y: height - 47,
+      width: 10,
+      height: 10,
+      color: rgb(0.99, 0.80, 0.80),
+      borderColor: rgb(0.90, 0.40, 0.40),
+      borderWidth: 0.5,
+    });
+    page.drawText('Bad Score (< -20%)', {
+      x: width - 350,
+      y: height - 45,
+      size: 7.5,
+      font: fontRegular,
+      color: rgb(0.95, 0.85, 0.85),
+    });
+
+    page.drawRectangle({
+      x: width - 250,
+      y: height - 47,
+      width: 10,
+      height: 10,
+      color: rgb(0.80, 0.96, 0.84),
+      borderColor: rgb(0.40, 0.80, 0.50),
+      borderWidth: 0.5,
+    });
+    page.drawText('Good Score (>= -20%)', {
+      x: width - 235,
+      y: height - 45,
+      size: 7.5,
+      font: fontRegular,
+      color: rgb(0.85, 0.95, 0.88),
+    });
+
     page.drawText(`Page ${pageIdx + 1} of ${totalPages}`, {
       x: width - 110,
       y: height - 38,
@@ -289,14 +330,14 @@ export async function downloadMonthlySummaryTablePdf(
 
     const colX = {
       rank: 46,
-      name: 90,
-      dept: 280,
-      w1: 430,
-      w2: 490,
-      w3: 550,
-      w4: 610,
-      w5: 670,
-      ms: 740,
+      name: 86,
+      dept: 260,
+      w1: 420,
+      w2: 480,
+      w3: 540,
+      w4: 600,
+      w5: 660,
+      ms: 730,
     };
 
     page.drawText('#', { x: colX.rank, y: tableTop - 15, size: 8, font: fontBold, color: rgb(0.2, 0.25, 0.35) });
@@ -317,7 +358,26 @@ export async function downloadMonthlySummaryTablePdf(
       const rank = pageIdx * rowsPerPage + rIdx + 1;
       const isAlt = rIdx % 2 === 1;
 
-      if (isAlt) {
+      const isRowGood = row.ms !== null && row.ms !== undefined && row.ms >= -20;
+      const isRowBad = row.ms !== null && row.ms !== undefined && row.ms < -20;
+
+      if (isRowGood) {
+        page.drawRectangle({
+          x: 36,
+          y: rowY - 22,
+          width: width - 72,
+          height: 22,
+          color: rgb(0.97, 0.995, 0.97),
+        });
+      } else if (isRowBad) {
+        page.drawRectangle({
+          x: 36,
+          y: rowY - 22,
+          width: width - 72,
+          height: 22,
+          color: rgb(0.995, 0.97, 0.97),
+        });
+      } else if (isAlt) {
         page.drawRectangle({
           x: 36,
           y: rowY - 22,
@@ -338,13 +398,49 @@ export async function downloadMonthlySummaryTablePdf(
       page.drawText((row.name || '—').slice(0, 26), { x: colX.name, y: rowY - 15, size: 8.5, font: fontBold, color: rgb(0.1, 0.15, 0.25) });
       page.drawText((row.department || '—').slice(0, 20), { x: colX.dept, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.4, 0.45, 0.55) });
 
-      page.drawText(row.w1Label || '—', { x: colX.w1, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.2, 0.25, 0.35) });
-      page.drawText(row.w2Label || '—', { x: colX.w2, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.2, 0.25, 0.35) });
-      page.drawText(row.w3Label || '—', { x: colX.w3, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.2, 0.25, 0.35) });
-      page.drawText(row.w4Label || '—', { x: colX.w4, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.2, 0.25, 0.35) });
-      page.drawText(row.w5Label || '—', { x: colX.w5, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.2, 0.25, 0.35) });
+      // Draw light red / light green pill for scores
+      const drawScorePill = (
+        scoreVal: number | null | undefined,
+        labelVal: string | undefined,
+        colKey: keyof typeof colX,
+        isMonthly = false,
+      ) => {
+        const text = labelVal || '—';
+        const x = colX[colKey];
+        if (scoreVal === null || scoreVal === undefined || Number.isNaN(scoreVal) || text === '—') {
+          page.drawText('—', { x: x + 6, y: rowY - 15, size: 8, font: fontRegular, color: rgb(0.55, 0.60, 0.70) });
+          return;
+        }
+        const isGood = scoreVal >= -20;
+        const boxWidth = isMonthly ? 56 : 48;
+        const boxHeight = 15;
 
-      page.drawText(row.msLabel || '—', { x: colX.ms, y: rowY - 15, size: 9, font: fontBold, color: rgb(0.12, 0.40, 0.85) });
+        // Light Green vs Light Red pill
+        page.drawRectangle({
+          x: x - 4,
+          y: rowY - 19,
+          width: boxWidth,
+          height: boxHeight,
+          color: isGood ? rgb(0.88, 0.96, 0.90) : rgb(0.99, 0.89, 0.89),
+          borderColor: isGood ? rgb(0.65, 0.88, 0.70) : rgb(0.96, 0.68, 0.68),
+          borderWidth: 0.5,
+        });
+
+        page.drawText(text, {
+          x,
+          y: rowY - 15,
+          size: isMonthly ? 8.5 : 7.5,
+          font: isMonthly ? fontBold : fontRegular,
+          color: isGood ? rgb(0.08, 0.50, 0.22) : rgb(0.78, 0.12, 0.12),
+        });
+      };
+
+      drawScorePill(row.w1, row.w1Label, 'w1');
+      drawScorePill(row.w2, row.w2Label, 'w2');
+      drawScorePill(row.w3, row.w3Label, 'w3');
+      drawScorePill(row.w4, row.w4Label, 'w4');
+      drawScorePill(row.w5, row.w5Label, 'w5');
+      drawScorePill(row.ms, row.msLabel, 'ms', true);
 
       rowY -= 22;
     }

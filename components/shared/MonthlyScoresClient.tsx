@@ -32,6 +32,37 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 
 const monthlyReports = createTabCache<MonthlyRow[]>(Infinity);
 
+function ScoreBadge({ score, label, isMonthly = false }: { score?: number | null; label: string; isMonthly?: boolean }) {
+  if (score === null || score === undefined || Number.isNaN(score) || label === '—' || !label) {
+    return <span className="text-gray-400 text-xs tabular-nums">—</span>;
+  }
+  const isGood = score >= -20;
+  if (isMonthly) {
+    return (
+      <span
+        className={`inline-flex items-center justify-center min-w-[64px] px-2.5 py-1 rounded-md text-xs font-bold tabular-nums shadow-xs ${
+          isGood
+            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+            : 'bg-rose-100 text-rose-800 border border-rose-300'
+        }`}
+      >
+        {label}
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`inline-flex items-center justify-center min-w-[54px] px-2 py-0.5 rounded text-xs font-medium tabular-nums ${
+        isGood
+          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+          : 'bg-rose-50 text-rose-700 border border-rose-200'
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
 export default function MonthlyScoresClient({ currentUid }: { currentUid: string }) {
   const today = indiaTodayKey();
   const currentYear = Number(today.slice(0, 4));
@@ -171,6 +202,19 @@ export default function MonthlyScoresClient({ currentUid }: { currentUid: string
         </span>
       </div>
 
+      {/* Score Legend */}
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs bg-white p-2.5 rounded-lg border border-gray-200">
+        <span className="font-semibold text-gray-600">Indicator:</span>
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-50 text-rose-700 border border-rose-200 font-medium">
+          <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+          Light Red: Bad Score (&lt; -20% Gap / Under 80%)
+        </span>
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
+          <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+          Light Green: Good Score (≥ -20% Gap / 80%+)
+        </span>
+      </div>
+
       {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
 
       {/* Main Table */}
@@ -188,17 +232,41 @@ export default function MonthlyScoresClient({ currentUid }: { currentUid: string
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {ranked.map((row, index) => (
-              <tr key={row.uid || `${row.name}:${index}`} className="hover:bg-gray-50/70 transition-colors">
-                <td className="px-4 py-3 text-center text-gray-500 text-xs">{index + 1}</td>
-                <td className="px-4 py-3 font-medium text-gray-900">{row.name}</td>
-                <td className="px-4 py-3 text-gray-500">{row.department || '—'}</td>
-                {[row.w1Label, row.w2Label, row.w3Label, row.w4Label, row.w5Label].map((value, week) => (
-                  <td key={week} className="px-4 py-3 text-right tabular-nums text-gray-700">{value || '—'}</td>
-                ))}
-                <td className="px-4 py-3 text-right font-semibold tabular-nums text-brand-700">{row.msLabel || '—'}</td>
-              </tr>
-            ))}
+            {ranked.map((row, index) => {
+              const isGood = row.ms !== null && row.ms !== undefined && row.ms >= -20;
+              const isBad = row.ms !== null && row.ms !== undefined && row.ms < -20;
+              const rowBg = isGood
+                ? 'bg-emerald-50/20 hover:bg-emerald-50/40'
+                : isBad
+                ? 'bg-rose-50/20 hover:bg-rose-50/40'
+                : 'hover:bg-gray-50/70';
+
+              return (
+                <tr key={row.uid || `${row.name}:${index}`} className={`${rowBg} transition-colors border-b border-gray-100`}>
+                  <td className="px-4 py-3 text-center text-gray-500 text-xs font-medium">{index + 1}</td>
+                  <td className="px-4 py-3 font-semibold text-gray-900">{row.name}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">{row.department || '—'}</td>
+                  <td className="px-4 py-3 text-right">
+                    <ScoreBadge score={row.w1} label={row.w1Label} />
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <ScoreBadge score={row.w2} label={row.w2Label} />
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <ScoreBadge score={row.w3} label={row.w3Label} />
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <ScoreBadge score={row.w4} label={row.w4Label} />
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <ScoreBadge score={row.w5} label={row.w5Label} />
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <ScoreBadge score={row.ms} label={row.msLabel} isMonthly />
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {!loading && !error && ranked.length === 0 && (
