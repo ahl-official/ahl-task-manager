@@ -206,14 +206,18 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     const ids = [...new Set((url.searchParams.get('ids') || '').split(',').filter(Boolean))];
     if (!ids.length || ids.length > 100 || ids.some(id => !/^T-[a-z0-9-]+$/i.test(id))) throw new Error('Invalid recurring task IDs');
     const output = [];
-    // Pick one actual occurrence per template; status, due date and navigation always share it.
+    // Pick active open period first if available near today; otherwise nearest period
     for (let offset = 0; offset < ids.length; offset += 90) {
       const batch = ids.slice(offset, offset + 90);
+      const lookupOpen = `(SELECT p.id FROM recurring_period_rows p
+        WHERE p.template_id=w.template_id AND p.is_deleted=0 AND p.status!='Deleted'
+        AND p.status NOT IN ('Completed','Verified')
+        ORDER BY ABS(julianday(p.due_date) - julianday(ctx.day)) ASC LIMIT 1)`;
       const lookup = (operator, direction) => `(SELECT p.id FROM recurring_period_rows p
         WHERE p.template_id=w.template_id AND p.is_deleted=0 AND p.status!='Deleted'
         AND p.due_date${operator}ctx.day ORDER BY p.due_date ${direction},p.id ${direction} LIMIT 1)`;
       const result = await env.DB.prepare(`WITH wanted(template_id) AS (VALUES ${batch.map(() => '(?)').join(',')}), ctx(day) AS (VALUES (?)),
-        picked AS MATERIALIZED (SELECT w.template_id,COALESCE(${lookup('<=','DESC')},${lookup('>','ASC')}) AS row_id FROM wanted w CROSS JOIN ctx)
+        picked AS MATERIALIZED (SELECT w.template_id,COALESCE(${lookupOpen},${lookup('<=','DESC')},${lookup('>','ASC')}) AS row_id FROM wanted w CROSS JOIN ctx)
         SELECT picked.template_id,p.due_date,p.status FROM picked LEFT JOIN recurring_period_rows p ON p.id=picked.row_id`)
         .bind(...batch, today()).all();
       for (const row of result.results || []) output.push({
@@ -401,7 +405,7 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     const assignedTo = url.searchParams.get('assignedTo');
     const dept = url.searchParams.get('department');
     const q = (url.searchParams.get('q') || '').trim();
-    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 2000, 1), 5000);
+    const limit = isRecurringCategory ? Math.min(Math.max(Number(url.searchParams.get('limit')) || 2000, 1000), 5000) : Math.min(Math.max(Number(url.searchParams.get('limit')) || 2000, 1), 5000);
 
     if (isRecurringCategory) {
       const clauses = ["is_active = 1", "LOWER(category) = LOWER(?)"];
@@ -491,7 +495,7 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
       result=await query('');
     }
     let items = (result.results||[]).map(mapTask);
-    if (assignedTo && (!category || category === 'all') && url.searchParams.get('excludeRecurring') !== 'true' && items.length < limit) {
+    if (assignedTo && (!category || category === 'all') && url.searchParams.get('excludeRecurring') !== 'true') {
       const recClauses = ["is_active = 1", "(assigned_to = ? OR LOWER(assigned_to_name) = (SELECT LOWER(name) FROM users WHERE uid = ? LIMIT 1) OR LOWER(assigned_to_name) = LOWER(?))"];
       const recBinds = [assignedTo, assignedTo, assignedTo];
       if (dept) { recClauses.push("department = ?"); recBinds.push(dept); }
@@ -500,7 +504,7 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
         recClauses.push("(id LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR assigned_to_name LIKE ? ESCAPE '\\')");
         recBinds.push(pattern, pattern, pattern, pattern);
       }
-      const recRes = await env.DB.prepare(`SELECT * FROM recurring_templates WHERE ${recClauses.join(' AND ')} ORDER BY category ASC, id DESC LIMIT ?`).bind(...recBinds, limit - items.length).all();
+      const recRes = await env.DB.prepare(`SELECT * FROM recurring_templates WHERE ${recClauses.join(' AND ')} ORDER BY category ASC, id DESC LIMIT 50`).bind(...recBinds).all();
       const recMapped = (recRes.results || []).map(row => mapTask({
         task_id: row.id,
         description: row.description || row.title,
@@ -533,7 +537,54 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
         week_end: null,
         month_key: null,
       }));
-      items = [...recMapped, ...items].slice(0, limit);
+      items = [...recMapped, ...items].slice(0, Math.max(limit, items.length + recMapped.length));
+    } else if (q && q.length >= 2 && url.searchParams.get('excludeRecurring') !== 'true') {
+      const pattern = '%' + q.replace(/[\\%_]/g, '\\$&') + '%';
+      const recClauses = ["is_active = 1", "(id LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR assigned_to_name LIKE ? ESCAPE '\\')"];
+      const recBinds = [pattern, pattern, pattern, pattern];
+      if (category && ['Daily', 'Weekly', 'Monthly'].includes(category)) {
+        recClauses.push("LOWER(category) = LOWER(?)");
+        recBinds.push(category);
+      }
+      if (dept) {
+        recClauses.push("department = ?");
+        recBinds.push(dept);
+      }
+      const recRes = await env.DB.prepare(`SELECT * FROM recurring_templates WHERE ${recClauses.join(' AND ')} ORDER BY category ASC, id DESC LIMIT 50`).bind(...recBinds).all();
+      const existingIds = new Set(items.map(t => t.taskId || t.task_id));
+      const recMapped = (recRes.results || []).filter(r => !existingIds.has(r.id)).map(row => mapTask({
+        task_id: row.id,
+        description: row.description || row.title,
+        assigned_to: row.assigned_to || '',
+        assigned_to_name: row.assigned_to_name || '',
+        assigned_to_wa: '',
+        created_by: 'system',
+        created_by_name: 'Recurring System',
+        handoff_uid: '',
+        handoff_name: '',
+        handoff_wa: '',
+        category: row.category,
+        priority: 'Medium',
+        status: 'In Progress',
+        department: row.department || '',
+        start_date: null,
+        end_date: null,
+        delayed_date: null,
+        delay_reason: null,
+        revision_status: 'none',
+        notes: null,
+        accepted_at: null,
+        completed_at: null,
+        verified_at: null,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        day_key: null,
+        week_key: null,
+        week_start: null,
+        week_end: null,
+        month_key: null,
+      }));
+      items = [...recMapped, ...items];
     }
     return json(items);
   }

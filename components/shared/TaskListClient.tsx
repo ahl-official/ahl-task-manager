@@ -391,9 +391,9 @@ export default function TaskListClient({
             ? ['Completed', 'Verified'].includes(t.status)
             : (!isOverdueTask && (t.status === statusFilter || normalizeBaseStatus(t.status) === statusFilter)));
       const matchStatus = recurringDefinition
-        ? statusFilter === 'all' || (statusFilter === 'Completed' ? ['Completed', 'Verified'].includes(t.recurringStatus || '')
-          : statusFilter === 'In Progress' ? ['Pending', 'In Progress'].includes(t.recurringStatus || '')
-            : t.recurringStatus === statusFilter)
+        ? statusFilter === 'all' || (statusFilter === 'Completed' ? ['Completed', 'Verified'].includes(t.recurringStatus || t.status || '')
+          : statusFilter === 'In Progress' ? ['Pending', 'In Progress'].includes(t.recurringStatus || t.status || '')
+            : (t.recurringStatus === statusFilter || t.status === statusFilter || (statusFilter === 'All Pending' && ['Pending', 'In Progress'].includes(t.recurringStatus || t.status || ''))))
         : normalStatusMatch;
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
       const matchDepartmentFilter = departmentFilter === 'all' || matchDepartment(t.department, departmentFilter);
