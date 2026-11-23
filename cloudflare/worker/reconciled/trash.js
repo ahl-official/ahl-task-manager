@@ -140,5 +140,84 @@ export async function routeTrash(req, env, url, helpers) {
     }
     return json('Invalid deleted task type', 400);
   }
+
+  if ((req.method === 'POST' || req.method === 'DELETE') && path === '/trash/purge') {
+    const days = Math.max(1, Number(url.searchParams.get('days')) || 60);
+    const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 200));
+
+    let purgedPeriodRows = 0;
+    let purgedTemplates = 0;
+    let purgedOneTimeTasks = 0;
+    let purgedDeletions = 0;
+
+    // 1. One-time tasks: Check task_deletions index first (reads only matching IDs, 0 writes if none)
+    const oldDeletions = await env.DB.prepare(
+      'SELECT task_id FROM task_deletions WHERE deleted_at < ? LIMIT ?'
+    ).bind(cutoffDate, limit).all();
+
+    const taskIds = (oldDeletions.results || []).map(r => r.task_id);
+    if (taskIds.length > 0) {
+      const placeholders = taskIds.map(() => '?').join(',');
+      try {
+        await env.DB.batch([
+          env.DB.prepare(`DELETE FROM revisions WHERE task_id IN (${placeholders})`).bind(...taskIds),
+          env.DB.prepare(`DELETE FROM reminder_queue WHERE task_id IN (${placeholders})`).bind(...taskIds),
+          env.DB.prepare(`DELETE FROM tasks_current WHERE status='Deleted' AND task_id IN (${placeholders})`).bind(...taskIds),
+          env.DB.prepare(`DELETE FROM task_deletions WHERE task_id IN (${placeholders})`).bind(...taskIds),
+        ]);
+      } catch {
+        // Fallback if revisions or reminder_queue aren't present
+        await env.DB.batch([
+          env.DB.prepare(`DELETE FROM tasks_current WHERE status='Deleted' AND task_id IN (${placeholders})`).bind(...taskIds),
+          env.DB.prepare(`DELETE FROM task_deletions WHERE task_id IN (${placeholders})`).bind(...taskIds),
+        ]);
+      }
+      purgedOneTimeTasks = taskIds.length;
+      purgedDeletions = taskIds.length;
+    }
+
+    // 2. Whole recurring templates: Check if any template deleted before cutoff
+    const oldTemplates = await env.DB.prepare(
+      "SELECT id FROM recurring_templates WHERE json_extract(metadata_json,'$.deleted')=1 AND json_extract(metadata_json,'$.deletedAt') < ? LIMIT ?"
+    ).bind(cutoffDate, limit).all();
+
+    const templateIds = (oldTemplates.results || []).map(r => r.id);
+    if (templateIds.length > 0) {
+      const placeholders = templateIds.map(() => '?').join(',');
+      const pBatch = await env.DB.batch([
+        env.DB.prepare(`DELETE FROM recurring_period_rows WHERE template_id IN (${placeholders})`).bind(...templateIds),
+        env.DB.prepare(`DELETE FROM recurring_templates WHERE id IN (${placeholders})`).bind(...templateIds),
+      ]);
+      purgedPeriodRows += Number(pBatch[0]?.meta?.changes || 0);
+      purgedTemplates = templateIds.length;
+      helpers.invalidateTemplates();
+    }
+
+    // 3. Single checklist days: Check if any period row deleted before cutoff using index
+    const oldPeriods = await env.DB.prepare(
+      'SELECT id FROM recurring_period_rows WHERE is_deleted=1 AND deleted_at IS NOT NULL AND deleted_at < ? LIMIT ?'
+    ).bind(cutoffDate, limit).all();
+
+    const periodIds = (oldPeriods.results || []).map(r => r.id);
+    if (periodIds.length > 0) {
+      const placeholders = periodIds.map(() => '?').join(',');
+      const pRes = await env.DB.prepare(`DELETE FROM recurring_period_rows WHERE id IN (${placeholders})`).bind(...periodIds).run();
+      purgedPeriodRows += Number(pRes?.meta?.changes || 0);
+    }
+
+    return json({
+      purged: true,
+      cutoffDate,
+      days,
+      purgedPeriodRows,
+      purgedTemplates,
+      purgedOneTimeTasks,
+      purgedDeletions,
+      totalPurged: purgedPeriodRows + purgedTemplates + purgedOneTimeTasks,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   return null;
 }
