@@ -274,6 +274,52 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     const dept=url.searchParams.get('department');
     const assignedTo=url.searchParams.get('assignedTo');
     const reqStatus=url.searchParams.get('status');
+    const category=url.searchParams.get('category');
+
+    if (category && ['Daily', 'Weekly', 'Monthly'].includes(category)) {
+      const recClauses = ["is_active = 1", "LOWER(category) = LOWER(?)"], recBinds = [category];
+      if (assignedTo) {
+        recClauses.push("(assigned_to = ? OR LOWER(assigned_to_name) = (SELECT LOWER(name) FROM users WHERE uid = ? LIMIT 1) OR LOWER(assigned_to_name) = LOWER(?))");
+        recBinds.push(assignedTo, assignedTo, assignedTo);
+      }
+      if (dept) {
+        recClauses.push("department = ?");
+        recBinds.push(dept);
+      }
+      const countRes = await env.DB.prepare(`SELECT COUNT(*) as total FROM recurring_templates WHERE ${recClauses.join(' AND ')}`).bind(...recBinds).first();
+      const total = Number(countRes?.total || 0);
+
+      const todayVal = today();
+      const periodClauses = ["category = ?", "is_deleted = 0", "status != 'Deleted'", "due_date = ?"];
+      const periodBinds = [category, todayVal];
+      if (assignedTo) {
+        periodClauses.push("(assigned_to = ? OR LOWER(assigned_to_name) = (SELECT LOWER(name) FROM users WHERE uid = ? LIMIT 1) OR LOWER(assigned_to_name) = LOWER(?))");
+        periodBinds.push(assignedTo, assignedTo, assignedTo);
+      }
+      if (dept) {
+        periodClauses.push("department = ?");
+        periodBinds.push(dept);
+      }
+      const periodRes = await env.DB.prepare(`SELECT status, COUNT(*) as n FROM recurring_period_rows WHERE ${periodClauses.join(' AND ')} GROUP BY status`).bind(...periodBinds).all();
+      let completed = 0;
+      for (const row of periodRes.results || []) {
+        if (['Completed', 'Verified'].includes(row.status)) completed += Number(row.n || 0);
+      }
+      const pending = Math.max(0, total - completed);
+      return json({
+        total,
+        pending,
+        inProgress: pending,
+        delayRequested: 0,
+        overdue: 0,
+        completed,
+        verified: 0,
+        dead: 0,
+        active: pending,
+        byUser: Object.create(null),
+        byDepartment: Object.create(null)
+      });
+    }
 
     if (assignedTo || (scope !== 'all' && uid)) {
       const scoped = scopeFilters(url);
@@ -350,9 +396,67 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     return json({...overall,byUser,byDepartment});
   }
   if(url.pathname==='/tasks/search'){
-    const {clauses,binds}=scopeFilters(url),q=(url.searchParams.get('q')||'').trim();
+    const category = url.searchParams.get('category');
+    const isRecurringCategory = category && ['Daily', 'Weekly', 'Monthly'].includes(category);
+    const assignedTo = url.searchParams.get('assignedTo');
+    const dept = url.searchParams.get('department');
+    const q = (url.searchParams.get('q') || '').trim();
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 2000, 1), 5000);
 
-    const limit=Math.min(Math.max(Number(url.searchParams.get('limit'))||2000,1),5000);
+    if (isRecurringCategory) {
+      const clauses = ["is_active = 1", "LOWER(category) = LOWER(?)"];
+      const binds = [category];
+      if (assignedTo) {
+        clauses.push("(assigned_to = ? OR LOWER(assigned_to_name) = (SELECT LOWER(name) FROM users WHERE uid = ? LIMIT 1) OR LOWER(assigned_to_name) = LOWER(?))");
+        binds.push(assignedTo, assignedTo, assignedTo);
+      }
+      if (dept) {
+        clauses.push("department = ?");
+        binds.push(dept);
+      }
+      if (q) {
+        const pattern = '%' + q.replace(/[\\%_]/g, '\\$&') + '%';
+        clauses.push("(id LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR assigned_to_name LIKE ? ESCAPE '\\')");
+        binds.push(pattern, pattern, pattern, pattern);
+      }
+      const sql = `SELECT * FROM recurring_templates WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC, id DESC LIMIT ?`;
+      const result = await env.DB.prepare(sql).bind(...binds, limit).all();
+      const tasks = (result.results || []).map(row => ({
+        task_id: row.id,
+        description: row.description || row.title,
+        assigned_to: row.assigned_to || '',
+        assigned_to_name: row.assigned_to_name || '',
+        assigned_to_wa: '',
+        created_by: 'system',
+        created_by_name: 'Recurring System',
+        handoff_uid: '',
+        handoff_name: '',
+        handoff_wa: '',
+        category: row.category,
+        priority: 'Medium',
+        status: 'In Progress',
+        department: row.department || '',
+        start_date: null,
+        end_date: null,
+        delayed_date: null,
+        delay_reason: null,
+        revision_status: 'none',
+        notes: null,
+        accepted_at: null,
+        completed_at: null,
+        verified_at: null,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        day_key: null,
+        week_key: null,
+        week_start: null,
+        week_end: null,
+        month_key: null,
+      }));
+      return json(tasks.map(mapTask));
+    }
+
+    const {clauses,binds}=scopeFilters(url);
     const status=url.searchParams.get('status');
     if(url.searchParams.get('verificationPending')==='true')clauses.push("status='Completed' AND (verified_at IS NULL OR verified_at='')");
     else statusFilter(clauses,binds,status);
@@ -386,7 +490,52 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
       if(!index || !/no such index|no query solution/i.test(String(error?.message||error)))throw error;
       result=await query('');
     }
-    return json((result.results||[]).map(mapTask));
+    let items = (result.results||[]).map(mapTask);
+    if (assignedTo && (!category || category === 'all') && url.searchParams.get('excludeRecurring') !== 'true' && items.length < limit) {
+      const recClauses = ["is_active = 1", "(assigned_to = ? OR LOWER(assigned_to_name) = (SELECT LOWER(name) FROM users WHERE uid = ? LIMIT 1) OR LOWER(assigned_to_name) = LOWER(?))"];
+      const recBinds = [assignedTo, assignedTo, assignedTo];
+      if (dept) { recClauses.push("department = ?"); recBinds.push(dept); }
+      if (q) {
+        const pattern = '%' + q.replace(/[\\%_]/g, '\\$&') + '%';
+        recClauses.push("(id LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR assigned_to_name LIKE ? ESCAPE '\\')");
+        recBinds.push(pattern, pattern, pattern, pattern);
+      }
+      const recRes = await env.DB.prepare(`SELECT * FROM recurring_templates WHERE ${recClauses.join(' AND ')} ORDER BY category ASC, id DESC LIMIT ?`).bind(...recBinds, limit - items.length).all();
+      const recMapped = (recRes.results || []).map(row => mapTask({
+        task_id: row.id,
+        description: row.description || row.title,
+        assigned_to: row.assigned_to || '',
+        assigned_to_name: row.assigned_to_name || '',
+        assigned_to_wa: '',
+        created_by: 'system',
+        created_by_name: 'Recurring System',
+        handoff_uid: '',
+        handoff_name: '',
+        handoff_wa: '',
+        category: row.category,
+        priority: 'Medium',
+        status: 'In Progress',
+        department: row.department || '',
+        start_date: null,
+        end_date: null,
+        delayed_date: null,
+        delay_reason: null,
+        revision_status: 'none',
+        notes: null,
+        accepted_at: null,
+        completed_at: null,
+        verified_at: null,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        day_key: null,
+        week_key: null,
+        week_start: null,
+        week_end: null,
+        month_key: null,
+      }));
+      items = [...recMapped, ...items].slice(0, limit);
+    }
+    return json(items);
   }
   if(url.pathname==='/mis/delegation-counts'){
     const start=url.searchParams.get('weekStart'),end=url.searchParams.get('weekEnd');

@@ -2,7 +2,7 @@ import { cfApi } from '@/lib/cloudflare/api';
 
 type RecurringSummary = { taskId: string; recurringDueDate: string | null; recurringOpenDate: string | null; recurringStatus: string | null };
 // Enrich only the loaded All Tasks page; never fetch every recurring occurrence.
-export async function withRecurringTaskDates<T extends { taskId: string; category: string }>(tasks: T[], fresh = false) {
+export async function withRecurringTaskDates<T extends { taskId: string; category: string; status?: string }>(tasks: T[], fresh = false) {
   const recurring = tasks.filter(task => ['daily', 'weekly', 'monthly'].includes(task.category.toLowerCase()));
   if (!recurring.length) return tasks;
   const byId = new Map<string, RecurringSummary>();
@@ -17,7 +17,16 @@ export async function withRecurringTaskDates<T extends { taskId: string; categor
   } catch (error) {
     console.error('Recurring occurrence date lookup failed', error);
   }
-  return tasks.map(task => ['daily', 'weekly', 'monthly'].includes(task.category.toLowerCase())
-    ? { ...task, recurringDueDate: byId.get(task.taskId)?.recurringDueDate ?? null, recurringOpenDate: byId.get(task.taskId)?.recurringOpenDate ?? null, recurringStatus: byId.get(task.taskId)?.recurringStatus ?? null }
-    : task);
+  return tasks.map(task => {
+    if (!['daily', 'weekly', 'monthly'].includes(task.category.toLowerCase())) return task;
+    const summary = byId.get(task.taskId);
+    const recStatus = summary?.recurringStatus ?? null;
+    return {
+      ...task,
+      recurringDueDate: summary?.recurringDueDate ?? null,
+      recurringOpenDate: summary?.recurringOpenDate ?? null,
+      recurringStatus: recStatus,
+      status: (recStatus && recStatus !== 'Deleted') ? recStatus : (task.status || 'Pending'),
+    };
+  });
 }

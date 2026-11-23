@@ -440,10 +440,13 @@ export default function TaskListClient({
     });
 
     const isOverdue = (t: TaskSerialized) => t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(today, indiaDateKey(t.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status));
-    const pending = rows.filter(t => t.status === 'Pending Accept' && !isOverdue(t)).length;
-    const inProgress = rows.filter(t => (t.status === 'In Progress' || t.status === 'Delay Requested') && !isOverdue(t)).length;
-    const overdue = rows.filter(t => isOverdue(t)).length;
-    const completed = rows.filter(t => ['Completed', 'Verified'].includes(t.status)).length;
+    const isRec = (t: TaskSerialized) => RECURRING_CATEGORIES.has(normalizeCategory(t.category));
+    const getRecStatus = (t: TaskSerialized) => t.recurringStatus || t.status;
+
+    const pending = rows.filter(t => isRec(t) ? getRecStatus(t) === 'Pending' : (t.status === 'Pending Accept' && !isOverdue(t))).length;
+    const inProgress = rows.filter(t => isRec(t) ? ['In Progress', 'Pending'].includes(getRecStatus(t)) : ((t.status === 'In Progress' || t.status === 'Delay Requested') && !isOverdue(t))).length;
+    const overdue = rows.filter(t => isRec(t) ? false : isOverdue(t)).length;
+    const completed = rows.filter(t => ['Completed', 'Verified'].includes(isRec(t) ? getRecStatus(t) : t.status)).length;
 
     return { pending, inProgress, overdue, completed, total: rows.length };
   }, [taskItems, mineOnly, currentUid, currentUserName, departmentFilter, userFilter, categoryFilter, search, priorityFilter]);
@@ -498,7 +501,8 @@ export default function TaskListClient({
     return () => { clearTimeout(timer); controller.abort(); };
   }, [mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, initialCounts]);
 
-  const cardCounts = Boolean(search.trim()) ? loadedCardCounts : {
+  const isRecurringFilter = RECURRING_CATEGORIES.has(categoryFilter);
+  const cardCounts = (Boolean(search.trim()) || isRecurringFilter || userFilter !== 'all') ? loadedCardCounts : {
     pending: aggregateCards?.pending ?? loadedCardCounts.pending,
     inProgress: aggregateCards ? aggregateCards.inProgress + (aggregateCards.delayRequested || 0) : loadedCardCounts.inProgress,
     overdue: aggregateCards?.overdue ?? loadedCardCounts.overdue,
