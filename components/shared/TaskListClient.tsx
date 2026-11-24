@@ -6,6 +6,7 @@ import { cn, formatDate, STATUS_COLORS, PRIORITY_DOT, getDueBadge, normalizeBase
 import { indiaDateKey, indiaDayOffset, indiaTodayKey } from '@/lib/utils/indiaDate';
 import { scheduleByTaskId } from '@/lib/utils/scheduling';
 import { namesEqual } from '@/lib/utils/names';
+import { toast } from 'sonner';
 import TaskModal from './TaskModal';
 import { matchesTaskSearch } from '@/lib/utils/taskSearch';
 import {
@@ -125,7 +126,7 @@ export default function TaskListClient({
   const [priorityFilter, setPriority] = useState('all');
   const [departmentFilter, setDepartment] = useState('all');
   const [userFilter, setUserFilter] = useState('all');
-  const [categoryFilter, setCategory] = useState('all');
+  const [categoryFilter, setCategory] = useState(role === 'user' ? 'One Time' : 'all');
   const [sortMode, setSortMode] = useState<'recommended' | 'newest'>(role === 'user' ? 'newest' : 'recommended');
   const [selectedTask, setSelected] = useState<TaskSerialized | null>(null);
   const [weekOnly, setWeekOnly] = useState(false);
@@ -179,8 +180,9 @@ export default function TaskListClient({
       setIsSearchingServer(true);
       try {
         const params = new URLSearchParams({ search: q, limit: '100', filter: 'true', scope: mineOnly ? 'mine' : 'all' });
-        if (recurringDefinitionView) params.set('recurringSummary', 'true');
-        for (const [key, value] of [['department', departmentFilter], ['status', statusFilter], ['assignedTo', userFilter], ['category', categoryFilter], ['priority', priorityFilter]]) if (value !== 'all') params.set(key, value);
+        if (recurringDefinitionView || (role === 'user' && RECURRING_CATEGORIES.has(categoryFilter))) params.set('recurringSummary', 'true');
+        for (const [key, value] of [['department', departmentFilter], ['status', statusFilter], ['assignedTo', userFilter], ['category', categoryFilter], ['priority', priorityFilter]]) if (value !== 'all' && !(role === 'user' && key === 'category' && value === 'One Time')) params.set(key, value);
+        if (role === 'user' && categoryFilter === 'One Time') params.set('excludeRecurring', 'true');
         const response = await fetch('/api/tasks?' + params, { signal: controller.signal });
         const json = await response.json();
         if (!controller.signal.aborted && json.success && Array.isArray(json.data)) setTaskItems(current => {
@@ -196,7 +198,7 @@ export default function TaskListClient({
       finally { if (!controller.signal.aborted) setIsSearchingServer(false); }
     }, 500);
     return () => { clearTimeout(timer); controller.abort(); setIsSearchingServer(false); };
-  }, [search, departmentFilter, statusFilter, userFilter, categoryFilter, priorityFilter, mineOnly, currentUid, recurringDefinitionView]);
+  }, [search, departmentFilter, statusFilter, userFilter, categoryFilter, priorityFilter, mineOnly, currentUid, recurringDefinitionView, role]);
 
   const countsCache = useRef<Record<string, Props['initialCounts']>>({});
 
@@ -289,16 +291,17 @@ export default function TaskListClient({
     // If text search is active, the dedicated search debouncer handles it
     if (search.trim()) return;
 
-    const isFiltered = mineOnly || userFilter !== 'all' || statusFilter !== 'all' || departmentFilter !== 'all' || categoryFilter !== 'all' || priorityFilter !== 'all';
+    const isFiltered = mineOnly || userFilter !== 'all' || statusFilter !== 'all' || departmentFilter !== 'all' || (categoryFilter !== 'all' && !(role === 'user' && categoryFilter === 'One Time')) || priorityFilter !== 'all';
     if (!isFiltered) return;
+    const memberRecurring = role === 'user' && RECURRING_CATEGORIES.has(categoryFilter);
 
     const filterKey = [
       mineOnly ? `mine:${currentUid}` : 'all',
       `user:${userFilter}`,
-      `status:${statusFilter}`,
+      `status:${memberRecurring ? 'all' : statusFilter}`,
       `dept:${departmentFilter}`,
       `cat:${categoryFilter}`,
-      `pri:${priorityFilter}`,
+      `pri:${memberRecurring ? 'all' : priorityFilter}`,
     ].join('|');
 
     if (fetchedFilterKeys.current.has(filterKey)) return;
@@ -315,11 +318,16 @@ export default function TaskListClient({
           scope: mineOnly ? 'mine' : 'all',
         });
         if (userFilter !== 'all') params.set('assignedTo', userFilter);
-        if (statusFilter !== 'all') params.set('status', statusFilter);
+        if (statusFilter !== 'all' && !memberRecurring) params.set('status', statusFilter);
         if (departmentFilter !== 'all') params.set('department', departmentFilter);
-        if (categoryFilter !== 'all') params.set('category', categoryFilter);
-        if (priorityFilter !== 'all') params.set('priority', priorityFilter);
-        if (recurringDefinitionView) params.set('recurringSummary', 'true');
+        if (categoryFilter !== 'all' && !(role === 'user' && categoryFilter === 'One Time')) params.set('category', categoryFilter);
+        if (role === 'user' && categoryFilter === 'One Time') params.set('excludeRecurring', 'true');
+        if (role === 'user' && RECURRING_CATEGORIES.has(categoryFilter)) {
+          params.set('assignedTo', currentUid);
+          params.set('limit', '5000');
+        }
+        if (priorityFilter !== 'all' && !memberRecurring) params.set('priority', priorityFilter);
+        if (recurringDefinitionView || (role === 'user' && RECURRING_CATEGORIES.has(categoryFilter))) params.set('recurringSummary', 'true');
 
         const response = await fetch('/api/tasks?' + params.toString(), { signal: controller.signal });
         const json = await response.json();
@@ -352,7 +360,7 @@ export default function TaskListClient({
     return () => {
       controller.abort();
     };
-  }, [statusFilter, mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, currentUid, recurringDefinitionView]);
+  }, [statusFilter, mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, currentUid, recurringDefinitionView, role]);
 
   const departments = useMemo(() =>
     deduplicateDepartments([
@@ -383,7 +391,7 @@ export default function TaskListClient({
       const isOverdueTask = t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(today, indiaDateKey(t.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status));
       const matchMine = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
       const matchSearch = matchesTaskSearch(t, search);
-      const recurringDefinition = recurringDefinitionView && RECURRING_CATEGORIES.has(normalizeCategory(t.category));
+      const recurringDefinition = (recurringDefinitionView || role === 'user') && RECURRING_CATEGORIES.has(normalizeCategory(t.category));
       const isAllPending = ['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Shifted (Pending)', 'Shifted (Pending Accept)', 'Shifted (In Progress)'].includes(t.status);
       const normalStatusMatch = statusFilter === 'all' || (statusFilter === 'All Pending' ? isAllPending : statusFilter === 'Overdue'
           ? isOverdueTask
@@ -391,14 +399,18 @@ export default function TaskListClient({
             ? ['Completed', 'Verified'].includes(t.status)
             : (!isOverdueTask && (t.status === statusFilter || normalizeBaseStatus(t.status) === statusFilter)));
       const matchStatus = recurringDefinition
-        ? statusFilter === 'all' || (statusFilter === 'Completed' ? ['Completed', 'Verified'].includes(t.recurringStatus || t.status || '')
+        ? statusFilter === 'all' || (statusFilter === 'Upcoming' ? Boolean(t.recurringDueDate && t.recurringDueDate >= today) && ['Pending', 'In Progress'].includes(t.recurringStatus || t.status || '')
+          : statusFilter === 'Overdue' ? Boolean(t.recurringDueDate && t.recurringDueDate < today) && ['Pending', 'In Progress'].includes(t.recurringStatus || t.status || '')
+          : statusFilter === 'Completed' ? ['Completed', 'Verified'].includes(t.recurringStatus || t.status || '')
           : statusFilter === 'In Progress' ? ['Pending', 'In Progress'].includes(t.recurringStatus || t.status || '')
             : (t.recurringStatus === statusFilter || t.status === statusFilter || (statusFilter === 'All Pending' && ['Pending', 'In Progress'].includes(t.recurringStatus || t.status || ''))))
         : normalStatusMatch;
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
       const matchDepartmentFilter = departmentFilter === 'all' || matchDepartment(t.department, departmentFilter);
       const matchUser = userFilter === 'all' || t.assignedTo === userFilter;
-      const matchCategory = categoryFilter === 'all' || normalizeCategory(t.category) === normalizeCategory(categoryFilter);
+      const matchCategory = categoryFilter === 'all'
+        ? (role !== 'user' || Boolean(search.trim()) || !RECURRING_CATEGORIES.has(normalizeCategory(t.category)))
+        : normalizeCategory(t.category) === normalizeCategory(categoryFilter);
       const createdDate = indiaDateKey(t.createdAt);
       const matchWeek = !weekOnly || (createdDate >= weekStart && createdDate <= today);
       return matchMine && matchSearch && matchStatus && matchPriority && matchDepartmentFilter && matchUser && matchCategory && matchWeek;
@@ -425,7 +437,7 @@ export default function TaskListClient({
       if (diff !== 0) return diff;
       return left.taskId.localeCompare(right.taskId);
     });
-  }, [taskItems, mineOnly, currentUid, currentUserName, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter, sortMode, scheduleMap, recurringDefinitionView, weekOnly]);
+  }, [taskItems, mineOnly, currentUid, currentUserName, search, statusFilter, priorityFilter, departmentFilter, userFilter, categoryFilter, sortMode, scheduleMap, recurringDefinitionView, weekOnly, role]);
 
   const loadedCardCounts = useMemo(() => {
     const today = indiaTodayKey();
@@ -443,9 +455,10 @@ export default function TaskListClient({
     const isRec = (t: TaskSerialized) => RECURRING_CATEGORIES.has(normalizeCategory(t.category));
     const getRecStatus = (t: TaskSerialized) => t.recurringStatus || t.status;
 
-    const pending = rows.filter(t => isRec(t) ? getRecStatus(t) === 'Pending' : (t.status === 'Pending Accept' && !isOverdue(t))).length;
-    const inProgress = rows.filter(t => isRec(t) ? ['In Progress', 'Pending'].includes(getRecStatus(t)) : ((t.status === 'In Progress' || t.status === 'Delay Requested') && !isOverdue(t))).length;
-    const overdue = rows.filter(t => isRec(t) ? false : isOverdue(t)).length;
+    const recurringOverdue = (t: TaskSerialized) => isRec(t) && Boolean(t.recurringDueDate && t.recurringDueDate < today) && ['Pending', 'In Progress'].includes(getRecStatus(t));
+    const pending = rows.filter(t => isRec(t) ? getRecStatus(t) === 'Pending' && !recurringOverdue(t) : (t.status === 'Pending Accept' && !isOverdue(t))).length;
+    const inProgress = rows.filter(t => isRec(t) ? getRecStatus(t) === 'In Progress' && !recurringOverdue(t) : ((t.status === 'In Progress' || t.status === 'Delay Requested') && !isOverdue(t))).length;
+    const overdue = rows.filter(t => isRec(t) ? recurringOverdue(t) : isOverdue(t)).length;
     const completed = rows.filter(t => ['Completed', 'Verified'].includes(isRec(t) ? getRecStatus(t) : t.status)).length;
 
     return { pending, inProgress, overdue, completed, total: rows.length };
@@ -463,6 +476,7 @@ export default function TaskListClient({
 
   useEffect(() => {
     if (search.trim()) return;
+    if (role === 'user') return;
 
     const filterKey = [
       mineOnly ? 'mine' : 'all',
@@ -499,12 +513,12 @@ export default function TaskListClient({
       } catch (error: any) { if (error.name !== 'AbortError') console.error('Task counts unavailable', error); }
     }, 400);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, initialCounts]);
+  }, [mineOnly, departmentFilter, userFilter, categoryFilter, priorityFilter, search, initialCounts, role]);
 
   const isRecurringFilter = RECURRING_CATEGORIES.has(categoryFilter);
-  const cardCounts = (Boolean(search.trim()) || isRecurringFilter || userFilter !== 'all') ? loadedCardCounts : {
+  const cardCounts = (role === 'user' ? isRecurringFilter : (Boolean(search.trim()) || isRecurringFilter || userFilter !== 'all')) ? loadedCardCounts : {
     pending: aggregateCards?.pending ?? loadedCardCounts.pending,
-    inProgress: aggregateCards ? aggregateCards.inProgress + (aggregateCards.delayRequested || 0) : loadedCardCounts.inProgress,
+    inProgress: aggregateCards ? aggregateCards.inProgress + (role === 'user' ? 0 : (aggregateCards.delayRequested || 0)) : loadedCardCounts.inProgress,
     overdue: aggregateCards?.overdue ?? loadedCardCounts.overdue,
     completed: aggregateCards ? aggregateCards.completed + (aggregateCards.verified || 0) : loadedCardCounts.completed,
     total: aggregateCards?.total ?? loadedCardCounts.total,
@@ -518,6 +532,7 @@ export default function TaskListClient({
     weekStartDate.setDate(todayDate.getDate() - ((todayDate.getDay() + 6) % 7));
     const weekStart = indiaDateKey(weekStartDate);
     return [...taskItems].filter(task => {
+      if (RECURRING_CATEGORIES.has(normalizeCategory(task.category))) return false;
       const created = indiaDateKey(task.createdAt);
       return created >= weekStart && created <= today;
     }).sort((a, b) => parseTime(b.createdAt) - parseTime(a.createdAt));
@@ -525,7 +540,7 @@ export default function TaskListClient({
 
   const justAssignedTasks = useMemo(() => {
     const newest = [...taskItems]
-      .filter(task => ACTIVE_STATUSES.has(task.status))
+      .filter(task => ACTIVE_STATUSES.has(task.status) && (role !== 'user' || !RECURRING_CATEGORIES.has(normalizeCategory(task.category))))
       .sort((a, b) => (parseTime(b.createdAt) - parseTime(a.createdAt)) || a.taskId.localeCompare(b.taskId))
       .slice(0, 3);
     return role === 'user' ? newest : [...newest, ...taskItems.filter(task => !newest.some(item => item.taskId === task.taskId))
@@ -559,7 +574,11 @@ export default function TaskListClient({
   const openTask = (task: TaskSerialized) => {
     if (RECURRING_CATEGORIES.has(normalizeCategory(task.category))) {
       const params = new URLSearchParams({ category: normalizeCategory(task.category), taskId: task.taskId });
-      if (recurringDefinitionView) params.set('date', task.recurringOpenDate || indiaTodayKey());
+      if (!task.recurringOpenDate) {
+        toast.error('No scheduled checklist occurrence exists for this recurring task');
+        return;
+      }
+      params.set('date', task.recurringOpenDate);
       window.location.href = `/${role === 'admin' ? 'admin' : 'portal'}/checklist?${params}`;
       return;
     }
@@ -629,7 +648,7 @@ export default function TaskListClient({
 
           <div className={cn('grid gap-3', role === 'user' ? 'md:grid-cols-2 xl:grid-cols-4' : 'md:grid-cols-2 xl:grid-cols-4')}>
             {justAssignedTasks.map(task => {
-              const recurringDefinition = recurringDefinitionView && RECURRING_CATEGORIES.has(normalizeCategory(task.category));
+              const recurringDefinition = (recurringDefinitionView || role === 'user') && RECURRING_CATEGORIES.has(normalizeCategory(task.category));
               const createdAtMs = new Date(task.createdAt).getTime();
               const isFresh = Date.now() - createdAtMs <= NEW_ASSIGNMENT_WINDOW_MS;
               return (
@@ -674,16 +693,24 @@ export default function TaskListClient({
       )}
 
       {/* 3 Interactive Stat Filter Cards */}
-      <div className={cn('surface-enter mb-3.5 grid grid-cols-1 gap-2.5 sm:gap-3', role === 'user' ? 'sm:grid-cols-2 xl:grid-cols-4' : 'sm:grid-cols-3')}>
+      <div className={cn('surface-enter mb-3.5 grid grid-cols-1 gap-2.5 sm:gap-3', role === 'user' && !isRecurringFilter ? 'sm:grid-cols-2 xl:grid-cols-4' : 'sm:grid-cols-3')}>
         {[
-          ...(role === 'user' ? [{
+          ...(role === 'user' && !isRecurringFilter ? [{
             id: 'All Pending', label: 'All Pending',
-            value: taskItems.filter(task => ['Pending Accept', 'Pending', 'In Progress', 'Delay Requested', 'Overdue', 'Shifted (Pending)', 'Shifted (Pending Accept)', 'Shifted (In Progress)'].includes(task.status)).length,
+            value: isRecurringFilter
+              ? loadedCardCounts.pending + loadedCardCounts.inProgress + loadedCardCounts.overdue
+              : (aggregateCards?.pending ?? 0) + (aggregateCards?.inProgress ?? 0) + (aggregateCards?.overdue ?? 0),
             activeBg: 'bg-amber-100/90 border-amber-400 ring-2 ring-amber-400/40 shadow-xs',
             defaultBg: 'bg-amber-50/80 border-amber-200/80 hover:bg-amber-100/50',
             textVal: 'text-amber-950', textLabel: 'text-amber-700',
           }] : []),
-          {
+          ...(role === 'user' && isRecurringFilter ? [{
+            id: 'Upcoming', label: 'Upcoming', value: loadedCardCounts.pending + loadedCardCounts.inProgress,
+            activeBg: 'bg-blue-100/90 border-blue-400 ring-2 ring-blue-400/40 shadow-xs',
+            defaultBg: 'bg-blue-50/80 border-blue-200/80 hover:bg-blue-100/50',
+            textVal: 'text-blue-950', textLabel: 'text-blue-700',
+          }] : []),
+          ...(role !== 'user' || !isRecurringFilter ? [{
             id: 'In Progress',
             label: 'In Progress',
             value: cardCounts.inProgress,
@@ -691,7 +718,7 @@ export default function TaskListClient({
             defaultBg: 'bg-blue-50/80 border-blue-200/80 hover:bg-blue-100/50',
             textVal: 'text-blue-950',
             textLabel: 'text-blue-700',
-          },
+          }] : []),
           {
             id: 'Overdue',
             label: 'Overdue',
@@ -756,30 +783,30 @@ export default function TaskListClient({
           )}
         </div>
 
-        <select
+        {role !== 'user' && <select
           value={departmentFilter}
           onChange={e => { setDepartment(e.target.value); setUserFilter('all'); setMineOnly(false); }}
           className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
           <option value="all">All Departments</option>
           {departments.map(department => <option key={department} value={department}>{department}</option>)}
-        </select>
+        </select>}
 
-        <select
+        {role !== 'user' && <select
           value={userFilter}
           onChange={e => { setUserFilter(e.target.value); setMineOnly(false); }}
           className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
           <option value="all">All Individuals</option>
           {visibleUsers.map(user => <option key={user.uid} value={user.uid}>{user.name}</option>)}
-        </select>
+        </select>}
 
         <select
           value={statusFilter}
           onChange={e => setStatus(e.target.value)}
           className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
-          {(RECURRING_CATEGORIES.has(categoryFilter) ? STATUS_OPTIONS.filter(s => s !== 'Verified') : STATUS_OPTIONS).map(s => (
+          {(role === 'user' && isRecurringFilter ? ['all', 'Upcoming', 'Overdue', 'Completed'] : STATUS_OPTIONS).map(s => (
             <option key={s} value={s}>{s === 'all' ? 'All Statuses' : s}</option>
           ))}
         </select>
@@ -789,13 +816,11 @@ export default function TaskListClient({
           onChange={e => {
             const nextCat = e.target.value;
             setCategory(nextCat);
-            if (RECURRING_CATEGORIES.has(nextCat) && statusFilter === 'Verified') {
-              setStatus('all');
-            }
+            setStatus('all');
           }}
           className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
-          {CATEGORY_OPTIONS.map(c => (
+          {(role === 'user' ? ['One Time', 'Daily', 'Weekly', 'Monthly'] : CATEGORY_OPTIONS).map(c => (
             <option key={c} value={c}>
               {c === 'all' ? 'All Categories' : CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS]}
             </option>
@@ -813,18 +838,20 @@ export default function TaskListClient({
           <option value="Low">Low</option>
         </select>
 
-        <select
+        {role !== 'user' && <select
           value={sortMode}
           onChange={e => setSortMode(e.target.value as typeof sortMode)}
           className="input py-1.5 sm:py-2 text-xs sm:text-sm w-auto h-9 sm:h-10"
         >
           {role === 'admin' && <option value="recommended">Recommended Order</option>}
           <option value="newest">Newest First</option>
-        </select>
+        </select>}
 
         <div className="flex items-center text-xs text-gray-400 shrink-0">
           {isFetchingFilter && <Loader2 size={12} className="mr-1.5 animate-spin text-brand-600 inline" />}
-          {filtered.length} loaded{!search.trim() && aggregateCards ? ` of ${aggregateCards.total} total` : search.trim() ? " matches (server lookup returns up to 100)" : " (total unavailable)"}
+          {filtered.length} loaded{role === 'user' && isRecurringFilter
+            ? ' recent recurring tasks'
+            : !search.trim() && aggregateCards ? ` of ${aggregateCards.total} total` : search.trim() ? " matches (server lookup returns up to 100)" : " (total unavailable)"}
         </div>
       </div>
 
@@ -855,7 +882,7 @@ export default function TaskListClient({
                 </tr>
               )}
               {filtered.map(task => {
-                const recurringDefinition = recurringDefinitionView && RECURRING_CATEGORIES.has(normalizeCategory(task.category));
+                const recurringDefinition = (recurringDefinitionView || role === 'user') && RECURRING_CATEGORIES.has(normalizeCategory(task.category));
                 const due = getDueBadge(task.endDate, task.status);
                 const scheduled = scheduleMap.get(task.taskId);
                 const today = indiaTodayKey();
@@ -939,7 +966,7 @@ export default function TaskListClient({
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <button
-                          onClick={e => { e.stopPropagation(); if (recurringDefinitionView) openTask(task); else setSelected(task); }}
+                          onClick={e => { e.stopPropagation(); if (RECURRING_CATEGORIES.has(normalizeCategory(task.category))) openTask(task); else setSelected(task); }}
                           className="text-xs text-brand-600 hover:underline font-medium"
                         >
                           View

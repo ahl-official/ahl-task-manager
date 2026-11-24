@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="AHL Tasks">
+  <rect width="512" height="512" fill="#eef2ff"/>
+  <rect x="46" y="46" width="420" height="420" rx="112" fill="#4338ca"/>
+  <rect x="119" y="98" width="274" height="316" rx="52" fill="#ffffff"/>
+  <rect x="204" y="82" width="104" height="37" rx="18.5" fill="#c7d2fe"/>
+  <text x="256" y="191" text-anchor="middle" fill="#312e81" font-family="Arial, sans-serif" font-size="60" font-weight="800" letter-spacing="-3">AHL</text>
+  <path d="M174 239l13 13 20-23M174 304l13 13 20-23" fill="none" stroke="#6366f1" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M232 243h94M232 308h94" fill="none" stroke="#c7d2fe" stroke-width="13" stroke-linecap="round"/>
+  <circle cx="367" cy="367" r="48" fill="#fbbf24"/>
+  <path d="M345 368l15 15 30-34" fill="none" stroke="#312e81" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -206,18 +206,14 @@ export async function routeReadOptimizations(req,env,url,mapTask=row=>row){
     const ids = [...new Set((url.searchParams.get('ids') || '').split(',').filter(Boolean))];
     if (!ids.length || ids.length > 100 || ids.some(id => !/^T-[a-z0-9-]+$/i.test(id))) throw new Error('Invalid recurring task IDs');
     const output = [];
-    // Pick active open period first if available near today; otherwise nearest period
+    // Prefer today's occurrence, then the latest past one; use the next future occurrence only when no earlier row exists.
     for (let offset = 0; offset < ids.length; offset += 90) {
       const batch = ids.slice(offset, offset + 90);
-      const lookupOpen = `(SELECT p.id FROM recurring_period_rows p
-        WHERE p.template_id=w.template_id AND p.is_deleted=0 AND p.status!='Deleted'
-        AND p.status NOT IN ('Completed','Verified')
-        ORDER BY ABS(julianday(p.due_date) - julianday(ctx.day)) ASC LIMIT 1)`;
       const lookup = (operator, direction) => `(SELECT p.id FROM recurring_period_rows p
         WHERE p.template_id=w.template_id AND p.is_deleted=0 AND p.status!='Deleted'
         AND p.due_date${operator}ctx.day ORDER BY p.due_date ${direction},p.id ${direction} LIMIT 1)`;
       const result = await env.DB.prepare(`WITH wanted(template_id) AS (VALUES ${batch.map(() => '(?)').join(',')}), ctx(day) AS (VALUES (?)),
-        picked AS MATERIALIZED (SELECT w.template_id,COALESCE(${lookupOpen},${lookup('<=','DESC')},${lookup('>','ASC')}) AS row_id FROM wanted w CROSS JOIN ctx)
+        picked AS MATERIALIZED (SELECT w.template_id,COALESCE(${lookup('<=','DESC')},${lookup('>','ASC')}) AS row_id FROM wanted w CROSS JOIN ctx)
         SELECT picked.template_id,p.due_date,p.status FROM picked LEFT JOIN recurring_period_rows p ON p.id=picked.row_id`)
         .bind(...batch, today()).all();
       for (const row of result.results || []) output.push({

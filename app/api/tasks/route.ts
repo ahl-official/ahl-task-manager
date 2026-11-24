@@ -67,10 +67,12 @@ export async function GET(req: NextRequest) {
   const isSearch = Boolean(searchQuery?.trim());
   const requestedLimit = searchParams.get('limit');
   const limitParam = requestedLimit === null || requestedLimit.trim() === '' ? NaN : Number(requestedLimit);
+  const memberRecurringFilter = !isAdmin && !isLeader && searchParams.get('filter') === 'true' &&
+    ['Daily', 'Weekly', 'Monthly'].includes(searchParams.get('category') || '');
   // Search bar results have no 100 limit; standard lookups keep the 100 limit
   const maxResults = isSearch
     ? (Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 5000) : 100)
-    : (Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 100) : 100);
+    : (Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), memberRecurringFilter ? 5000 : 100) : 100);
 
   if (isFresh) {
     clearFirestoreReadCache('tasks:');
@@ -92,7 +94,7 @@ export async function GET(req: NextRequest) {
         priority: searchParams.get('priority') || undefined,
         status,
         excludeRecurring: !isAdmin && !isLeader,
-        includeChecklist: !isAdmin && !isLeader && scope !== 'handoff',
+        includeChecklist: false,
       });
       return NextResponse.json({ success: true, data: counts }, { headers: responseHeaders });
     }

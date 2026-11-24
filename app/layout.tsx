@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   title: 'AHL Task Manager',
   description: 'AHL Delegation & Task Management System',
   manifest: '/manifest.webmanifest',
+  icons: { apple: '/icon-192-ahl.png' },
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',

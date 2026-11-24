@@ -88,6 +88,7 @@ export default function ChecklistClient({
   const [fetchingUserRows, setFetchingUserRows] = useState(false);
   const [ticking, setTicking] = useState<string | null>(null);
   const [search, setSearch] = useState(initialTaskId);
+  const targetTaskId = search.trim().toLowerCase() === initialTaskId.toLowerCase() ? initialTaskId : '';
   const [department, setDepartment] = useState('');
   const [selectedIndividuals, setSelectedIndividuals] = useState<string[]>([]);
   const [individualDropdownOpen, setIndividualDropdownOpen] = useState(false);
@@ -197,7 +198,7 @@ export default function ChecklistClient({
 
   const visibleRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const isTargetTask = (taskId: string) => Boolean(initialTaskId && taskId.toLowerCase() === initialTaskId.toLowerCase());
+    const isTargetTask = (taskId: string) => Boolean(targetTaskId && taskId.toLowerCase() === targetTaskId.toLowerCase());
 
     const filtered = rows.filter(row => {
       let matchesDate = true;
@@ -247,7 +248,7 @@ export default function ChecklistClient({
       return [...filtered].sort((a, b) => (b.periodKey || '').localeCompare(a.periodKey || ''));
     }
     return filtered;
-  }, [rows, department, selectedIndividuals, startDate, endDate, mineOnly, currentUserName, currentUserId, search, initialTaskId]);
+  }, [rows, department, selectedIndividuals, startDate, endDate, mineOnly, currentUserName, currentUserId, search, targetTaskId]);
   const currentPageIds = useMemo(() => new Set(pageRows.map(row => row.id)), [pageRows]);
   const visiblePageRows = useMemo(() => visibleRows.filter(row => currentPageIds.has(row.id)), [visibleRows, currentPageIds]);
   const today = indiaTodayKey();
@@ -257,23 +258,22 @@ export default function ChecklistClient({
   const completedCount = useMemo(() => visibleRows.filter(row => row.completed).length, [visibleRows]);
 
   useEffect(() => {
-    if (loading || selectedTaskFocused.current || !initialTaskId ||
-      search.trim().toLowerCase() !== initialTaskId.toLowerCase() ||
-      !visibleRows.some(row => row.taskId.toLowerCase() === initialTaskId.toLowerCase())) return;
+    if (loading || selectedTaskFocused.current || !targetTaskId ||
+      !visibleRows.some(row => row.taskId.toLowerCase() === targetTaskId.toLowerCase())) return;
     selectedTaskFocused.current = true;
     selectedTaskRow.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     selectedTaskRow.current?.focus({ preventScroll: true });
-  }, [loading, visibleRows, initialTaskId, search]);
+  }, [loading, visibleRows, targetTaskId]);
 
   useEffect(() => {
-    if (!initialTaskId || loading) return;
-    const found = rows.some(r => r.taskId.toLowerCase() === initialTaskId.toLowerCase());
+    if (!targetTaskId || loading) return;
+    const found = rows.some(r => r.taskId.toLowerCase() === targetTaskId.toLowerCase());
     if (found) return;
 
     let active = true;
     const fetchTarget = async () => {
       try {
-        const qs = new URLSearchParams({ category, search: initialTaskId });
+        const qs = new URLSearchParams({ category, search: targetTaskId });
         if (startDate) qs.set('date', startDate);
         const res = await fetch(`/api/checklist?${qs.toString()}`);
         const data = await res.json();
@@ -313,7 +313,7 @@ export default function ChecklistClient({
     };
     void fetchTarget();
     return () => { active = false; };
-  }, [initialTaskId, loading, category, startDate, endDate, rows]);
+  }, [targetTaskId, loading, category, startDate, endDate, rows]);
 
   async function loadRows(
     nextCategory = category,
@@ -726,10 +726,10 @@ export default function ChecklistClient({
 
   useEffect(() => {
     const query = search.trim();
-    const exactSelectedTaskLoaded = initialTaskId && query.toLowerCase() === initialTaskId.toLowerCase()
-      ? visibleRows.some(row => row.taskId.toLowerCase() === initialTaskId.toLowerCase())
+    const exactSelectedTaskLoaded = targetTaskId
+      ? visibleRows.some(row => row.taskId.toLowerCase() === targetTaskId.toLowerCase())
       : false;
-    if (loading || query.length < 2 || (initialTaskId && query.toLowerCase() === initialTaskId.toLowerCase()
+    if (loading || query.length < 2 || (targetTaskId
       ? exactSelectedTaskLoaded : visibleRows.length > 0)) {
       setSearching(false);
       return;
@@ -804,7 +804,7 @@ export default function ChecklistClient({
     }, 350);
     return () => { window.clearTimeout(timer); controller.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, category, startDate, endDate, loading, visibleRows, initialTaskId, mineOnly, selectedIndividuals, department, allUsers]);
+  }, [search, category, startDate, endDate, loading, visibleRows, targetTaskId, mineOnly, selectedIndividuals, department, allUsers]);
 
   const selectedRowsForDelete = useMemo(() => {
     return rows.filter(r => selectedRowIds.has(r.id));
@@ -882,7 +882,7 @@ export default function ChecklistClient({
           {search && (
             <button
               type="button"
-              onClick={() => setSearch('')}
+              onClick={() => { setSearch(''); setSelectedRowIds(new Set()); selectedTaskFocused.current = false; }}
               className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-gray-400 hover:text-gray-600 focus:outline-none"
               title="Clear search"
             >
@@ -1099,7 +1099,7 @@ export default function ChecklistClient({
                 <Loader2 size={16} className="animate-spin text-brand-600" />
                 <span>{mineOnly ? 'Loading your checklist tasks...' : selectedIndividuals.length ? `Loading checklist tasks for ${selectedIndividuals.join(', ')}...` : 'Loading checklist tasks...'}</span>
               </div>
-            ) : initialTaskId && search === initialTaskId
+            ) : targetTaskId
               ? 'This recurring task is not scheduled for the selected date.'
               : mineOnly
                 ? `You have no ${category.toLowerCase()} checklist tasks scheduled${startDate ? ' for this date' : ''}.`
@@ -1179,10 +1179,10 @@ export default function ChecklistClient({
             {visibleRows.map(row => (
               <div
                 key={row.id}
-                ref={row.taskId.toLowerCase() === initialTaskId.toLowerCase() ? selectedTaskRow : undefined}
-                tabIndex={row.taskId.toLowerCase() === initialTaskId.toLowerCase() ? -1 : undefined}
+                ref={targetTaskId && row.taskId.toLowerCase() === targetTaskId.toLowerCase() ? selectedTaskRow : undefined}
+                tabIndex={targetTaskId && row.taskId.toLowerCase() === targetTaskId.toLowerCase() ? -1 : undefined}
                 className={cn('flex flex-col gap-3 px-5 py-4', row.dead && 'bg-red-50',
-                  row.taskId.toLowerCase() === initialTaskId.toLowerCase() && 'bg-brand-50 ring-2 ring-inset ring-brand-400')}
+                  targetTaskId && row.taskId.toLowerCase() === targetTaskId.toLowerCase() && 'bg-brand-50 ring-2 ring-inset ring-brand-400')}
               >
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div className="flex items-start gap-3 min-w-0 flex-1">
@@ -1207,7 +1207,7 @@ export default function ChecklistClient({
                     <div className="min-w-0 flex-1">
                     <div className="mb-1 flex flex-wrap items-center gap-2">
                       <span className="font-mono text-xs text-brand-600">{row.taskId}</span>
-                      {row.taskId.toLowerCase() === initialTaskId.toLowerCase() &&
+                      {targetTaskId && row.taskId.toLowerCase() === targetTaskId.toLowerCase() &&
                         <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-semibold text-white">Selected task</span>}
                       <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">{row.label}</span>
                       <span className={cn(

@@ -4,7 +4,6 @@ import TaskListClient from '@/components/shared/TaskListClient';
 import { Trophy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
-import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils/timelyDashboard';
 import { getPreviousMisWeekPeriod } from '@/lib/mis/week';
 import { adminGetMisWeeklySnapshots } from '@/lib/mis/weeklySnapshot';
 import { formatGapPercent } from '@/lib/mis/sheetFormula';
@@ -28,13 +27,11 @@ export default async function PortalPage() {
 
   const prevWeek = getPreviousMisWeekPeriod();
 
-  const [databaseTasks, timelyTasks, prevSnaps, taskCounts] = await Promise.all([
+  const [tasks, prevSnaps, taskCounts] = await Promise.all([
     adminGetTasksByAssignee(session.uid, true),
-    getPersonalTimelyTasks(session),
     adminGetMisWeeklySnapshots({ weekKey: prevWeek.weekKey }).catch(() => []),
-    adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true, includeChecklist: true }),
+    adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true }),
   ]);
-  const tasks = mergePersonalDashboardTasks(databaseTasks, timelyTasks);
   const hydratedTasks = hydrateTasksWithUsers(tasks, [{
     uid: session.uid,
     name: session.name,
