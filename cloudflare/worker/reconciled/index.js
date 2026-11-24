@@ -862,30 +862,26 @@ async function routeTasks(req, env, url) {
     try {
       const data = await body(req);
       let creator = data.creatorFallback || null;
-      let assignee = data.assigneeFallback || null;
-      let handoff = creator;
+      let assignee = null;
+      let handoff = null;
       try {
         if (!creator && data.creatorUid) creator = userFromRow(await env.DB.prepare("SELECT * FROM users WHERE uid = ?").bind(data.creatorUid).first());
       } catch {}
-      try {
-        if (!assignee && data.assignedTo) assignee = userFromRow(await env.DB.prepare("SELECT * FROM users WHERE uid = ?").bind(data.assignedTo).first());
-      } catch {}
-      try {
-        if (data.handoffUid) handoff = userFromRow(await env.DB.prepare("SELECT * FROM users WHERE uid = ?").bind(data.handoffUid).first()) || creator;
-      } catch {}
-
-      const assigneeUid = assignee?.uid || data.assignedTo;
-      if (!assigneeUid) return json({ success: false, error: "Selected assignee was not found" }, { status: 400 });
-      const assigneeName = assignee?.name || data.assignedToName || "Assigned User";
-      const assigneeWa = assignee?.waNumber || data.assignedToWa || "";
-      const assigneeDept = assignee?.department || data.department || "";
+      if (data.assignedTo) assignee = userFromRow(await env.DB.prepare("SELECT * FROM users WHERE uid = ?").bind(data.assignedTo).first());
+      if (data.handoffUid) handoff = userFromRow(await env.DB.prepare("SELECT * FROM users WHERE uid = ?").bind(data.handoffUid).first());
+      if (!assignee || assignee.isActive === false) return json({ success: false, error: "Selected assignee was not found among active users" }, { status: 400 });
+      if (!handoff || handoff.isActive === false) return json({ success: false, error: "Selected checker was not found among active users" }, { status: 400 });
+      const assigneeUid = assignee.uid;
+      const assigneeName = assignee.name;
+      const assigneeWa = assignee.waNumber || "";
+      const assigneeDept = assignee.department || "";
 
       const creatorUid = creator?.uid || data.creatorUid || "admin";
       const creatorName = creator?.name || data.creatorFallback?.name || "Admin";
 
-      const handoffUid = handoff?.uid || data.handoffUid || creatorUid;
-      const handoffName = handoff?.name || creatorName;
-      const handoffWa = handoff?.waNumber || "";
+      const handoffUid = handoff.uid;
+      const handoffName = handoff.name;
+      const handoffWa = handoff.waNumber || "";
 
       const taskId = await nextTaskId(env);
       const now = nowIso();

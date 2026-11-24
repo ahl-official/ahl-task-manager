@@ -186,74 +186,42 @@ export async function POST(req: NextRequest) {
       user.isActive !== false && user.uid === String(body.assignedTo || '').trim()
     );
     if (!resolvedAssignee && body.assignedTo) {
-      // Direct assignment fallback: allows task creation even if user read list is empty due to read limits
-      resolvedAssignee = {
-        uid: String(body.assignedTo).trim(),
-        name: String(body.assignedToName || 'Assigned User').trim(),
-        department: String(body.department || '').trim(),
-        waNumber: String(body.assignedToWa || '').trim(),
-        waNumberLast10: String(body.assignedToWa || '').replace(/\D/g, '').slice(-10),
-        role: 'member',
-        isActive: true,
-        createdAt: null as any,
-        updatedAt: null as any,
-      };
-    } else if (!resolvedAssignee && body.assignedToName) {
-      if (allUsers.length > 0) {
-        const match = resolveActiveName(body.assignedToName, 'assignedTo');
-        if (!('error' in match)) {
-          body.assignedTo = match.user.uid;
-          resolvedAssignee = match.user;
-        }
-      }
-      if (!resolvedAssignee) {
-        // Fallback when user reads fail due to read limit
-        const nameVal = String(body.assignedToName).trim();
-        const fallbackUid = `user-${normalizePersonName(nameVal).replace(/\s+/g, '-')}`;
-        resolvedAssignee = {
-          uid: fallbackUid,
-          name: nameVal,
-          department: String(body.department || '').trim(),
-          waNumber: String(body.assignedToWa || '').trim(),
-          waNumberLast10: String(body.assignedToWa || '').replace(/\D/g, '').slice(-10),
-          role: 'member',
-          isActive: true,
-          createdAt: null as any,
-          updatedAt: null as any,
-        };
-        body.assignedTo = fallbackUid;
-      }
+      resolvedAssignee = await adminGetUserByUid(String(body.assignedTo).trim()).catch(() => null) ?? undefined;
+    }
+    if (!resolvedAssignee && body.assignedToName) {
+      const match = resolveActiveName(body.assignedToName, 'assignedTo');
+      if ('error' in match) return NextResponse.json({ success: false, error: match.error }, { status: match.status });
+      resolvedAssignee = match.user;
+    }
+    if (!resolvedAssignee || resolvedAssignee.isActive === false) {
+      return NextResponse.json({ success: false, error: 'Selected assignee could not be verified. Please refresh users and try again.' }, { status: 503 });
     }
 
-    if (body.handoffName || body.handoff) {
-      if (allUsers.length > 0) {
-        const match = resolveActiveName(body.handoffName || body.handoff, 'handoff');
-        if (!('error' in match)) {
-          body.handoffUid = match.user.uid;
-        }
-      }
-      if (!body.handoffUid) {
-        const handoffVal = String(body.handoff || body.handoffName).trim();
-        body.handoffUid = handoffVal.startsWith('user-') || handoffVal.length > 10
-          ? handoffVal
-          : `user-${normalizePersonName(body.handoffName || body.handoff).replace(/\s+/g, '-')}`;
-      }
+    if (!body.handoffUid && (body.handoffName || body.handoff)) {
+      const match = resolveActiveName(body.handoffName || body.handoff, 'handoff');
+      if ('error' in match) return NextResponse.json({ success: false, error: match.error }, { status: match.status });
+      body.handoffUid = match.user.uid;
     }
 
     // ONLY for automated tasks, set default checker to Tejal
     if (session.uid === 'automation-system') {
-      const tejalUser = allUsers.find((u: AHLUser) => u.name.trim().toLowerCase() === 'tejal' || u.uid === 'user-tejal');
-      body.handoffUid = body.handoffUid || (tejalUser ? tejalUser.uid : 'user-tejal');
+      body.handoffUid = body.handoffUid || 'user-tejal';
     } else {
       body.handoffUid = body.handoffUid || session.uid;
     }
 
     const assignee = resolvedAssignee;
-
-    if (!assignee) {
-      throw new Error(`Selected assignee was not found: ${body.assignedTo || body.assignedToName}`);
+    const checker = allUsers.find((user: AHLUser) => user.uid === body.handoffUid)
+      ?? await adminGetUserByUid(String(body.handoffUid)).catch(() => null);
+    if (!checker || checker.isActive === false) {
+      return NextResponse.json({ success: false, error: 'Selected checker could not be verified. Please refresh users and try again.' }, { status: 503 });
     }
     body.assignedTo = assignee.uid;
+    body.assignedToName = assignee.name;
+    body.assignedToWa = assignee.waNumber;
+    body.handoffUid = checker.uid;
+    body.handoffName = checker.name;
+    body.handoffWa = checker.waNumber;
 
     const creatorForRules = creator ?? {
       uid: session.uid,
@@ -266,7 +234,7 @@ export async function POST(req: NextRequest) {
       role: normalizeRole(assignee.role),
     };
 
-    if (allUsers.length > 0 && !canAssignTask(creatorForRules as any, assigneeForRules as any)) {
+    if (!canAssignTask(creatorForRules as any, assigneeForRules as any)) {
       return NextResponse.json({
         success: false,
         error: 'This assignment is not allowed by the department hierarchy.',
