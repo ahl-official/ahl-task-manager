@@ -79,6 +79,22 @@ export async function GET(req: NextRequest) {
     // scoped history bounded and include already materialized future periods.
     const effectiveEndDate = endDateParam || (includeAllPeriods ? addDaysKey(today, 366) : undefined);
 
+    let selectedUsers: Array<{ uid: string; name: string }> = [];
+    if (usersParam) {
+      try {
+        const parsed = JSON.parse(usersParam);
+        if (Array.isArray(parsed)) {
+          selectedUsers = parsed
+            .filter(user => user && typeof user.name === 'string')
+            .map(user => ({ uid: typeof user.uid === 'string' ? user.uid.trim() : '', name: user.name.trim() }))
+            .filter(user => user.name.length > 0)
+            .slice(0, 500);
+        }
+      } catch {
+        selectedUsers = usersParam.split(',').map(name => ({ uid: '', name: name.trim() })).filter(user => user.name);
+      }
+    }
+
     const page = await getRecurringChecklistPage({
       category,
       date: (startDateParam && endDateParam) ? undefined : dateParam,
@@ -93,11 +109,11 @@ export async function GET(req: NextRequest) {
       startDate: effectiveStartDate,
       endDate: effectiveEndDate,
       includeAllPeriods,
+      userFilters: selectedUsers.length > 1 ? selectedUsers : undefined,
     });
 
-    const targetUsersList = usersParam
-      ? usersParam.split(',').map(u => u.trim().toLowerCase()).filter(Boolean)
-      : [];
+    const targetUsersList = selectedUsers.map(user => user.name.toLowerCase());
+    const targetUserIds = new Set(selectedUsers.map(user => user.uid).filter(Boolean));
 
     const rows = page.items
       .filter(row => {
@@ -115,7 +131,7 @@ export async function GET(req: NextRequest) {
       .filter(row => {
         if (targetUsersList.length > 0) {
           const rowName = (row.userName || '').toLowerCase().trim();
-          const matched = targetUsersList.some(u => rowName === u || rowName.startsWith(u) || u.startsWith(rowName));
+          const matched = targetUserIds.has(row.userId) || targetUsersList.some(u => rowName === u);
           if (!matched) return false;
         }
         return true;

@@ -114,6 +114,19 @@ export default function ChecklistClient({
   const [allUsers, setAllUsers] = useState<{ uid: string; name: string; department: string }[]>([]);
   const fetchedChecklistKeys = useRef<Set<string>>(new Set());
 
+  function addIndividualFilters(query: URLSearchParams, names: string[]) {
+    if (names.length === 1) {
+      query.set('userName', names[0]);
+      const user = allUsers.find(candidate => namesEqual(candidate.name, names[0]));
+      if (user?.uid) query.set('assignedTo', user.uid);
+    } else if (names.length > 1) {
+      query.set('users', JSON.stringify(names.map(name => {
+        const user = allUsers.find(candidate => namesEqual(candidate.name, name));
+        return { uid: user?.uid || '', name };
+      })));
+    }
+  }
+
   useEffect(() => {
     if (sessionStorage.getItem('ahl-checklist-restored-at')) {
       sessionStorage.removeItem('ahl-checklist-restored-at');
@@ -370,13 +383,7 @@ export default function ChecklistClient({
       }
       if (nextMineOnly) {
         qs.set('mine', 'true');
-      } else if (nextIndividuals.length === 1) {
-        qs.set('userName', nextIndividuals[0]);
-        const indivUser = allUsers.find(u => namesEqual(u.name, nextIndividuals[0]) || u.name.toLowerCase() === nextIndividuals[0].toLowerCase());
-        if (indivUser?.uid) qs.set('assignedTo', indivUser.uid);
-      } else if (nextIndividuals.length > 1) {
-        qs.set('users', nextIndividuals.join(','));
-      }
+      } else addIndividualFilters(qs, nextIndividuals);
       if (nextDepartment) {
         qs.set('department', nextDepartment);
       }
@@ -752,13 +759,7 @@ export default function ChecklistClient({
         }
         if (mineOnly) {
           qs.set('mine', 'true');
-        } else if (selectedIndividuals.length === 1) {
-          qs.set('userName', selectedIndividuals[0]);
-          const individual = allUsers.find(user => namesEqual(user.name, selectedIndividuals[0]));
-          if (individual?.uid) qs.set('assignedTo', individual.uid);
-        } else if (selectedIndividuals.length > 1) {
-          qs.set('users', selectedIndividuals.join(','));
-        }
+        } else addIndividualFilters(qs, selectedIndividuals);
         if (department) qs.set('department', department);
         const res = await fetch(`/api/checklist?${qs}`, { signal: controller.signal });
         const data = await res.json();

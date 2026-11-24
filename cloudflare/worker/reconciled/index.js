@@ -2724,6 +2724,19 @@ async function routeRecurring(req, env, url) {
     const date = url.searchParams.get('date') || getIstDateParts().dateStr;
     const clauses=["is_deleted=0","status!='Deleted'"],binds=[];
     const scope=[];
+    const scopeUsersRaw=url.searchParams.get('scopeUsers');
+    let scopeUsers=[];
+    if(scopeUsersRaw){
+      try{
+        const parsed=JSON.parse(scopeUsersRaw);
+        if(Array.isArray(parsed))scopeUsers=parsed.filter(user=>user&&typeof user.name==='string').map(user=>({uid:typeof user.uid==='string'?user.uid.trim():'',name:user.name.trim()})).filter(user=>user.uid||user.name).slice(0,500);
+      }catch{}
+    }
+    if(scopeUsers.length){
+      const serialized=JSON.stringify(scopeUsers);
+      clauses.push("(assigned_to IN (SELECT json_extract(value,'$.uid') FROM json_each(?) WHERE json_extract(value,'$.uid')!='') OR LOWER(TRIM(assigned_to_name)) IN (SELECT LOWER(TRIM(json_extract(value,'$.name'))) FROM json_each(?) WHERE json_extract(value,'$.name')!=''))");
+      binds.push(serialized,serialized);
+    }
     const paged=url.searchParams.has('limit');
     const scopeUid=url.searchParams.get('scopeUid')||url.searchParams.get('uid');
     const scopeName=url.searchParams.get('scopeName')||url.searchParams.get('userName');
