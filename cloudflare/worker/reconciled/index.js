@@ -2840,7 +2840,8 @@ async function routeRecurring(req, env, url) {
       return json({success:true,data:{items,hasMore,nextCursor:hasMore?(legacyOrder?last.id:`${last.due_date}|${last.id}`):null}});
     }
     if(scope.length){clauses.push('('+scope.map(([predicate])=>predicate).join(' OR ')+')');binds.push(...scope.flatMap(([,values])=>values));}
-    const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY due_date,id LIMIT 300').bind(...binds).all();
+    const allForUsers=url.searchParams.get('allForUsers')==='true'&&scopeUsers.length>1;
+    const result=await env.DB.prepare('SELECT * FROM recurring_period_rows WHERE '+clauses.join(' AND ')+' ORDER BY due_date,id'+(allForUsers?'':' LIMIT 300')).bind(...binds).all();
     const data=(result.results||[]).slice(0,300).map(row=>({...periodRowFromDb(row),notes:row.description||'',frequency:row.category,canComplete:!['Completed','Verified'].includes(row.status),canManage:true,source:'period_row'}));
     return json({success:true,data,meta:{istDate:date,count:data.length,hasMore:(result.results||[]).length>=300,readOnly:true}});
     } catch (err) {

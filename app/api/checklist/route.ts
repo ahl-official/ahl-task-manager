@@ -110,6 +110,7 @@ export async function GET(req: NextRequest) {
       endDate: effectiveEndDate,
       includeAllPeriods,
       userFilters: selectedUsers.length > 1 ? selectedUsers : undefined,
+      allForUsers: selectedUsers.length > 1 && Boolean(dateParam || (startDateParam && endDateParam)),
     });
 
     const targetUsersList = selectedUsers.map(user => user.name.toLowerCase());
