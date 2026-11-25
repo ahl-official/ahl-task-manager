@@ -36,7 +36,11 @@ export async function GET(req: NextRequest) {
     ? users
     : users.map(u => ({ uid: u.uid, name: u.name, department: u.department, role: u.role, isActive: u.isActive !== false }));
 
-  return NextResponse.json({ success: true, data });
+  return NextResponse.json({ success: true, data }, {
+    headers: {
+      'Cache-Control': 'private, max-age=60, stale-while-revalidate=300',
+    },
+  });
 }
 
 // POST /api/users — create user (admin only)

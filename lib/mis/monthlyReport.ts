@@ -6,7 +6,7 @@ import { buildMonthlyMisPdfBuffer } from '@/lib/mis/docTemplatePdf';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { sendWhatsAppFile, automatedWhatsAppDisabled } from '@/lib/waha';
 import { indiaDateKey, INDIA_TIMEZONE } from '@/lib/utils/indiaDate';
-import { normalizePersonName, isVinittUser } from '@/lib/utils/names';
+import { normalizePersonName, isMisDeliveryExcluded } from '@/lib/utils/names';
 
 function shouldRunMonthlyReports(now = new Date()) {
   const day = Number(
@@ -118,8 +118,8 @@ export async function generateAndSendMonthlyMisReports(input?: {
   const errors: string[] = [];
 
   for (const report of reports) {
-    if (isVinittUser(report)) {
-      console.log(`[MIS monthly] Skipped report for Vinitt Sir (${report.name})`);
+    if (isMisDeliveryExcluded(report)) {
+      console.log(`[MIS monthly] Skipped excluded recipient (${report.name})`);
       continue;
     }
     if (input?.onlyName && !normalizePersonName(report.name).includes(normalizePersonName(input.onlyName))) {

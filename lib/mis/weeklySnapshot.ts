@@ -4,7 +4,7 @@ import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { computeMisScoresForWeek, misSnapshotId } from '@/lib/mis/compute';
 import type { MisArchiveRow, MisWeeklySnapshot } from '@/lib/mis/types';
 import { formatWeekLabel, getMisWeekPeriod, getPreviousMisWeekPeriod } from '@/lib/mis/week';
-import { normalizePersonName, isVinittUser } from '@/lib/utils/names';
+import { normalizePersonName, isMisDeliveryExcluded } from '@/lib/utils/names';
 import { clearMisCache } from '@/lib/mis/cache';
 
 const WEEKLY = 'misWeekly';
@@ -362,8 +362,8 @@ export async function generateAndSendWeeklyMisPdfReports(input?: {
   const errors: string[] = [];
 
   for (const score of scores) {
-    if (isVinittUser(score)) {
-      console.log(`[MIS weekly] Skipped report for Vinitt Sir (${score.name})`);
+    if (isMisDeliveryExcluded(score)) {
+      console.log(`[MIS weekly] Skipped excluded recipient (${score.name})`);
       continue;
     }
     if (score.planned <= 0) continue;

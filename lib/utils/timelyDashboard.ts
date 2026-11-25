@@ -1,12 +1,12 @@
 import type { SessionUser, Task } from '@/types';
+import type { RecurringChecklistItem } from '@/lib/cloudflare/recurring';
 import { timestamp } from '@/lib/cloudflare/timestamp';
 import { indiaNoonIso } from '@/lib/utils/indiaDate';
 
 export async function getPersonalTimelyTasks(session: SessionUser): Promise<Task[]> {
   try {
-    const { hasCloudflareApi } = await import('@/lib/cloudflare/api');
+    const { hasCloudflareApi, cfApi } = await import('@/lib/cloudflare/api');
     if (hasCloudflareApi()) {
-      const { getRecurringChecklist } = await import('@/lib/cloudflare/recurring');
       const { indiaTodayKey } = await import('@/lib/utils/indiaDate');
       const { addDaysKey } = await import('@/lib/mis/week');
 
@@ -14,13 +14,15 @@ export async function getPersonalTimelyTasks(session: SessionUser): Promise<Task
       const yesterday = addDaysKey(today, -1);
       const tomorrow = addDaysKey(today, 1);
 
-      const rawItems = await getRecurringChecklist({
+      const query = new URLSearchParams({
         category: 'all',
         startDate: yesterday,
         endDate: tomorrow,
-        userName: session.name,
-        uid: session.uid,
+        scopeUid: session.uid,
+        scopeName: session.name,
       });
+      const res = await cfApi<any>(`/recurring/checklist?${query.toString()}`).catch(() => []);
+      const rawItems: RecurringChecklistItem[] = Array.isArray(res) ? res : (res?.data || res?.items || []);
 
       const d1Items = (rawItems || []).filter(item => {
         const d = String(item.dueDate || item.periodKey || '').slice(0, 10);

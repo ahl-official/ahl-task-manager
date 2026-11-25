@@ -222,13 +222,7 @@ export default function ChecklistClient({
         namesEqual(row.userName, currentUserName);
       const matchesDept = !department || namesEqual(row.department, department);
       const matchesIndiv = selectedIndividuals.length === 0 ||
-        selectedIndividuals.some(indiv => (
-          namesEqual(row.userName, indiv) ||
-          (Boolean(row.userName) && (
-            row.userName.toLowerCase().startsWith(indiv.toLowerCase()) ||
-            indiv.toLowerCase().startsWith(row.userName.toLowerCase())
-          ))
-        ));
+        selectedIndividuals.some(indiv => namesEqual(row.userName, indiv));
       const matchesSearch = !q ||
         (row.taskId && row.taskId.toLowerCase().includes(q)) ||
         (row.description && row.description.toLowerCase().includes(q)) ||

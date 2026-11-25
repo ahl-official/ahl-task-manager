@@ -61,23 +61,8 @@ export async function GET(req: NextRequest) {
     const targetUid = mineParam ? session.uid : (searchParams.get('assignedTo') || (userNameParam ? '' : session.uid));
     const targetUserName = mineParam ? session.name : (userNameParam || session.name);
 
-    // When fetching for a specific user (mine or individual filter), include all periods
-    // (past, current, future) so they can see their full history. Only skip this when
-    // an explicit date filter is applied (in which case exactDate restricts it for them).
     const isScopedUser = Boolean(mineParam || userNameParam);
-    const includeAllPeriods = isScopedUser && !dateParam && !startDateParam;
-
-    // Calculate a broad startDate to fetch past 6 months of history when showing all periods
-    const pastStartDate = includeAllPeriods ? (() => {
-      const d = new Date();
-      d.setMonth(d.getMonth() - 6);
-      return d.toISOString().slice(0, 10);
-    })() : undefined;
-
-    const effectiveStartDate = startDateParam || pastStartDate;
-    // The Worker applies a range only when both bounds are present. Keep the
-    // scoped history bounded and include already materialized future periods.
-    const effectiveEndDate = endDateParam || (includeAllPeriods ? addDaysKey(today, 366) : undefined);
+    const effectiveDate = (startDateParam && endDateParam) ? undefined : (dateParam || today);
 
     let selectedUsers: Array<{ uid: string; name: string }> = [];
     if (usersParam) {
@@ -97,8 +82,8 @@ export async function GET(req: NextRequest) {
 
     const page = await getRecurringChecklistPage({
       category,
-      date: (startDateParam && endDateParam) ? undefined : dateParam,
-      exactDate: Boolean(dateParam && !startDateParam), // only exact-filter when date is explicitly chosen
+      date: effectiveDate,
+      exactDate: Boolean(!startDateParam), // filter by specific date unless a date range is explicitly chosen
       cursor,
       search: search.length >= 2 ? search : undefined,
       uid: targetUid,
@@ -106,14 +91,13 @@ export async function GET(req: NextRequest) {
       scopeUser: isScopedUser,
       department: mineParam ? undefined : (session.role === 'leader' ? session.department : (searchParams.get('department') || undefined)),
       isAdmin: isAdmin && !mineParam && !userNameParam,
-      startDate: effectiveStartDate,
-      endDate: effectiveEndDate,
-      includeAllPeriods,
+      startDate: startDateParam,
+      endDate: endDateParam,
       userFilters: selectedUsers.length > 1 ? selectedUsers : undefined,
       allForUsers: selectedUsers.length > 1 && Boolean(dateParam || (startDateParam && endDateParam)),
     });
 
-    const targetUsersList = selectedUsers.map(user => user.name.toLowerCase());
+    const targetUsersList = selectedUsers.map(user => user.name.toLowerCase().trim());
     const targetUserIds = new Set(selectedUsers.map(user => user.uid).filter(Boolean));
 
     const rows = page.items
@@ -125,14 +109,14 @@ export async function GET(req: NextRequest) {
         if (isScopedUser && userNameParam) {
           const rowName = (row.userName || '').toLowerCase().trim();
           const reqName = userNameParam.toLowerCase().trim();
-          if (rowName === reqName || rowName.startsWith(reqName) || reqName.startsWith(rowName)) return true;
+          if (rowName === reqName) return true;
         }
         return false;
       })
       .filter(row => {
         if (targetUsersList.length > 0) {
           const rowName = (row.userName || '').toLowerCase().trim();
-          const matched = targetUserIds.has(row.userId) || targetUsersList.some(u => rowName === u);
+          const matched = (Boolean(row.userId) && targetUserIds.has(row.userId)) || targetUsersList.includes(rowName);
           if (!matched) return false;
         }
         return true;

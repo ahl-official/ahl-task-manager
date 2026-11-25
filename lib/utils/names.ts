@@ -29,3 +29,9 @@ export function isVinittUser(user?: { uid?: string | null; name?: string | null;
   if (digits.endsWith('9820188505')) return true;
   return false;
 }
+
+/** Exclude named recipients only from automated MIS delivery, not score storage or display. */
+export function isMisDeliveryExcluded(user?: { uid?: string | null; name?: string | null; waNumber?: string | null } | null): boolean {
+  if (!user) return false;
+  return isVinittUser(user) || user.uid === 'user-vishal-sir' || normalizePersonName(user.name) === 'vishal';
+}

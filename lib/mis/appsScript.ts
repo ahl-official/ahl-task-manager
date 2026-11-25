@@ -5,7 +5,7 @@
 import { createSign } from 'crypto';
 import { hasGoogleSheetsAuth } from '@/lib/google/sheets';
 import { parseSheetDate } from '@/lib/utils/indiaDate';
-import { isVinittUser } from '@/lib/utils/names';
+import { isMisDeliveryExcluded } from '@/lib/utils/names';
 import { sendWhatsAppPdfFromDriveLink, automatedWhatsAppDisabled } from '@/lib/waha';
 
 export const DEFAULT_MIS_REPORT_SPREADSHEET_ID = '1seVqJ5xPqva1Si6CXDpuZSePvP40PDO2fzJSJfss8GU';
@@ -388,8 +388,8 @@ export async function generateAndSendReports(input?: { dryRun?: boolean; onlyNam
       skipped += 1;
       continue;
     }
-    if (isVinittUser({ name: String(name), waNumber: String(nameToPhone[String(name)] || '') })) {
-      console.log(`[MIS appsScript] Skipped report for Vinitt Sir (${name})`);
+    if (isMisDeliveryExcluded({ name: String(name), waNumber: String(nameToPhone[String(name)] || '') })) {
+      console.log(`[MIS appsScript] Skipped excluded recipient (${name})`);
       skipped += 1;
       continue;
     }
