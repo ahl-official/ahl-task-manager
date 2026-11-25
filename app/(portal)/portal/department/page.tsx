@@ -13,9 +13,9 @@ export default async function DepartmentTasksPage() {
   const [allTasks, allUsers, taskCounts, timelyTasks] = await Promise.all([
     session.role === 'leader'
       ? adminGetAllTasks({ department: session.department, limit: 100 })
-      : adminGetTasksByAssignee(session.uid, true),
+      : adminGetTasksByAssignee(session.uid, true, true),
     adminGetAllUsers(),
-    session.role === 'leader' ? adminGetTaskCounts(session.department) : adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true, includeChecklist: true }),
+    session.role === 'leader' ? adminGetTaskCounts(session.department) : adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true, includeChecklist: true, fresh: true }),
     session.role === 'leader' ? Promise.resolve([]) : getPersonalTimelyTasks(session),
   ]);
   const visibleUsers = filterUsersForSession(session, allUsers);

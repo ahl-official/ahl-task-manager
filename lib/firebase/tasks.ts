@@ -474,12 +474,16 @@ export async function adminGetTasksByIds(taskIds: string[]): Promise<Task[]> {
   return rows.filter(row => row.exists).map(row => normalizeTaskDoc(row.id, row.data()!));
 }
 
-export async function adminGetTasksByAssignee(uid: string, excludeRecurring = false): Promise<Task[]> {
+export async function adminGetTasksByAssignee(uid: string, excludeRecurring = false, fresh = false): Promise<Task[]> {
   if (hasCloudflareApi()) {
     const key = `tasks:assignee:${uid}:${excludeRecurring ? 'one-time' : 'all'}`;
+    if (fresh) clearFirestoreReadCache(key);
     return cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
       try {
-        const tasks = await cfApi<any[]>(`/tasks?scope=mine&uid=${encodeURIComponent(uid)}&limit=${MAX_TASK_READ_LIMIT}${excludeRecurring ? '&excludeRecurring=true' : ''}`);
+        const params = new URLSearchParams({ scope: 'mine', uid, limit: String(MAX_TASK_READ_LIMIT) });
+        if (excludeRecurring) params.set('excludeRecurring', 'true');
+        if (fresh) params.set('fresh', 'true');
+        const tasks = await cfApi<any[]>(`/tasks?${params.toString()}`);
         return sortNewestFirst(tasks.map(cfTask).filter(Boolean) as Task[]);
       } catch (err) {
         handleFirestoreReadError(`adminGetTasksByAssignee_cf(${uid})`, err);
@@ -489,7 +493,9 @@ export async function adminGetTasksByAssignee(uid: string, excludeRecurring = fa
   }
 
   try {
-    return await cachedFirestoreRead(`tasks:assignee:${uid}`, LONG_READ_CACHE_TTL_MS, async () => {
+    const key = `tasks:assignee:${uid}`;
+    if (fresh) clearFirestoreReadCache(key);
+    return await cachedFirestoreRead(key, LONG_READ_CACHE_TTL_MS, async () => {
       const user = await adminGetUserByUid(uid);
       const queries: Query[] = [
         adminDb.collection(COL).where('assignedTo', '==', uid).orderBy('createdAt', 'desc').limit(MAX_TASK_READ_LIMIT),

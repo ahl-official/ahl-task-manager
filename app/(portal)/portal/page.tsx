@@ -28,9 +28,9 @@ export default async function PortalPage() {
   const prevWeek = getPreviousMisWeekPeriod();
 
   const [tasks, prevSnaps, taskCounts] = await Promise.all([
-    adminGetTasksByAssignee(session.uid, true),
+    adminGetTasksByAssignee(session.uid, true, true),
     adminGetMisWeeklySnapshots({ weekKey: prevWeek.weekKey }).catch(() => []),
-    adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true }),
+    adminGetTaskCounts(undefined, { scope: 'mine', uid: session.uid, excludeRecurring: true, fresh: true }),
   ]);
   const hydratedTasks = hydrateTasksWithUsers(tasks, [{
     uid: session.uid,
