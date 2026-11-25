@@ -261,7 +261,7 @@ Scores UI (`mode=master`) shows KRA/KPI rollups + per-parameter planned/done/on-
 APIs: `GET /api/mis` (`live` | `master` | `weekly` | `monthly`), `POST /api/mis/cron` (`weekly` | `monthly` | `archive`)
 
 Production crons (see `vercel.json`):
-- Tue 18:00 UTC — weekly MIS → `mis_weekly`
+- Wed 03:30 UTC (09:00 IST) — previous completed week's MIS snapshots and WhatsApp PDFs → `mis_weekly`
 - Daily 03:30 UTC — monthly MIS send (runs only on 30th / Feb 28 IST)
 - Daily 05:30 UTC — One Time due-today morning reminder & Pending Tasks PDF (~11:00 IST)
 - Daily 05:30, 07:30, 09:30, 11:30, 13:30 UTC — Red Ball 🔴 High-priority reminder every 2 hours (11:00–19:00 IST)

@@ -34,7 +34,7 @@
     },
     {
       "path": "/api/mis/cron?action=weekly",
-      "schedule": "30 19 * * 2"
+      "schedule": "30 3 * * 3"
     },
     {
       "path": "/api/mis/cron?action=runMonthlyReports",
