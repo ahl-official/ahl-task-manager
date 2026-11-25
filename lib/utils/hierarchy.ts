@@ -34,9 +34,7 @@ export function canAssignTask(creator: Pick<AHLUser, 'uid' | 'role' | 'departmen
   }
 
   if (creator.role === 'member') {
-    // Member can assign to themselves or interns in their department
-    if (creator.uid === assignee.uid) return true;
-    return sameDepartment && assignee.role === 'intern';
+    return true;
   }
 
   return false;
@@ -49,7 +47,7 @@ export function getAssignableUsers(creator: Pick<AHLUser, 'uid' | 'role' | 'depa
 export function describeAssignmentRule(role: UserRole): string {
   if (role === 'admin') return 'Admins can assign tasks to anyone.';
   if (role === 'leader') return 'Leaders can assign across departments to leaders, or to members and interns in their department.';
-  if (role === 'member') return 'Members can create tasks for themselves or assign to interns in their department.';
+  if (role === 'member') return 'Members can assign tasks to any active team member.';
   if (role === 'intern') return 'Interns can create tasks for themselves with a department member as checker.';
   return 'Interns can create tasks for themselves.';
 }

@@ -79,9 +79,7 @@ export default function CreateTaskForm({ users, currentUser, redirectTo, isReadL
     }
 
     if (isMember) {
-      if (user.uid === currentUser.uid) return true;
-      const sameDept = !myDept || (user.department || '').trim().toLowerCase() === myDept;
-      return sameDept && ['member', 'leader'].includes(user.role);
+      return true;
     }
 
     if (currentUser.role === 'leader') {
@@ -321,6 +319,8 @@ export default function CreateTaskForm({ users, currentUser, redirectTo, isReadL
           <p className="mt-1 text-[11px] text-gray-400">
             {isIntern
               ? 'Select another person or leader from your department to verify and check your work.'
+              : isMember
+              ? 'Select any active team member to verify and accept this task.'
               : 'The person who will verify and accept this task (defaults to you).'}
           </p>
         </div>
