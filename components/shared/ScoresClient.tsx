@@ -100,6 +100,41 @@ function lookupMis(
   return map[uid] || map[`name:${String(name ?? '').trim().toLowerCase()}`] || null;
 }
 
+function getOrSynthesizeMis(
+  map: Record<string, MisPersonView>,
+  identity: { uid?: string | null; name: string; department?: string },
+  weekMeta?: { weekStart: string; weekEnd: string; weekKey: string },
+): MisPersonView {
+  const existing = lookupMis(map, identity.uid ?? '', identity.name);
+  if (existing) return existing;
+  const start = weekMeta?.weekStart ?? '';
+  const end = weekMeta?.weekEnd ?? '';
+  const key = weekMeta?.weekKey ?? '';
+  return {
+    uid: identity.uid ?? null,
+    name: identity.name || 'Unknown',
+    department: identity.department ?? '',
+    gapPercent: null,
+    gapLabel: '—',
+    onTimeGapPercent: null,
+    planned: 0,
+    done: 0,
+    onTime: 0,
+    checklist: emptyBucket(),
+    delegation: emptyBucket(),
+    fms: emptyBucket(),
+    parameters: [
+      { id: 'daily', label: 'Daily Task', section: 'Checklist', group: 'checklist', planned: 0, done: 0, onTime: 0, gapPercent: null },
+      { id: 'weekly', label: 'Weekly & Monthly', section: 'Checklist', group: 'checklist', planned: 0, done: 0, onTime: 0, gapPercent: null },
+      { id: 'delegation', label: 'Delegation', section: 'Delegation', group: 'delegation', planned: 0, done: 0, onTime: 0, gapPercent: null },
+      { id: 'fms', label: 'FMS Total', section: 'FMS', group: 'fms', planned: 0, done: 0, onTime: 0, gapPercent: null },
+    ],
+    weekStart: start,
+    weekEnd: end,
+    weekKey: key,
+  };
+}
+
 import { downloadMisWeeklyPdf } from '@/lib/mis/directPdf';
 
 async function downloadMisPdf(person: MisPersonView, portalMis: number) {
@@ -526,9 +561,7 @@ export default function ScoresClient({
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [activeUsers, normalizedScores]);
 
-  const membersWithReports = memberDirectory.filter(member =>
-    lookupMis(pdfByKey, member.uid, member.name) !== null,
-  );
+  const membersWithReports = memberDirectory;
   const selectedReportCount = membersWithReports.filter(member => selectedPdfUsers.includes(member.uid)).length;
   // Search only the loaded directory; existing selections survive changes to the query.
   const pdfSearchTerms = pdfMemberQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -536,7 +569,7 @@ export default function ScoresClient({
     const text = `${member.name} ${member.department}`.toLowerCase();
     return pdfSearchTerms.every(term => text.includes(term));
   });
-  const matchingReports = matchingPdfMembers.filter(member => lookupMis(pdfByKey, member.uid, member.name) !== null);
+  const matchingReports = matchingPdfMembers;
 
   async function downloadSelectedPdfs() {
     if (isDownloadingPdfs || misLoading) return;
@@ -547,8 +580,7 @@ export default function ScoresClient({
     let downloaded = 0;
     try {
       for (const member of selected) {
-        const report = lookupMis(pdfByKey, member.uid, member.name);
-        if (!report) continue;
+        const report = getOrSynthesizeMis(pdfByKey, member, selectedWeekMeta);
         setPdfDownloadProgress(`Preparing ${downloaded + 1} of ${selected.length}: ${member.name}`);
         try {
           await downloadMisWeeklyPdf(report);
@@ -621,7 +653,7 @@ export default function ScoresClient({
   const sortedScores = [...normalizedScores].sort((a, b) => (b.monthlyScore ?? 0) - (a.monthlyScore ?? 0));
 
   const scoresWithPdf = sortedScores.map(score => {
-    const pdf = lookupMis(pdfByKey, score.uid, score.name);
+    const pdf = getOrSynthesizeMis(pdfByKey, score, selectedWeekMeta);
     return {
       ...score,
       pdfGapPercent: pdf?.gapPercent ?? null,
@@ -806,20 +838,21 @@ export default function ScoresClient({
             <div className="max-h-64 overflow-y-auto py-1">
               {matchingPdfMembers.length === 0 && <p className="px-2 py-3 text-sm text-gray-500">No members match your search.</p>}
               {matchingPdfMembers.map(member => {
-                const hasReport = lookupMis(pdfByKey, member.uid, member.name) !== null;
+                const existingMis = lookupMis(pdfByKey, member.uid, member.name);
+                const isZeroTasks = !existingMis || (existingMis.planned === 0 && existingMis.done === 0);
                 return (
-                  <label key={member.uid} className={cn('flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-gray-50', !hasReport && 'cursor-not-allowed opacity-50')}>
+                  <label key={member.uid} className="flex cursor-pointer items-center gap-2 rounded px-2 py-2 text-sm hover:bg-gray-50">
                     <input
                       type="checkbox"
-                      checked={hasReport && selectedPdfUsers.includes(member.uid)}
-                      disabled={!hasReport || misLoading || isDownloadingPdfs}
+                      checked={selectedPdfUsers.includes(member.uid)}
+                      disabled={misLoading || isDownloadingPdfs}
                       onChange={event => setSelectedPdfUsers(current => event.target.checked
                         ? [...current, member.uid]
                         : current.filter(uid => uid !== member.uid))}
                       className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
                     />
                     <span className="min-w-0 flex-1 truncate text-gray-800">{member.name}</span>
-                    {!hasReport && <span className="text-xs text-gray-400">No report</span>}
+                    {isZeroTasks && <span className="text-xs text-amber-600 font-medium">0 tasks</span>}
                   </label>
                 );
               })}
@@ -945,24 +978,23 @@ export default function ScoresClient({
                 (() => {
                   const rawScore = selectedBlock.scores.find(s => s.uid === selectedUser);
                   if (!rawScore) return null;
-                  const mis = lookupMis(pdfByKey, rawScore.uid, rawScore.name);
-                  if (misLoading && !mis) {
+                  const mis = getOrSynthesizeMis(pdfByKey, rawScore, selectedWeekMeta);
+                  if (misLoading && !lookupMis(pdfByKey, rawScore.uid, rawScore.name)) {
                     return <MisReportMasterSkeleton />;
                   }
                   const score = {
                     ...rawScore,
-                    mis: mis ?? null,
-                    pdfGapPercent: mis?.gapPercent ?? null,
-                    pdfGapLabel: mis?.gapLabel ?? '—',
+                    mis,
+                    pdfGapPercent: mis.gapPercent,
+                    pdfGapLabel: mis.gapLabel,
                   };
                   return (
                     <MisDashboard
                       score={score}
-                      mis={mis ?? null}
+                      mis={mis}
                       weekLabel={pdfWeekLabel}
                       loading={misLoading}
                       onDownload={() => {
-                        if (!mis) return;
                         downloadMisPdf(mis, score.monthlyScore ?? 0);
                       }}
                     />
@@ -974,12 +1006,12 @@ export default function ScoresClient({
                 <div className="space-y-2">
                   {selectedBlock.scores
                     .map(score => {
-                      const pdf = lookupMis(pdfByKey, score.uid, score.name);
+                      const pdf = getOrSynthesizeMis(pdfByKey, score, selectedWeekMeta);
                       return {
                         ...score,
-                        pdfGapPercent: pdf?.gapPercent ?? null,
-                        pdfGapLabel: pdf?.gapLabel ?? '—',
-                        mis: pdf ?? null,
+                        pdfGapPercent: pdf.gapPercent,
+                        pdfGapLabel: pdf.gapLabel,
+                        mis: pdf,
                       };
                     })
                     .sort((a, b) => (b.pdfGapPercent ?? -999) - (a.pdfGapPercent ?? -999))
@@ -1123,8 +1155,7 @@ function ScoreList({
                   weekLabel={pdfWeekLabel}
                   loading={misLoading}
                   onDownload={() => {
-                    if (!mis) return;
-                    downloadMisPdf(mis, score.monthlyScore ?? 0);
+                    if (mis) downloadMisPdf(mis, score.monthlyScore ?? 0);
                   }}
                 />
 

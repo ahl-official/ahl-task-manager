@@ -1821,11 +1821,16 @@ async function buildMaterializeContext(env) {
     env.DB.prepare("SELECT uid, name, is_active FROM users").all(),
     env.DB.prepare("SELECT name_key, week_start, week_end FROM mis_reconciled_people WHERE verified = 1").all(),
   ]);
-  const userActiveMap = /* @__PURE__ */ new Map();
+  const usersByUid = /* @__PURE__ */ new Map();
+  const usersByName = /* @__PURE__ */ new Map();
   for (const row of usersRes.results || []) {
-    const activeRow = { is_active: row.is_active };
-    if (row.uid) userActiveMap.set(String(row.uid), activeRow);
-    if (row.name) userActiveMap.set(normalizePersonName(row.name), activeRow);
+    if (row.uid) usersByUid.set(String(row.uid), row);
+    const nameKey = normalizePersonName(row.name);
+    if (nameKey) {
+      const matches = usersByName.get(nameKey) || [];
+      matches.push(row);
+      usersByName.set(nameKey, matches);
+    }
   }
   const locksByName = /* @__PURE__ */ new Map();
   for (const row of locksRes.results || []) {
@@ -1834,29 +1839,33 @@ async function buildMaterializeContext(env) {
     if (!locksByName.has(key)) locksByName.set(key, []);
     locksByName.get(key).push({ week_start: row.week_start, week_end: row.week_end });
   }
-  return { userActiveMap, locksByName };
+  return { usersByUid, usersByName, locksByName };
 }
 __name(buildMaterializeContext, "buildMaterializeContext");
 async function materializeMonthForTemplate(env, template, monthKey, ctx) {
   await ensurePeriodRowsTable(env);
-  if (template.isActive === false || template.is_active === 0) {
+  if (template.isActive === false || template.is_active === 0 || template.metadata?.deleted || template.is_deleted === 1) {
     return { inserted: 0, monthKey, count: 0, skippedInactive: true };
   }
   const assigneeUid = template.assignedTo || template.userId || "";
   const assigneeName = template.assignedToName || template.userName || "";
-  // When a precomputed map is supplied (bulk callers), skip the per-template point
-  // read against `users` — this is the single costliest N+1 in bulk month backfills.
   let userRow = null;
-  if (ctx && ctx.userActiveMap) {
-    userRow = (assigneeUid && ctx.userActiveMap.get(assigneeUid)) ||
-      ctx.userActiveMap.get(normalizePersonName(assigneeName)) || null;
-  } else if (assigneeUid || assigneeName) {
-    userRow = await env.DB.prepare(
-      "SELECT is_active FROM users WHERE (uid = ? AND uid != '') OR (name != '' AND LOWER(name) = LOWER(?)) LIMIT 1"
-    ).bind(assigneeUid, assigneeName).first();
+  if (ctx && ctx.usersByUid && ctx.usersByName) {
+    userRow = assigneeUid
+      ? ctx.usersByUid.get(assigneeUid) || null
+      : (ctx.usersByName.get(normalizePersonName(assigneeName)) || []).length === 1
+        ? ctx.usersByName.get(normalizePersonName(assigneeName))[0]
+        : null;
+  } else if (assigneeUid) {
+    userRow = await env.DB.prepare("SELECT uid, is_active FROM users WHERE uid = ? LIMIT 1").bind(assigneeUid).first();
+  } else if (assigneeName) {
+    const matches = await env.DB.prepare(
+      "SELECT uid, is_active FROM users WHERE name != '' AND LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 2"
+    ).bind(assigneeName).all();
+    if ((matches.results || []).length === 1) userRow = matches.results[0];
   }
-  if (userRow && (userRow.is_active === 0 || userRow.is_active === false)) {
-    return { inserted: 0, monthKey, count: 0, skippedDeactivated: true };
+  if (!userRow || Number(userRow.is_active) !== 1) {
+    return { inserted: 0, monthKey, count: 0, skippedInactiveUser: true };
   }
   const nameKey = normalizePersonName(template.assignedToName);
   let lockRows;
@@ -2004,9 +2013,9 @@ async function loadActiveTemplateIds(env) {
   }
   const templatesRes = await env.DB.prepare(
     `SELECT t.id FROM recurring_templates t
-     LEFT JOIN users u ON u.uid = t.assigned_to
+     JOIN users u ON u.uid = t.assigned_to
      WHERE t.is_active = 1
-       AND (u.is_active IS NULL OR u.is_active = 1)
+       AND u.is_active = 1
      ORDER BY t.id ASC`
   ).all();
   const ids = new Set((templatesRes.results || []).map((r) => String(r.id || "")).filter(Boolean));
@@ -2027,10 +2036,10 @@ async function listRecurringDefinitionIds(env, offset, limit) {
   // except on an empty page, where the window function has nothing to report from.
   const standing = await env.DB.prepare(
     `SELECT t.task_id AS id, COUNT(*) OVER() AS total_n FROM tasks_current t
-     LEFT JOIN users u ON u.uid = t.assigned_to
+     JOIN users u ON u.uid = t.assigned_to
      WHERE LOWER(t.category) IN ('daily', 'weekly', 'monthly')
        AND t.status IN (${statusPlaceholders})
-       AND (u.is_active IS NULL OR u.is_active = 1)
+       AND u.is_active = 1
      ORDER BY t.task_id ASC
      LIMIT ? OFFSET ?`
   ).bind(...openStatuses, limit, offset).all();
@@ -2049,10 +2058,10 @@ async function listRecurringDefinitionIds(env, offset, limit) {
     // function alone; only the very first page needs the explicit count to tell them apart.
     const countRow = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM tasks_current t
-       LEFT JOIN users u ON u.uid = t.assigned_to
+       JOIN users u ON u.uid = t.assigned_to
        WHERE LOWER(t.category) IN ('daily', 'weekly', 'monthly')
          AND t.status IN (${statusPlaceholders})
-         AND (u.is_active IS NULL OR u.is_active = 1)`
+         AND u.is_active = 1`
     ).bind(...openStatuses).first();
     standingTotal = Number(countRow?.n || 0);
   }
@@ -2132,7 +2141,7 @@ async function deleteRecurringDefinition(env, templateId, startDate) {
         definition.assignedTo, definition.assignedToName, definition.department, definition.frequency,
         definition.dayOfWeek, definition.dayOfMonth, definition.timeOfDay,
         JSON.stringify(metadata), definition.createdAt || now, now),
-    env.DB.prepare(`UPDATE recurring_period_rows SET is_deleted=1,deleted_at=?,updated_at=? WHERE ${deletePeriods}`).bind(now, now, templateId, cutoff),
+    env.DB.prepare(`UPDATE recurring_period_rows SET is_deleted=1,status='Deleted',deleted_at=?,updated_at=? WHERE ${deletePeriods}`).bind(now, now, templateId, cutoff),
     env.DB.prepare("UPDATE tasks_current SET status='Deleted',updated_at=? WHERE task_id=? AND LOWER(category) IN ('daily','weekly','monthly') AND status!='Deleted'").bind(now, templateId)
   ];
   if (sourceTask && sourceTask.status !== 'Deleted') {
@@ -2161,10 +2170,10 @@ function recurringTitleKey(row) {
 __name(recurringTitleKey, "recurringTitleKey");
 async function loadOpenRecurringTasks(env, category, userName) {
   let query = `SELECT t.* FROM tasks_current t
-    LEFT JOIN users u ON u.uid = t.assigned_to
+    JOIN users u ON u.uid = t.assigned_to
     WHERE LOWER(t.category) IN ('daily', 'weekly', 'monthly')
     AND LOWER(t.status) IN ('in progress','pending','pending accept','delay requested','overdue')
-    AND (u.is_active IS NULL OR u.is_active = 1)`;
+    AND u.is_active = 1`;
   const binds = [];
   if (category && category.toLowerCase() !== "all") {
     query += " AND LOWER(t.category) = LOWER(?)";
@@ -2410,9 +2419,9 @@ async function routeRecurring(req, env, url) {
     }
     const templatesRes = await env.DB.prepare(
       `SELECT t.* FROM recurring_templates t
-       LEFT JOIN users u ON u.uid = t.assigned_to
+       JOIN users u ON u.uid = t.assigned_to
        WHERE t.is_active = 1
-         AND (u.is_active IS NULL OR u.is_active = 1)`
+         AND u.is_active = 1`
     ).all();
     const templates = (templatesRes.results || []).map(recurringTemplateFromRow).filter(Boolean);
     for (const taskTemplate of await loadOpenRecurringTasks(env, null, null)) {

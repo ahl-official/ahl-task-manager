@@ -6,7 +6,7 @@ import { getDelegationBuckets } from '@/lib/mis/sources/delegation';
 import { getFmsBuckets } from '@/lib/mis/sources/fms';
 import type { MisParameterRow, MisPersonScore } from '@/lib/mis/types';
 import { formatWeekLabel, getMisWeekPeriod } from '@/lib/mis/week';
-import { normalizePersonName } from '@/lib/utils/names';
+import { normalizePersonName, isVinittUser } from '@/lib/utils/names';
 import { cfApi, CloudflareApiError, hasCloudflareApi } from '@/lib/cloudflare/api';
 
 export async function getReconciledScores(weekStart: string, weekEnd: string): Promise<MisPersonScore[]> {
@@ -77,6 +77,11 @@ export async function computeMisScoresForWeek(weekStart?: string, weekEnd?: stri
       ...Array.from(fms.keys()),
       ...Array.from(reconciledByName.keys()),
     ]);
+    for (const [key, user] of Array.from(usersByName.entries())) {
+      if (user.isActive !== false && !isVinittUser(user)) {
+        names.add(key);
+      }
+    }
 
     const rows: MisPersonScore[] = [];
     for (const key of Array.from(names)) {
