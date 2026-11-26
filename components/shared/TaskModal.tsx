@@ -354,11 +354,6 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
         <div className="p-4 sm:p-5 space-y-4 overflow-y-auto overflow-x-hidden scrollbar-thin flex-1">
           {/* Task Description (scrolls with content) */}
           <div>
-            {task.createdByName && (
-              <p className="text-xs text-gray-400 mb-1">
-                Created by: <span className="font-semibold text-gray-700">{task.createdByName}</span>
-              </p>
-            )}
             <h2 className="text-base font-semibold text-gray-900 leading-snug break-words [overflow-wrap:anywhere]">
               {task.description}
             </h2>
