@@ -2,11 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/utils/auth';
 import {
   adminGetAllRevisions,
+  adminGetPaginatedRevisions,
   adminGetRevisionsByTask,
   adminGetPendingRevisionsByHandoff,
   serializeRevision,
 } from '@/lib/firebase/revisions';
-import { adminGetTask, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetTask, adminGetTasksByIds, serializeTask } from '@/lib/firebase/tasks';
+import { adminGetAllUsers } from '@/lib/firebase/users';
+import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 import { adminDb } from '@/lib/firebase/admin';
 import { adminLog } from '@/lib/firebase/scores';
 import { sendWhatsApp, msgRevisionRequested, msgRevisionApproved, msgRevisionRejected } from '@/lib/waha';
@@ -14,22 +17,56 @@ import { formatDate } from '@/lib/utils';
 import { canViewTask } from '@/lib/utils/access';
 import { cfApi, hasCloudflareApi } from '@/lib/cloudflare/api';
 import { cfRevision } from '@/lib/cloudflare/models';
-import { updateTaskInReadCache } from '@/lib/firebase/readCache';
+import { updateTaskInReadCache, clearFirestoreReadCache } from '@/lib/firebase/readCache';
 
-// GET /api/revisions — get pending revisions for handoff user
+// GET /api/revisions — get revisions (paginated or pending for handoff user)
 export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const taskId=new URL(req.url).searchParams.get('taskId');
-  if(taskId){
-    const task=await adminGetTask(taskId);
-    if(!task||!canViewTask(session,task))return NextResponse.json({success:false,error:'Forbidden'},{status:403});
-    const revisions=await adminGetRevisionsByTask(taskId,100);
-    return NextResponse.json({success:true,data:revisions.map(serializeRevision)});
+  const url = new URL(req.url);
+  const taskId = url.searchParams.get('taskId');
+  if (taskId) {
+    const task = await adminGetTask(taskId);
+    if (!task || !canViewTask(session, task)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
+    const revisions = await adminGetRevisionsByTask(taskId, 100);
+    return NextResponse.json({ success: true, data: revisions.map(serializeRevision) });
   }
+
+  const isPaginated = url.searchParams.get('paginate') === 'true' || url.searchParams.has('page') || url.searchParams.has('limit');
+  if (isPaginated) {
+    const page = Math.max(Number(url.searchParams.get('page') || 1), 1);
+    const limit = Math.max(Number(url.searchParams.get('limit') || 50), 1);
+    const status = url.searchParams.get('status') || undefined;
+    const search = url.searchParams.get('search') || undefined;
+    const department = session.role === 'leader' ? session.department : undefined;
+    const visibleForUid = session.role === 'admin' || session.role === 'leader' ? undefined : session.uid;
+
+    const result = await adminGetPaginatedRevisions({
+      page,
+      limit,
+      status,
+      search,
+      department,
+      visibleForUid,
+    });
+
+    const [allUsers, tasks] = await Promise.all([
+      adminGetAllUsers(),
+      adminGetTasksByIds(result.items.map(r => r.taskId)),
+    ]);
+    const hydratedTasks = hydrateTasksWithUsers(tasks, allUsers);
+
+    return NextResponse.json({
+      success: true,
+      data: result.items.map(serializeRevision),
+      tasks: hydratedTasks.map(serializeTask),
+      pagination: result.pagination,
+    });
+  }
+
   if (session.role === 'admin' || session.role === 'leader') {
-    if(session.role === 'leader' && !session.department) return NextResponse.json({ success:false,error:'Department required' }, { status:403 });
+    if (session.role === 'leader' && !session.department) return NextResponse.json({ success: false, error: 'Department required' }, { status: 403 });
     const revisions = await adminGetAllRevisions({ status: 'pending', limit: 1000, department: session.role === 'leader' ? session.department : undefined });
     return NextResponse.json({ success: true, data: revisions.map(serializeRevision) });
   }
@@ -165,6 +202,7 @@ export async function POST(req: NextRequest) {
       }).catch(() => {});
     }
 
+    clearFirestoreReadCache('revisions:');
     const updatedTask = await adminGetTask(taskId);
 
     return NextResponse.json({
@@ -367,6 +405,7 @@ export async function PATCH(req: NextRequest) {
       }).catch(()=>{});
     }
 
+    clearFirestoreReadCache('revisions:');
     const updatedTask = await adminGetTask(taskId);
 
     return NextResponse.json({

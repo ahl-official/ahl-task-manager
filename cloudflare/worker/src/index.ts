@@ -683,42 +683,145 @@ async function routeRevisions(req: Request, env: Env, url: URL) {
     const requestedBy = url.searchParams.get('requestedBy');
     const handoffUid = url.searchParams.get('handoffUid');
     const visibleForUid = url.searchParams.get('visibleForUid');
-    const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 300), 1), 1000);
+    const search = (url.searchParams.get('search') || '').trim();
+    const isPaginated = url.searchParams.get('paginate') === 'true';
+    const rawLimit = url.searchParams.get('limit');
+    const limit = rawLimit === 'all' ? 5000 : Math.max(Number(rawLimit || 50), 1);
+    const page = Math.max(Number(url.searchParams.get('page') || 1), 1);
+    const offset = Number(url.searchParams.get('offset') ?? ((page - 1) * limit));
+
+    let orderClause = 'ORDER BY created_at DESC';
+    if (status === 'resolved' || status === 'approved' || status === 'rejected') {
+      orderClause = 'ORDER BY COALESCE(decided_at, created_at) DESC';
+    } else if (!status || status === 'all') {
+      orderClause = "ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, CASE WHEN status = 'pending' THEN created_at ELSE COALESCE(decided_at, created_at) END DESC";
+    }
 
     if (handoffUid) {
-      const clauses = ['t.handoff_uid = ?'];
+      const clauses: string[] = ['t.handoff_uid = ?'];
       const binds: unknown[] = [handoffUid];
-      if (status) { clauses.push('r.status = ?'); binds.push(status); }
+      if (status === 'pending') {
+        clauses.push("r.status = 'pending'");
+      } else if (status === 'resolved') {
+        clauses.push("r.status IN ('approved', 'rejected')");
+      } else if (status && status !== 'all') {
+        clauses.push('r.status = ?');
+        binds.push(status);
+      }
+      if (search) {
+        clauses.push('(r.task_id LIKE ? OR r.requested_by_name LIKE ? OR r.reason LIKE ?)');
+        binds.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      }
+      const countRow = await env.DB.prepare(
+        `SELECT COUNT(*) as total FROM revisions r
+         JOIN tasks_current t ON t.task_id = r.task_id
+         WHERE ${clauses.join(' AND ')}`
+      ).bind(...binds).first<{ total: number }>();
+      const total = Number(countRow?.total || 0);
+
       const rows = await env.DB.prepare(
         `SELECT r.* FROM revisions r
          JOIN tasks_current t ON t.task_id = r.task_id
          WHERE ${clauses.join(' AND ')}
-         ORDER BY r.created_at DESC LIMIT ?`
-      ).bind(...binds, limit).all();
-      return json({ success: true, data: rows.results.map(revisionFromRow) });
+         ${orderClause.replace(/(\bcreated_at\b|\bdecided_at\b|\bstatus\b)/g, 'r.$1')}
+         LIMIT ? OFFSET ?`
+      ).bind(...binds, limit, offset).all();
+
+      const items = rows.results.map(revisionFromRow);
+      if (isPaginated) {
+        return json({
+          success: true,
+          data: {
+            items,
+            pagination: { page, limit, offset, total, totalPages: Math.max(1, Math.ceil(total / limit)), hasMore: offset + items.length < total }
+          }
+        });
+      }
+      return json({ success: true, data: items });
     }
 
     if (visibleForUid) {
-      const clauses = ['(r.requested_by = ? OR t.handoff_uid = ?)'];
+      const clauses: string[] = ['(r.requested_by = ? OR t.handoff_uid = ?)'];
       const binds: unknown[] = [visibleForUid, visibleForUid];
-      if (status) { clauses.push('r.status = ?'); binds.push(status); }
+      if (status === 'pending') {
+        clauses.push("r.status = 'pending'");
+      } else if (status === 'resolved') {
+        clauses.push("r.status IN ('approved', 'rejected')");
+      } else if (status && status !== 'all') {
+        clauses.push('r.status = ?');
+        binds.push(status);
+      }
+      if (search) {
+        clauses.push('(r.task_id LIKE ? OR r.requested_by_name LIKE ? OR r.reason LIKE ?)');
+        binds.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      }
+      const countRow = await env.DB.prepare(
+        `SELECT COUNT(*) as total FROM revisions r
+         LEFT JOIN tasks_current t ON t.task_id = r.task_id
+         WHERE ${clauses.join(' AND ')}`
+      ).bind(...binds).first<{ total: number }>();
+      const total = Number(countRow?.total || 0);
+
       const rows = await env.DB.prepare(
         `SELECT r.* FROM revisions r
          LEFT JOIN tasks_current t ON t.task_id = r.task_id
          WHERE ${clauses.join(' AND ')}
-         ORDER BY r.created_at DESC LIMIT ?`
-      ).bind(...binds, limit).all();
-      return json({ success: true, data: rows.results.map(revisionFromRow) });
+         ${orderClause.replace(/(\bcreated_at\b|\bdecided_at\b|\bstatus\b)/g, 'r.$1')}
+         LIMIT ? OFFSET ?`
+      ).bind(...binds, limit, offset).all();
+
+      const items = rows.results.map(revisionFromRow);
+      if (isPaginated) {
+        return json({
+          success: true,
+          data: {
+            items,
+            pagination: { page, limit, offset, total, totalPages: Math.max(1, Math.ceil(total / limit)), hasMore: offset + items.length < total }
+          }
+        });
+      }
+      return json({ success: true, data: items });
     }
 
     const clauses: string[] = [];
     const binds: unknown[] = [];
-    if (status) { clauses.push('status = ?'); binds.push(status); }
+    if (status === 'pending') {
+      clauses.push("status = 'pending'");
+    } else if (status === 'resolved') {
+      clauses.push("status IN ('approved', 'rejected')");
+    } else if (status && status !== 'all') {
+      clauses.push('status = ?');
+      binds.push(status);
+    }
     if (taskId) { clauses.push('task_id = ?'); binds.push(taskId); }
     if (requestedBy) { clauses.push('requested_by = ?'); binds.push(requestedBy); }
+    const department = url.searchParams.get('department');
+    if (department) {
+      clauses.push('task_id IN (SELECT task_id FROM tasks_current WHERE department = ?)');
+      binds.push(department);
+    }
+    if (search) {
+      clauses.push('(task_id LIKE ? OR requested_by_name LIKE ? OR reason LIKE ?)');
+      binds.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const rows = await env.DB.prepare(`SELECT * FROM revisions ${where} ORDER BY created_at DESC LIMIT ?`).bind(...binds, limit).all();
-    return json({ success: true, data: rows.results.map(revisionFromRow) });
+
+    const countRow = await env.DB.prepare(`SELECT COUNT(*) as total FROM revisions ${where}`).bind(...binds).first<{ total: number }>();
+    const total = Number(countRow?.total || 0);
+
+    const rows = await env.DB.prepare(`SELECT * FROM revisions ${where} ${orderClause} LIMIT ? OFFSET ?`).bind(...binds, limit, offset).all();
+    const items = rows.results.map(revisionFromRow);
+
+    if (isPaginated) {
+      return json({
+        success: true,
+        data: {
+          items,
+          pagination: { page, limit, offset, total, totalPages: Math.max(1, Math.ceil(total / limit)), hasMore: offset + items.length < total }
+        }
+      });
+    }
+    return json({ success: true, data: items });
   }
 
   if (url.pathname === '/revisions' && req.method === 'POST') {

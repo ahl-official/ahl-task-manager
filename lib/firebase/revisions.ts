@@ -104,6 +104,73 @@ export async function adminGetRevisionsByTask(taskId: string, limitCount = DEFAU
   });
 }
 
+export interface PaginatedRevisionsResult {
+  items: RevisionLog[];
+  pagination: {
+    page: number;
+    limit: number;
+    offset: number;
+    total: number;
+    totalPages: number;
+    hasMore: boolean;
+  };
+}
+
+export async function adminGetPaginatedRevisions(options: {
+  page?: number;
+  limit?: number;
+  status?: string;
+  department?: string;
+  search?: string;
+  visibleForUid?: string;
+  handoffUid?: string;
+}): Promise<PaginatedRevisionsResult> {
+  const page = Math.max(options.page || 1, 1);
+  const limit = Math.max(options.limit || 50, 1);
+  const params = new URLSearchParams({
+    paginate: 'true',
+    page: String(page),
+    limit: String(limit),
+  });
+  if (options.status && options.status !== 'all') params.set('status', options.status);
+  if (options.department) params.set('department', options.department);
+  if (options.search) params.set('search', options.search);
+  if (options.visibleForUid) params.set('visibleForUid', options.visibleForUid);
+  if (options.handoffUid) params.set('handoffUid', options.handoffUid);
+
+  if (hasCloudflareApi()) {
+    try {
+      const res = await cfApi<{ items: any[]; pagination: any }>(`/revisions?${params.toString()}`);
+      return {
+        items: (res?.items || []).map(cfRevision).filter(Boolean) as RevisionLog[],
+        pagination: res?.pagination || { page, limit, offset: (page - 1) * limit, total: 0, totalPages: 1, hasMore: false },
+      };
+    } catch (err) {
+      handleFirestoreReadError('adminGetPaginatedRevisions_cf', err);
+      return { items: [], pagination: { page, limit, offset: 0, total: 0, totalPages: 1, hasMore: false } };
+    }
+  }
+
+  const all = await adminGetAllRevisions({ status: options.status as any, department: options.department, limit: 1000 });
+  const filtered = options.search
+    ? all.filter(r => (r.taskId || '').toLowerCase().includes(options.search!.toLowerCase()) || (r.requestedByName || '').toLowerCase().includes(options.search!.toLowerCase()))
+    : all;
+  const total = filtered.length;
+  const start = (page - 1) * limit;
+  const items = filtered.slice(start, start + limit);
+  return {
+    items,
+    pagination: {
+      page,
+      limit,
+      offset: start,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      hasMore: start + items.length < total,
+    },
+  };
+}
+
 export async function adminGetAllRevisions(options?: {
   status?: RevisionDecision;
   department?: string;

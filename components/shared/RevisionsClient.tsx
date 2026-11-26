@@ -1,65 +1,199 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { CheckCircle2, XCircle, Calendar, User, Loader2, AlertOctagon, Search, X } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { CheckCircle2, XCircle, Calendar, User, Loader2, AlertOctagon, Search, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn, formatDate, STATUS_COLORS } from '@/lib/utils';
 import type { TaskSerialized } from '@/types';
 
+interface PaginationMeta {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasMore: boolean;
+}
+
 interface Props {
-  revisions: any[];
-  tasks: TaskSerialized[];
+  initialRevisions?: any[];
+  revisions?: any[];
+  initialTasks?: TaskSerialized[];
+  tasks?: TaskSerialized[];
+  initialPagination?: PaginationMeta;
+  initialPendingCount?: number;
+  initialResolvedCount?: number;
   role: 'admin' | 'user';
   currentUid?: string;
 }
 
-export default function RevisionsClient({ revisions, tasks, role, currentUid }: Props) {
+export default function RevisionsClient({
+  initialRevisions,
+  revisions,
+  initialTasks,
+  tasks,
+  initialPagination,
+  initialPendingCount,
+  initialResolvedCount,
+  role,
+  currentUid,
+}: Props) {
+  const startRevisions = initialRevisions || revisions || [];
+  const startTasks = initialTasks || tasks || [];
+  const startPagination: PaginationMeta = initialPagination || {
+    page: 1,
+    limit: 50,
+    total: startRevisions.length,
+    totalPages: Math.max(1, Math.ceil(startRevisions.length / 50)),
+    hasMore: false,
+  };
+
   const [loading, setLoading] = useState<string | null>(null);
+  const [pageLoading, setPageLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'resolved'>('all');
+  const [currentPage, setCurrentPage] = useState(1);
 
-  const taskMap = useMemo(() => Object.fromEntries(tasks.map(t => [t.taskId, t])), [tasks]);
+  // Tab counts
+  const [pendingCount, setPendingCount] = useState<number>(() => {
+    return initialPendingCount ?? startRevisions.filter((r: any) => r.status === 'pending').length;
+  });
+  const [resolvedCount, setResolvedCount] = useState<number>(() => {
+    return initialResolvedCount ?? startRevisions.filter((r: any) => r.status !== 'pending').length;
+  });
 
-  // Sort revisions: Pending first, then resolved (approved/rejected).
-  // Within each group, sort by createdAt descending (newest first).
-  const sortedRevisions = useMemo(() => {
-    return [...revisions].sort((a, b) => {
+  // Persistent task dictionary across all loaded pages
+  const [taskMap, setTaskMap] = useState<Record<string, TaskSerialized>>(() => {
+    return Object.fromEntries(startTasks.map((t: any) => [t.taskId, t]));
+  });
+
+  // Client-side Page Cache: key is `${statusFilter}_${debouncedSearch}_${page}`
+  const initialKey = 'all__1';
+  const [cache, setCache] = useState<Record<string, {
+    items: any[];
+    pagination: PaginationMeta;
+  }>>(() => ({
+    [initialKey]: {
+      items: startRevisions,
+      pagination: startPagination,
+    },
+  }));
+
+  // Debounce search input by 350ms
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setCurrentPage(1);
+    }, 350);
+    return () => clearTimeout(handler);
+  }, [search]);
+
+  // Handle Tab Switch
+  const handleStatusFilterChange = (newStatus: 'all' | 'pending' | 'resolved') => {
+    setStatusFilter(newStatus);
+    setCurrentPage(1);
+  };
+
+  // Fetch page if not in cache
+  const currentKey = `${statusFilter}_${debouncedSearch}_${currentPage}`;
+  const currentCachedPage = cache[currentKey];
+
+  useEffect(() => {
+    const key = `${statusFilter}_${debouncedSearch}_${currentPage}`;
+    if (cache[key]) return;
+
+    let cancelled = false;
+    async function loadPage() {
+      setPageLoading(true);
+      try {
+        const params = new URLSearchParams({
+          page: String(currentPage),
+          limit: '50',
+          paginate: 'true',
+        });
+        if (statusFilter !== 'all') params.set('status', statusFilter);
+        if (debouncedSearch) params.set('search', debouncedSearch);
+
+        const res = await fetch(`/api/revisions?${params.toString()}`);
+        const json = await res.json();
+        if (!json.success) throw new Error(json.error || 'Failed to fetch revisions');
+
+        if (!cancelled) {
+          if (Array.isArray(json.tasks) && json.tasks.length > 0) {
+            setTaskMap(prev => {
+              const next = { ...prev };
+              json.tasks.forEach((t: TaskSerialized) => { next[t.taskId] = t; });
+              return next;
+            });
+          }
+
+          setCache(prev => ({
+            ...prev,
+            [key]: {
+              items: json.data || [],
+              pagination: json.pagination || {
+                page: currentPage,
+                limit: 50,
+                total: (json.data || []).length,
+                totalPages: Math.max(1, Math.ceil(((json.data || []).length) / 50)),
+                hasMore: false,
+              },
+            },
+          }));
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          toast.error(err.message || 'Failed to load page');
+        }
+      } finally {
+        if (!cancelled) setPageLoading(false);
+      }
+    }
+
+    loadPage();
+    return () => { cancelled = true; };
+  }, [currentPage, statusFilter, debouncedSearch, cache]);
+
+  // Items to render
+  const rawItems = currentCachedPage?.items ?? (currentPage === 1 && !debouncedSearch && statusFilter === 'all' ? startRevisions : []);
+
+  // Sort: Pending first (newest createdAt first), then Resolved (newest decidedAt || createdAt first)
+  const displayItems = useMemo(() => {
+    return [...rawItems].sort((a, b) => {
       const isPendingA = a.status === 'pending' ? 0 : 1;
       const isPendingB = b.status === 'pending' ? 0 : 1;
       if (isPendingA !== isPendingB) return isPendingA - isPendingB;
 
-      const timeA = new Date(a.createdAt || 0).getTime();
-      const timeB = new Date(b.createdAt || 0).getTime();
-      return timeB - timeA;
+      if (isPendingA === 0) {
+        const timeA = new Date(a.createdAt || 0).getTime();
+        const timeB = new Date(b.createdAt || 0).getTime();
+        return timeB - timeA;
+      } else {
+        const timeA = new Date(a.decidedAt || a.createdAt || 0).getTime();
+        const timeB = new Date(b.decidedAt || b.createdAt || 0).getTime();
+        return timeB - timeA;
+      }
     });
-  }, [revisions]);
+  }, [rawItems]);
 
-  // Counts for tabs
-  const pendingCount = useMemo(() => revisions.filter(r => r.status === 'pending').length, [revisions]);
-  const resolvedCount = useMemo(() => revisions.filter(r => r.status !== 'pending').length, [revisions]);
+  const currentPagination: PaginationMeta = currentCachedPage?.pagination || (
+    currentPage === 1 && !debouncedSearch && statusFilter === 'all'
+      ? startPagination
+      : {
+          page: currentPage,
+          limit: 50,
+          total: displayItems.length,
+          totalPages: Math.max(1, Math.ceil(displayItems.length / 50)),
+          hasMore: false,
+        }
+  );
 
-  // Filter by search query (task ID, task description, requester, reason) and status tab
-  const filteredRevisions = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return sortedRevisions.filter(rev => {
-      // Status tab filter
-      if (statusFilter === 'pending' && rev.status !== 'pending') return false;
-      if (statusFilter === 'resolved' && rev.status === 'pending') return false;
+  const totalItems = currentPagination.total;
+  const totalPages = Math.max(1, currentPagination.totalPages);
 
-      // Search query filter
-      if (!q) return true;
-      const task = taskMap[rev.taskId];
-      const matchId = (rev.taskId || '').toLowerCase().includes(q);
-      const matchDesc = (task?.description || '').toLowerCase().includes(q);
-      const matchRequester = (rev.requestedByName || '').toLowerCase().includes(q);
-      const matchReason = (rev.reason || '').toLowerCase().includes(q);
-      return matchId || matchDesc || matchRequester || matchReason;
-    });
-  }, [sortedRevisions, search, statusFilter, taskMap]);
-
-  // Separate pending and resolved for clear visual grouping when viewing "all"
-  const pendingItems = useMemo(() => filteredRevisions.filter(r => r.status === 'pending'), [filteredRevisions]);
-  const resolvedItems = useMemo(() => filteredRevisions.filter(r => r.status !== 'pending'), [filteredRevisions]);
+  // Separate pending and resolved for clear grouping on current page when viewing "all"
+  const pendingPageItems = useMemo(() => displayItems.filter(r => r.status === 'pending'), [displayItems]);
+  const resolvedPageItems = useMemo(() => displayItems.filter(r => r.status !== 'pending'), [displayItems]);
 
   async function decide(revisionId: string, taskId: string, decision: 'approved' | 'rejected') {
     setLoading(revisionId + decision);
@@ -168,6 +302,15 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
               <div className="flex items-center gap-1.5">
                 <span>Submitted: {formatDate(rev.createdAt)}</span>
               </div>
+              {rev.status !== 'pending' && rev.decidedAt && (
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 size={12} className={cn('shrink-0', rev.status === 'approved' ? 'text-green-600' : 'text-red-500')} />
+                  <span>
+                    Resolved: <strong className="text-gray-700">{formatDate(rev.decidedAt)}</strong>
+                    {rev.decidedByName ? <span className="text-gray-500"> by <strong className="text-gray-700">{rev.decidedByName}</strong></span> : null}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className={cn('rounded-lg p-3', isDeadRequest ? 'bg-rose-50/70 border border-rose-100' : 'bg-orange-50/80')}>
@@ -230,16 +373,6 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
     );
   }
 
-  if (revisions.length === 0) {
-    return (
-      <div className="card p-12 text-center">
-        <CheckCircle2 size={40} className="mx-auto text-green-400 mb-3" />
-        <p className="text-gray-500 font-medium">No revision requests</p>
-        <p className="text-sm text-gray-400 mt-1">All clear!</p>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4">
       {/* Search Bar & Filter Tabs */}
@@ -249,7 +382,7 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
-            placeholder="Search by task ID or task name..."
+            placeholder="Search by task ID, requester, or reason..."
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="w-full pl-9 pr-8 py-2 text-xs sm:text-sm border border-gray-200 rounded-xl bg-white shadow-2xs focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition"
@@ -270,7 +403,7 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
         <div className="flex items-center gap-1.5 shrink-0 bg-gray-100/80 p-1 rounded-xl">
           <button
             type="button"
-            onClick={() => setStatusFilter('all')}
+            onClick={() => handleStatusFilterChange('all')}
             className={cn(
               'px-3 py-1.5 text-xs font-semibold rounded-lg transition-all',
               statusFilter === 'all'
@@ -278,11 +411,11 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
                 : 'text-gray-600 hover:text-gray-900'
             )}
           >
-            All ({revisions.length})
+            All
           </button>
           <button
             type="button"
-            onClick={() => setStatusFilter('pending')}
+            onClick={() => handleStatusFilterChange('pending')}
             className={cn(
               'px-3 py-1.5 text-xs font-semibold rounded-lg transition-all inline-flex items-center gap-1.5',
               statusFilter === 'pending'
@@ -294,7 +427,7 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
           </button>
           <button
             type="button"
-            onClick={() => setStatusFilter('resolved')}
+            onClick={() => handleStatusFilterChange('resolved')}
             className={cn(
               'px-3 py-1.5 text-xs font-semibold rounded-lg transition-all',
               statusFilter === 'resolved'
@@ -307,8 +440,16 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
         </div>
       </div>
 
-      {/* No search matches */}
-      {filteredRevisions.length === 0 ? (
+      {/* Loading state indicator */}
+      {pageLoading && (
+        <div className="flex items-center justify-center gap-2 py-3 text-xs text-brand-600 bg-brand-50/70 border border-brand-100 rounded-xl">
+          <Loader2 size={14} className="animate-spin" />
+          <span>Loading page {currentPage}...</span>
+        </div>
+      )}
+
+      {/* No search matches or empty list */}
+      {!pageLoading && displayItems.length === 0 ? (
         <div className="card p-10 text-center">
           <p className="text-gray-600 font-medium">No revision requests found</p>
           <p className="text-xs text-gray-400 mt-1">
@@ -327,30 +468,30 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
       ) : statusFilter === 'all' ? (
         /* When "All" is active, render Pending Approval at top with a distinct header, then Resolved below */
         <div className="space-y-6">
-          {pendingItems.length > 0 && (
+          {pendingPageItems.length > 0 && (
             <div className="space-y-2.5">
               <div className="flex items-center gap-2 px-1">
                 <span className="w-2 h-2 rounded-full bg-amber-500" />
                 <h3 className="text-xs font-bold uppercase tracking-wider text-amber-900">
-                  Pending Approval ({pendingItems.length})
+                  Pending Approval ({pendingPageItems.length})
                 </h3>
               </div>
               <div className="space-y-3">
-                {pendingItems.map(renderRevisionCard)}
+                {pendingPageItems.map(renderRevisionCard)}
               </div>
             </div>
           )}
 
-          {resolvedItems.length > 0 && (
+          {resolvedPageItems.length > 0 && (
             <div className="space-y-2.5">
               <div className="flex items-center gap-2 px-1 pt-2 border-t border-gray-100">
                 <span className="w-2 h-2 rounded-full bg-gray-400" />
                 <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
-                  Approved & Rejected ({resolvedItems.length})
+                  Approved &amp; Rejected ({resolvedPageItems.length})
                 </h3>
               </div>
               <div className="space-y-3">
-                {resolvedItems.map(renderRevisionCard)}
+                {resolvedPageItems.map(renderRevisionCard)}
               </div>
             </div>
           )}
@@ -358,7 +499,79 @@ export default function RevisionsClient({ revisions, tasks, role, currentUid }: 
       ) : (
         /* When filtered to specific tab (Pending or Resolved) */
         <div className="space-y-3">
-          {filteredRevisions.map(renderRevisionCard)}
+          {displayItems.map(renderRevisionCard)}
+        </div>
+      )}
+
+      {/* Pagination Controls (50 per page) */}
+      {totalItems > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-gray-100">
+          <p className="text-xs text-gray-500">
+            Showing <strong className="text-gray-700 font-semibold">{Math.min(totalItems, (currentPage - 1) * 50 + 1)}</strong> to{' '}
+            <strong className="text-gray-700 font-semibold">{Math.min(totalItems, (currentPage - 1) * 50 + displayItems.length)}</strong> of{' '}
+            <strong className="text-gray-700 font-semibold">{totalItems}</strong> requests
+          </p>
+
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setCurrentPage(p => Math.max(1, p - 1));
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                disabled={currentPage <= 1 || pageLoading}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-2xs"
+              >
+                <ChevronLeft size={14} />
+                Previous
+              </button>
+
+              <div className="flex items-center gap-1 px-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNum => {
+                  const isClose = Math.abs(pageNum - currentPage) <= 1 || pageNum === 1 || pageNum === totalPages;
+                  if (!isClose) {
+                    if (pageNum === 2 || pageNum === totalPages - 1) {
+                      return <span key={pageNum} className="px-1 text-xs text-gray-400">...</span>;
+                    }
+                    return null;
+                  }
+                  return (
+                    <button
+                      key={pageNum}
+                      type="button"
+                      onClick={() => {
+                        setCurrentPage(pageNum);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      disabled={pageLoading}
+                      className={cn(
+                        'min-w-[2rem] h-8 text-xs font-semibold rounded-lg transition shadow-2xs',
+                        pageNum === currentPage
+                          ? 'bg-brand-600 text-white shadow-xs'
+                          : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'
+                      )}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCurrentPage(p => Math.min(totalPages, p + 1));
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                disabled={currentPage >= totalPages || pageLoading}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-2xs"
+              >
+                Next
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

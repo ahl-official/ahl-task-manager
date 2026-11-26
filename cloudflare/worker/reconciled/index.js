@@ -1227,40 +1227,111 @@ async function routeRevisions(req, env, url) {
     const requestedBy = url.searchParams.get("requestedBy");
     const handoffUid = url.searchParams.get("handoffUid");
     const visibleForUid = url.searchParams.get("visibleForUid");
-    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 100), 1), 100);
+    const search = (url.searchParams.get("search") || "").trim();
+    const isPaginated = url.searchParams.get("paginate") === "true";
+    const rawLimit = url.searchParams.get("limit");
+    const limit = rawLimit === "all" ? 5000 : Math.max(Number(rawLimit || 50), 1);
+    const page = Math.max(Number(url.searchParams.get("page") || 1), 1);
+    const offset = Number(url.searchParams.get("offset") ?? ((page - 1) * limit));
+
+    let orderClause = "ORDER BY created_at DESC";
+    if (status === "resolved" || status === "approved" || status === "rejected") {
+      orderClause = "ORDER BY COALESCE(decided_at, created_at) DESC";
+    } else if (!status || status === "all") {
+      orderClause = "ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, CASE WHEN status = 'pending' THEN created_at ELSE COALESCE(decided_at, created_at) END DESC";
+    }
+
     if (handoffUid) {
       const clauses2 = ["t.handoff_uid = ?"];
       const binds2 = [handoffUid];
-      if (status) {
+      if (status === "pending") {
+        clauses2.push("r.status = 'pending'");
+      } else if (status === "resolved") {
+        clauses2.push("r.status IN ('approved', 'rejected')");
+      } else if (status && status !== "all") {
         clauses2.push("r.status = ?");
         binds2.push(status);
       }
+      if (search) {
+        clauses2.push("(r.task_id LIKE ? OR r.requested_by_name LIKE ? OR r.reason LIKE ?)");
+        binds2.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      }
+      const countRow = await env.DB.prepare(
+        `SELECT COUNT(*) as total FROM revisions r
+         JOIN tasks_current t ON t.task_id = r.task_id
+         WHERE ${clauses2.join(" AND ")}`
+      ).bind(...binds2).first();
+      const total = Number(countRow?.total || 0);
+
       const rows2 = await env.DB.prepare(
         `SELECT r.* FROM revisions r
          JOIN tasks_current t ON t.task_id = r.task_id
          WHERE ${clauses2.join(" AND ")}
-         ORDER BY r.created_at DESC LIMIT ?`
-      ).bind(...binds2, limit).all();
-      return json({ success: true, data: rows2.results.map(revisionFromRow) });
+         ${orderClause.replace(/(\bcreated_at\b|\bdecided_at\b|\bstatus\b)/g, 'r.$1')}
+         LIMIT ? OFFSET ?`
+      ).bind(...binds2, limit, offset).all();
+
+      const items = rows2.results.map(revisionFromRow);
+      if (isPaginated) {
+        return json({
+          success: true,
+          data: {
+            items,
+            pagination: { page, limit, offset, total, totalPages: Math.max(1, Math.ceil(total / limit)), hasMore: offset + items.length < total }
+          }
+        });
+      }
+      return json({ success: true, data: items });
     }
     if (visibleForUid) {
       const clauses2 = ["(r.requested_by = ? OR t.handoff_uid = ?)"];
       const binds2 = [visibleForUid, visibleForUid];
-      if (status) {
+      if (status === "pending") {
+        clauses2.push("r.status = 'pending'");
+      } else if (status === "resolved") {
+        clauses2.push("r.status IN ('approved', 'rejected')");
+      } else if (status && status !== "all") {
         clauses2.push("r.status = ?");
         binds2.push(status);
       }
+      if (search) {
+        clauses2.push("(r.task_id LIKE ? OR r.requested_by_name LIKE ? OR r.reason LIKE ?)");
+        binds2.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      }
+      const countRow = await env.DB.prepare(
+        `SELECT COUNT(*) as total FROM revisions r
+         LEFT JOIN tasks_current t ON t.task_id = r.task_id
+         WHERE ${clauses2.join(" AND ")}`
+      ).bind(...binds2).first();
+      const total = Number(countRow?.total || 0);
+
       const rows2 = await env.DB.prepare(
         `SELECT r.* FROM revisions r
          LEFT JOIN tasks_current t ON t.task_id = r.task_id
          WHERE ${clauses2.join(" AND ")}
-         ORDER BY r.created_at DESC LIMIT ?`
-      ).bind(...binds2, limit).all();
-      return json({ success: true, data: rows2.results.map(revisionFromRow) });
+         ${orderClause.replace(/(\bcreated_at\b|\bdecided_at\b|\bstatus\b)/g, 'r.$1')}
+         LIMIT ? OFFSET ?`
+      ).bind(...binds2, limit, offset).all();
+
+      const items = rows2.results.map(revisionFromRow);
+      if (isPaginated) {
+        return json({
+          success: true,
+          data: {
+            items,
+            pagination: { page, limit, offset, total, totalPages: Math.max(1, Math.ceil(total / limit)), hasMore: offset + items.length < total }
+          }
+        });
+      }
+      return json({ success: true, data: items });
     }
     const clauses = [];
     const binds = [];
-    if (status) {
+    if (status === "pending") {
+      clauses.push("status = 'pending'");
+    } else if (status === "resolved") {
+      clauses.push("status IN ('approved', 'rejected')");
+    } else if (status && status !== "all") {
       clauses.push("status = ?");
       binds.push(status);
     }
@@ -1274,9 +1345,28 @@ async function routeRevisions(req, env, url) {
     }
     const department=url.searchParams.get('department');
     if(department){clauses.push('task_id IN (SELECT task_id FROM tasks_current WHERE department=?)');binds.push(department);}
+    if (search) {
+      clauses.push("(task_id LIKE ? OR requested_by_name LIKE ? OR reason LIKE ?)");
+      binds.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    const rows = await env.DB.prepare(`SELECT * FROM revisions ${where} ORDER BY created_at DESC LIMIT ?`).bind(...binds, limit).all();
-    return json({ success: true, data: rows.results.map(revisionFromRow) });
+
+    const countRow = await env.DB.prepare(`SELECT COUNT(*) as total FROM revisions ${where}`).bind(...binds).first();
+    const total = Number(countRow?.total || 0);
+
+    const rows = await env.DB.prepare(`SELECT * FROM revisions ${where} ${orderClause} LIMIT ? OFFSET ?`).bind(...binds, limit, offset).all();
+    const items = rows.results.map(revisionFromRow);
+
+    if (isPaginated) {
+      return json({
+        success: true,
+        data: {
+          items,
+          pagination: { page, limit, offset, total, totalPages: Math.max(1, Math.ceil(total / limit)), hasMore: offset + items.length < total }
+        }
+      });
+    }
+    return json({ success: true, data: items });
   }
   if (url.pathname === "/revisions" && req.method === "POST") {
     const data = await body(req);
