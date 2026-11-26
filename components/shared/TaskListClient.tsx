@@ -665,12 +665,17 @@ export default function TaskListClient({
                   className="card group flex min-h-[150px] flex-col justify-between p-4 text-left hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus:ring-2 focus:ring-brand-500"
                 >
                   <div>
-                    <div className="mb-3 flex items-center justify-between gap-2">
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
                       <span className="font-mono text-xs font-medium text-brand-600">{task.taskId}</span>
                       <span suppressHydrationWarning className={cn('badge text-[10px]', isFresh ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-500')}>
                         {isFresh ? 'New' : getTimeAgo(task.createdAt)}
                       </span>
                     </div>
+                    {task.createdByName && (
+                      <p suppressHydrationWarning className="mb-2 truncate text-[11px] text-gray-400">
+                        Created by: <span className="font-medium text-gray-600">{task.createdByName}</span>
+                      </p>
+                    )}
                     <p suppressHydrationWarning className="line-clamp-2 text-sm font-semibold leading-5 text-gray-900">{task.description}</p>
                     <p suppressHydrationWarning className="mt-2 truncate text-xs text-gray-400">{task.assignedToName} - {task.department || 'No department'}</p>
                   </div>
@@ -910,6 +915,7 @@ export default function TaskListClient({
                       <p className="truncate text-gray-800 font-medium">{task.description}</p>
                       <p className="text-xs text-gray-400">
                         {CATEGORY_LABELS[normalizeCategory(task.category)] || 'Task'} - {task.department}
+                        {task.createdByName ? ` • by ${task.createdByName}` : ''}
                       </p>
                     </td>
                     <td className="px-4 py-3">

@@ -365,12 +365,17 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
                   className="card group flex min-h-[150px] flex-col justify-between p-4 text-left hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus:ring-2 focus:ring-brand-500"
                 >
                   <div>
-                    <div className="mb-3 flex items-center justify-between gap-2">
+                    <div className="mb-1.5 flex items-center justify-between gap-2">
                       <span className="font-mono text-xs font-medium text-brand-600">{task.taskId}</span>
                       <span suppressHydrationWarning className={cn('badge text-[10px]', isFresh ? 'bg-brand-100 text-brand-700' : 'bg-gray-100 text-gray-500')}>
                         {isFresh ? 'New' : getTimeAgo(task.createdAt)}
                       </span>
                     </div>
+                    {task.createdByName && (
+                      <p suppressHydrationWarning className="mb-2 truncate text-[11px] text-gray-400">
+                        Created by: <span className="font-medium text-gray-600">{task.createdByName}</span>
+                      </p>
+                    )}
                     <p className="line-clamp-2 text-sm font-semibold leading-5 text-gray-900">{task.description}</p>
                     <p className="mt-2 truncate text-xs text-gray-400">
                       {task.assignedToName} - {task.department || 'No department'}
@@ -572,6 +577,9 @@ export default function AdminDashboardClient({ currentUid, taskCounts, users, ta
                               <p className="truncate text-xs font-medium text-gray-700">{task.description}</p>
                               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                                 <span className="font-mono text-[10px] text-gray-400">{task.taskId}</span>
+                                {task.createdByName && (
+                                  <span className="text-[10px] text-gray-400">by {task.createdByName}</span>
+                                )}
                                 <span className={cn('badge text-[10px] py-0', STATUS_COLORS[task.status])}>
                                   {['daily', 'weekly', 'monthly'].includes(String(task.category || '').toLowerCase()) && task.status === 'Verified' ? 'Completed' : task.status}
                                 </span>
