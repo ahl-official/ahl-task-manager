@@ -152,10 +152,10 @@ export async function GET(req: NextRequest) {
     });
 
     // If an admin explicitly requested a fresh reload on a past completed week (e.g. after late Google Sheets edits),
-    // re-save the updated snapshot so Cloudflare D1/Firebase automatically stays in sync with the sheet changes.
-    if (fresh && isPastWeek && canViewAll(session)) {
-      saveMisWeeklySnapshots({ weekStart: week.weekStart, weekEnd: week.weekEnd }).catch(err => {
-        console.error('[MIS] Background snapshot sync after fresh reload failed:', err);
+    // or if a past week was missing a snapshot (source === 'live'), persist the calculated rows to Cloudflare D1/Firebase.
+    if (isPastWeek && canViewAll(session) && (fresh || source === 'live')) {
+      saveMisWeeklySnapshots({ weekStart: week.weekStart, weekEnd: week.weekEnd, rows }).catch(err => {
+        console.error('[MIS] Background snapshot sync failed:', err);
       });
     }
 
