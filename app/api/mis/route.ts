@@ -4,7 +4,7 @@ import { computeMisScoresForWeek, overlayLiveFmsOnScores } from '@/lib/mis/compu
 import { buildMisMasterReport } from '@/lib/mis/masterReport';
 import { formatGapPercent } from '@/lib/mis/sheetFormula';
 import { getMisWeekPeriod, getMonthWeekSlots } from '@/lib/mis/week';
-import { adminGetLatestMisByPerson, adminGetMisWeeklySnapshots } from '@/lib/mis/weeklySnapshot';
+import { adminGetLatestMisByPerson, adminGetMisWeeklySnapshots, saveMisWeeklySnapshots } from '@/lib/mis/weeklySnapshot';
 import { buildMonthlyReportsFromSnapshots } from '@/lib/mis/monthlyReport';
 import type { MisPersonScore, MisWeeklySnapshot } from '@/lib/mis/types';
 import { misCacheKey, misCacheSet } from '@/lib/mis/cache';
@@ -156,11 +156,20 @@ export async function GET(req: NextRequest) {
     }
 
     const currentWeek = getMisWeekPeriod();
+    const isPastWeek = week.weekKey < currentWeek.weekKey;
     const forceLive = searchParams.get('source') === 'live';
     let { rows, source } = await loadWeekScores(week, {
-      preferSnapshot: !forceLive && (week.weekKey !== currentWeek.weekKey || searchParams.get('source') === 'snapshot'),
+      preferSnapshot: !forceLive && (isPastWeek || searchParams.get('source') === 'snapshot'),
       fresh,
     });
+
+    // If an admin explicitly requested a fresh reload on a past completed week (e.g. after late Google Sheets edits),
+    // re-save the updated snapshot so Cloudflare D1/Firebase automatically stays in sync with the sheet changes.
+    if (fresh && isPastWeek && canViewAll(session)) {
+      saveMisWeeklySnapshots({ weekStart: week.weekStart, weekEnd: week.weekEnd }).catch(err => {
+        console.error('[MIS] Background snapshot sync after fresh reload failed:', err);
+      });
+    }
 
     if (!canViewAll(session)) {
       rows = rows.filter(row =>

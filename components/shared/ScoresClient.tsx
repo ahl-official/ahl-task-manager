@@ -191,13 +191,13 @@ export default function ScoresClient({
   }, []);
 
   const weekOptions = useMemo(() => listRecentMisWeeks(16), []);
-  const currentWeek = useMemo(() => getMisWeekPeriod(), []);
-  const [weekStart, setWeekStart] = useState(() => currentWeek.weekStart);
-  const [calendarDate, setCalendarDate] = useState(() => currentWeek.weekEnd);
+  const defaultWeek = useMemo(() => getPreviousMisWeekPeriod(), []);
+  const [weekStart, setWeekStart] = useState(() => defaultWeek.weekStart);
+  const [calendarDate, setCalendarDate] = useState(() => defaultWeek.weekEnd);
   const nameBoxRef = useRef<HTMLDivElement>(null);
   const weekCacheKey = JSON.stringify([viewerRole, currentUid, weekStart]);
 
-  const selectedWeekMeta = useMemo(() => getMisWeekPeriod(weekStart || currentWeek.weekStart), [weekStart, currentWeek.weekStart]);
+  const selectedWeekMeta = useMemo(() => getMisWeekPeriod(weekStart || defaultWeek.weekStart), [weekStart, defaultWeek.weekStart]);
   const isCurrentWeek = weekOptions[0]?.weekKey === selectedWeekMeta.weekKey;
 
   const filteredTaskItems = useMemo(() => {
@@ -620,7 +620,7 @@ export default function ScoresClient({
   function onPickCalendarDate(value: string) {
     if (!value) return;
     const week = getMisWeekPeriod(value);
-    const maxStart = currentWeek.weekStart;
+    const maxStart = defaultWeek.weekStart;
     const targetStart = week.weekStart > maxStart ? maxStart : week.weekStart;
     setCalendarDate(value);
     setWeekStart(targetStart);
@@ -641,8 +641,8 @@ export default function ScoresClient({
   }
 
   const canGoNext = useMemo(() => {
-    return selectedWeekMeta.weekStart < currentWeek.weekStart;
-  }, [selectedWeekMeta.weekStart, currentWeek.weekStart]);
+    return selectedWeekMeta.weekStart < defaultWeek.weekStart;
+  }, [selectedWeekMeta.weekStart, defaultWeek.weekStart]);
 
   function selectNextWeek() {
     if (!canGoNext) return;
@@ -740,7 +740,7 @@ export default function ScoresClient({
         >
           {weekOptions.map(w => (
             <option key={w.weekKey} value={w.weekStart}>
-              {formatWeekLabel(w.weekStart, w.weekEnd)} {w.weekKey === currentWeek.weekKey ? '(Current Week - Live)' : ''}
+              {formatWeekLabel(w.weekStart, w.weekEnd)} {w.weekKey === defaultWeek.weekKey ? '(Current)' : ''}
             </option>
           ))}
         </select>
@@ -750,7 +750,7 @@ export default function ScoresClient({
           <input
             type="date"
             value={calendarDate}
-            max={currentWeek.weekEnd}
+            max={defaultWeek.weekEnd}
             onChange={e => onPickCalendarDate(e.target.value)}
             className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-gray-900 focus:outline-none focus:ring-0"
             aria-label="MIS week date"
