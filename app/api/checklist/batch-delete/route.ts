@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
       ids: mode === 'day' ? ids : undefined,
       templateIds: mode === 'whole' ? templateIds : undefined,
       startDate: mode === 'whole' ? startDate : undefined,
+      actor: { uid: session.uid, name: session.name },
     });
 
     await adminLog('TASK_DELETED', `Admin batch deleted ${result.deleted} checklist task(s) (mode: ${mode}${remark ? `, reason: ${remark}` : ''})`, {

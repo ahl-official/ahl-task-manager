@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Only One Time tasks can be shifted. Recurring tasks cannot be shifted.' }, { status: 400 });
     }
 
-    if (task.isShifted || task.childTaskId || task.status.startsWith('Shifted')) {
+    if (task.isShifted || task.childTaskId || task.parentTaskId || task.status.startsWith('Shifted')) {
       return NextResponse.json({ success: false, error: 'This task has already been shifted (maximum 1 shift allowed)' }, { status: 400 });
     }
 

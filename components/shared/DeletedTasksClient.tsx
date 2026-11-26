@@ -13,6 +13,7 @@ type DeletedRow = {
   deletedAt: string;
   dueDate?: string;
   previousStatus?: string;
+  deletedByName?: string;
 };
 
 const labels: Record<DeletedRow['kind'], string> = {
@@ -99,7 +100,12 @@ export default function DeletedTasksClient({ viewerUid }: { viewerUid: string })
         <tbody className="divide-y divide-gray-100">{rows.map(row => <tr key={`${row.kind}:${row.id}`}>
           <td className="max-w-xl px-4 py-3"><span className="font-medium text-gray-900">{row.id}</span><span className="ml-2 text-gray-600">{row.description}</span>{row.dueDate && <span className="block text-xs text-gray-500">Due {row.dueDate}</span>}</td>
           <td className="px-4 py-3">{labels[row.kind]}</td><td className="px-4 py-3">{row.assignedToName || '—'}</td>
-          <td className="px-4 py-3">{row.deletedAt ? new Date(row.deletedAt).toLocaleString('en-IN') : '—'}</td>
+          <td className="px-4 py-3 text-gray-500">
+            <div>{row.deletedAt ? new Date(row.deletedAt).toLocaleString('en-IN') : '—'}</div>
+            <div className="text-xs text-gray-400 mt-0.5">
+              by <span className="font-medium text-gray-600">{row.deletedByName || 'Admin'}</span>
+            </div>
+          </td>
           <td className="px-4 py-3"><button type="button" disabled={busyId === row.id} onClick={() => void restore(row)} className="rounded-lg border border-brand-200 px-3 py-1.5 font-medium text-brand-700 disabled:opacity-50">{busyId === row.id ? 'Restoring…' : 'Undo delete'}</button></td>
         </tr>)}</tbody>
       </table>

@@ -423,9 +423,13 @@ export async function adminUpdateTaskStatus(
   return task;
 }
 
-export async function adminDeleteTask(taskId: string): Promise<boolean> {
+export async function adminDeleteTask(taskId: string, deletedBy?: { uid: string; name: string }): Promise<boolean> {
   if (hasCloudflareApi()) {
-    await cfApi(`/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+    const params = new URLSearchParams();
+    if (deletedBy?.uid) params.set('deletedBy', deletedBy.uid);
+    if (deletedBy?.name) params.set('deletedByName', deletedBy.name);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    await cfApi(`/tasks/${encodeURIComponent(taskId)}${qs}`, { method: 'DELETE' });
     removeTaskFromReadCache(taskId);
     clearFirestoreReadCache('tasks:counts:');
     clearFirestoreReadCache('revisions:');

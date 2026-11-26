@@ -13,7 +13,8 @@ function validDate(value){return typeof value==='string'&&value.trim()&&!Number.
 async function parentUpdate(env,task,status,extra={},condition='1',binds=[]){
   const parent=legacyParent(task);if(!parent)return [];
   const keys=Object.keys(extra),cols={end_date:'end_date',delayed_date:'delayed_date',delay_reason:'delay_reason',revision_status:'revision_status',completed_at:'completed_at',verified_at:'verified_at',accepted_at:'accepted_at'};
-  return [env.DB.prepare(`UPDATE tasks_current SET status=?,updated_at=?${keys.map(k=>','+cols[k]+'=?').join('')} WHERE task_id=? AND ${condition}`).bind('Shifted ('+status+')',new Date().toISOString(),...keys.map(k=>extra[k]),parent,...binds)];
+  const validKeys=keys.filter(k=>cols[k]);
+  return [env.DB.prepare(`UPDATE tasks_current SET status=?,updated_at=?${validKeys.map(k=>','+cols[k]+'=?').join('')} WHERE task_id=? AND ${condition}`).bind('Shifted ('+status+')',new Date().toISOString(),...validKeys.map(k=>extra[k]),parent,...binds)];
 }
 async function syncTaskCountChange(env,h,oldTask,newTask){
   if(!h.adjustTaskCount)return;
@@ -118,10 +119,10 @@ export async function routeLifecycle(req,env,url,h){
     } else {
       assert(d.actorRole==='admin'||d.decidedBy===task.handoff_uid,'Only checker or admin can decide',403);
     }
-    assert(task.revision_status==='requested','Task is no longer awaiting a revision',409);
+    const isCompleted = ['Completed', 'Verified'].includes(task.status);
     const approved=d.decision==='approved',token=id('decision_');
     const decisionAt=now+'|'+token,condition='EXISTS(SELECT 1 FROM revisions WHERE id=? AND decided_at=?)',binds=[rev.id,decisionAt];
-    const targetStatus = isDead ? (approved ? 'Dead' : 'In Progress') : 'In Progress';
+    const targetStatus = isCompleted ? task.status : (isDead ? (approved ? 'Dead' : 'In Progress') : 'In Progress');
     const extra={
       revision_status:approved?'accepted':'rejected',
       ...(isDead
@@ -129,12 +130,17 @@ export async function routeLifecycle(req,env,url,h){
         : isDueDate
           ? (approved
               ? {end_date:rev.requested_date,delayed_date:null,delay_reason:null}
-              : {end_date:null,delayed_date:null,delay_reason:null})
+              : {end_date:task.end_date,delayed_date:null,delay_reason:null})
           : (approved?{end_date:rev.requested_date,delayed_date:rev.requested_date,delay_reason:rev.reason}:{}))
     };
+    if (isCompleted) {
+      delete extra.end_date;
+      delete extra.delayed_date;
+      delete extra.delay_reason;
+    }
     const cols=Object.keys(extra);
     await env.DB.batch([
-      env.DB.prepare("UPDATE revisions SET status=?,decided_by=?,decided_by_name=?,decided_at=? WHERE id=? AND status='pending' AND EXISTS(SELECT 1 FROM tasks_current WHERE task_id=? AND revision_status='requested')").bind(d.decision,d.decidedBy,d.decidedByName||'',decisionAt,rev.id,task.task_id),
+      env.DB.prepare("UPDATE revisions SET status=?,decided_by=?,decided_by_name=?,decided_at=? WHERE id=? AND status='pending' AND EXISTS(SELECT 1 FROM tasks_current WHERE task_id=?)").bind(d.decision,d.decidedBy,d.decidedByName||'',decisionAt,rev.id,task.task_id),
       env.DB.prepare(`UPDATE tasks_current SET status=?,updated_at=?,${cols.map(k=>k+'=?').join(',')} WHERE task_id=? AND ${condition}`).bind(targetStatus,now,...cols.map(k=>extra[k]),task.task_id,...binds),
       ...await parentUpdate(env,task,targetStatus,extra,condition,binds),
       env.DB.prepare('UPDATE revisions SET decided_at=? WHERE id=? AND decided_at=?').bind(now,rev.id,decisionAt)

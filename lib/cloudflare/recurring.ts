@@ -222,6 +222,7 @@ export async function batchDeleteChecklistTasks(params: {
   ids?: string[];
   templateIds?: string[];
   startDate?: string;
+  actor?: { uid: string; name: string };
 }): Promise<{ deleted: number; mode: 'day' | 'whole' }> {
   if (!hasCloudflareApi()) throw new Error('Cloudflare D1 is not configured');
   return cfApi('/recurring/checklist/batch-delete', {

@@ -322,6 +322,11 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
             <span className="text-xs font-mono font-medium text-brand-600 bg-brand-50 px-2 py-0.5 rounded-md shrink-0">{task.taskId}</span>
             <span className={cn('badge text-[11px]', STATUS_COLORS[displayStatus])}>{displayStatus}</span>
             <span className={cn('badge text-[11px]', PRIORITY_COLORS[task.priority])}>{task.priority}</span>
+            {task.createdByName && (
+              <span className="text-[11px] text-gray-500 bg-gray-50 px-2 py-0.5 rounded-md border border-gray-200">
+                Created by: <strong className="font-medium text-gray-700">{task.createdByName}</strong>
+              </span>
+            )}
             {['Daily', 'Weekly', 'Monthly'].includes(task.category) && (() => {
               const taskDate = (task.endDate || task.dayKey || task.startDate || '').slice(0, 10);
               return (
@@ -349,6 +354,11 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
         <div className="p-4 sm:p-5 space-y-4 overflow-y-auto overflow-x-hidden scrollbar-thin flex-1">
           {/* Task Description (scrolls with content) */}
           <div>
+            {task.createdByName && (
+              <p className="text-xs text-gray-400 mb-1">
+                Created by: <span className="font-semibold text-gray-700">{task.createdByName}</span>
+              </p>
+            )}
             <h2 className="text-base font-semibold text-gray-900 leading-snug break-words [overflow-wrap:anywhere]">
               {task.description}
             </h2>
@@ -357,6 +367,7 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
           {/* Details grid */}
           <div className="grid grid-cols-2 gap-2 sm:gap-3">
             <Detail icon={User} label="Assigned To" value={task.assignedToName} />
+            <Detail icon={User} label="Created By" value={task.createdByName || '—'} />
             <Detail
               icon={User}
               label="Checker (Handoff)"
@@ -588,7 +599,12 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
               <AlertOctagon size={18} className="mt-0.5 shrink-0" />
               <div>
                 <p className="text-sm font-semibold">This task is marked Dead</p>
-                <p className="text-xs">It needs attention before work can continue or completion can be recorded.</p>
+                {task.delayReason && (
+                  <p className="text-xs mt-0.5">
+                    <span className="font-medium">Reason:</span> {task.delayReason}
+                  </p>
+                )}
+                <p className="text-xs text-red-700/80 mt-0.5">It needs attention before work can continue or completion can be recorded.</p>
               </div>
             </div>
           )}

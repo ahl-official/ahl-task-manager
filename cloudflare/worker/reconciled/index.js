@@ -1117,6 +1117,9 @@ async function routeTasks(req, env, url) {
         ["handoffName", "handoff_name"],
         ["category", "category"],
         ["handoffWa", "handoff_wa"],
+        ["dayKey", "day_key"],
+        ["monthKey", "month_key"],
+        ["weekKey", "week_key"],
         ["newTaskId", "task_id"]
       ]) {
         if (data[field] === null) {
@@ -1124,6 +1127,17 @@ async function routeTasks(req, env, url) {
         } else if (data[field] !== void 0) {
           updates.push(`${column} = ?`);
           binds.push(data[field]);
+        }
+      }
+      if (data.endDate !== void 0 && data.dayKey === void 0) {
+        if (data.endDate) {
+          const dStr = String(data.endDate).slice(0, 10);
+          if (/^\d{4}-\d{2}-\d{2}$/.test(dStr)) {
+            updates.push("day_key = ?", "month_key = ?");
+            binds.push(dStr, dStr.slice(0, 7));
+          }
+        } else {
+          updates.push("day_key = NULL", "month_key = NULL");
         }
       }
       binds.push(id);
@@ -2105,8 +2119,9 @@ function taskAsRecurringTemplate(row) {
   };
 }
 __name(taskAsRecurringTemplate, "taskAsRecurringTemplate");
-async function deleteRecurringDefinition(env, templateId, startDate) {
+async function deleteRecurringDefinition(env, templateId, startDate, actor) {
   const today = getIstDateParts().dateStr;
+  const actorName = (typeof actor === 'object' ? actor?.name : typeof actor === 'string' ? actor : '') || 'Admin';
   const [templateRow, sourceTask, periodRow] = await Promise.all([
     env.DB.prepare("SELECT * FROM recurring_templates WHERE id=?").bind(templateId).first(),
     env.DB.prepare("SELECT * FROM tasks_current WHERE task_id=? AND LOWER(category) IN ('daily','weekly','monthly')").bind(templateId).first(),
@@ -2124,7 +2139,7 @@ async function deleteRecurringDefinition(env, templateId, startDate) {
     });
   const now = nowIso();
   const cutoff = startDate || today;
-  const metadata = { ...definition.metadata, deleted: true, deletedAt: now, deletedPreviousActive: templateRow ? templateRow.is_active !== 0 : true, deletedFrom: cutoff };
+  const metadata = { ...definition.metadata, deleted: true, deletedAt: now, deletedBy: actorName, deletedByName: actorName, deletedPreviousActive: templateRow ? templateRow.is_active !== 0 : true, deletedFrom: cutoff };
   // Date-filter deletion preserves all completed history and unfinished dates before the selected start.
   const deletePeriods = startDate
     ? "template_id=? AND is_deleted=0 AND due_date>=? AND status NOT IN ('Completed','Verified')"
@@ -2690,6 +2705,7 @@ async function routeRecurring(req, env, url) {
       if (!ids.length) return json({ success: false, error: 'No item IDs provided' }, { status: 400 });
       let deleted = 0;
       const changedWeeks = new Map();
+      const actorName = (typeof data.actor === 'object' ? data.actor?.name : typeof data.actor === 'string' ? data.actor : '') || 'Admin';
       for (let i = 0; i < ids.length; i += 50) {
         const chunk = ids.slice(i, i + 50);
         const placeholders = chunk.map(() => '?').join(',');
@@ -2698,7 +2714,7 @@ async function routeRecurring(req, env, url) {
           const week = misWeekForDate(row.due_date || row.period_key);
           if (week && !week.isCurrent) changedWeeks.set(`${row.assigned_to || row.assigned_to_name}:${week.weekStart}`, row);
         }
-        const result = await env.DB.prepare(`UPDATE recurring_period_rows SET is_deleted=1,deleted_at=?,updated_at=? WHERE id IN (${placeholders}) AND is_deleted=0`).bind(nowIso(), nowIso(), ...chunk).run();
+        const result = await env.DB.prepare(`UPDATE recurring_period_rows SET is_deleted=1,deleted_at=?,remark_by=?,updated_at=? WHERE id IN (${placeholders}) AND is_deleted=0`).bind(nowIso(), actorName, nowIso(), ...chunk).run();
         deleted += Number(result.meta?.changes || 0);
       }
       for (const row of changedWeeks.values()) await refreshChecklistMisSnapshot(env, row);
@@ -2713,8 +2729,9 @@ async function routeRecurring(req, env, url) {
       if (!templateIds.length) return json({ success: false, error: 'No template IDs provided' }, { status: 400 });
       if (templateIds.length > 25) return json({ success: false, error: 'Delete at most 25 recurring tasks at once' }, { status: 400 });
       let deleted = 0, deletedPeriods = 0;
+      const actorName = (typeof data.actor === 'object' ? data.actor?.name : typeof data.actor === 'string' ? data.actor : '') || 'Admin';
       for (const tId of templateIds) {
-        const result = await deleteRecurringDefinition(env, tId, startDate);
+        const result = await deleteRecurringDefinition(env, tId, startDate, actorName);
         if (result) { deleted++; deletedPeriods += result.deletedPeriods; }
       }
       return json({ success: true, data: { deleted, deletedPeriods, mode: 'whole', startDate } });

@@ -2,7 +2,9 @@ let deletionsTableReady = false;
 
 export async function ensureDeletionsTable(env) {
   if (deletionsTableReady) return;
-  await env.DB.prepare('CREATE TABLE IF NOT EXISTS task_deletions (task_id TEXT PRIMARY KEY, previous_status TEXT NOT NULL, deleted_at TEXT NOT NULL)').run();
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS task_deletions (task_id TEXT PRIMARY KEY, previous_status TEXT NOT NULL, deleted_at TEXT NOT NULL, deleted_by TEXT, deleted_by_name TEXT)').run();
+  await env.DB.prepare('ALTER TABLE task_deletions ADD COLUMN deleted_by TEXT').run().catch(() => null);
+  await env.DB.prepare('ALTER TABLE task_deletions ADD COLUMN deleted_by_name TEXT').run().catch(() => null);
   await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_task_deletions_deleted_at ON task_deletions (deleted_at DESC, task_id)').run();
   deletionsTableReady = true;
 }
@@ -27,11 +29,12 @@ export async function routeTrash(req, env, url, helpers) {
     const kind = url.searchParams.get('kind') || 'all';
     if (!['all', 'one-time', 'recurring'].includes(kind)) return json('Invalid deleted task type', 400);
     const items = [];
+    await ensureDeletionsTable(env);
     if (kind !== 'recurring') {
       try {
         const sql = cursor
-          ? "SELECT t.task_id AS id,t.description,t.assigned_to_name AS assignedToName,t.category,d.deleted_at AS deletedAt,d.previous_status AS previousStatus FROM task_deletions d JOIN tasks_current t ON t.task_id=d.task_id WHERE t.status='Deleted' AND LOWER(COALESCE(t.category,'')) NOT IN ('daily','weekly','monthly') AND (d.deleted_at < ? OR (d.deleted_at = ? AND d.task_id < ?)) ORDER BY d.deleted_at DESC,d.task_id DESC LIMIT ?"
-          : "SELECT t.task_id AS id,t.description,t.assigned_to_name AS assignedToName,t.category,d.deleted_at AS deletedAt,d.previous_status AS previousStatus FROM task_deletions d JOIN tasks_current t ON t.task_id=d.task_id WHERE t.status='Deleted' AND LOWER(COALESCE(t.category,'')) NOT IN ('daily','weekly','monthly') ORDER BY d.deleted_at DESC,d.task_id DESC LIMIT ?";
+          ? "SELECT t.task_id AS id,t.description,t.assigned_to_name AS assignedToName,t.category,d.deleted_at AS deletedAt,d.previous_status AS previousStatus,COALESCE(d.deleted_by_name,'Admin') AS deletedByName FROM task_deletions d JOIN tasks_current t ON t.task_id=d.task_id WHERE t.status='Deleted' AND LOWER(COALESCE(t.category,'')) NOT IN ('daily','weekly','monthly') AND (d.deleted_at < ? OR (d.deleted_at = ? AND d.task_id < ?)) ORDER BY d.deleted_at DESC,d.task_id DESC LIMIT ?"
+          : "SELECT t.task_id AS id,t.description,t.assigned_to_name AS assignedToName,t.category,d.deleted_at AS deletedAt,d.previous_status AS previousStatus,COALESCE(d.deleted_by_name,'Admin') AS deletedByName FROM task_deletions d JOIN tasks_current t ON t.task_id=d.task_id WHERE t.status='Deleted' AND LOWER(COALESCE(t.category,'')) NOT IN ('daily','weekly','monthly') ORDER BY d.deleted_at DESC,d.task_id DESC LIMIT ?";
         const binds = cursor ? [cursor.deletedAt, cursor.deletedAt, cursor.id, fetchLimit] : [fetchLimit];
         const rows = await env.DB.prepare(sql).bind(...binds).all();
         for (const row of rows.results || []) items.push({ ...row, kind: 'one-time' });
@@ -41,15 +44,15 @@ export async function routeTrash(req, env, url, helpers) {
     }
     if (kind !== 'one-time') {
       const sqlT = cursor
-        ? "SELECT id,COALESCE(NULLIF(description,''),title) AS description,assigned_to_name AS assignedToName,category,json_extract(metadata_json,'$.deletedAt') AS deletedAt FROM recurring_templates WHERE json_extract(metadata_json,'$.deleted')=1 AND (json_extract(metadata_json,'$.deletedAt') < ? OR (json_extract(metadata_json,'$.deletedAt') = ? AND id < ?)) ORDER BY json_extract(metadata_json,'$.deletedAt') DESC,id DESC LIMIT ?"
-        : "SELECT id,COALESCE(NULLIF(description,''),title) AS description,assigned_to_name AS assignedToName,category,json_extract(metadata_json,'$.deletedAt') AS deletedAt FROM recurring_templates WHERE json_extract(metadata_json,'$.deleted')=1 ORDER BY json_extract(metadata_json,'$.deletedAt') DESC,id DESC LIMIT ?";
+        ? "SELECT id,COALESCE(NULLIF(description,''),title) AS description,assigned_to_name AS assignedToName,category,json_extract(metadata_json,'$.deletedAt') AS deletedAt,COALESCE(json_extract(metadata_json,'$.deletedBy'),json_extract(metadata_json,'$.deletedByName'),'Admin') AS deletedByName FROM recurring_templates WHERE json_extract(metadata_json,'$.deleted')=1 AND (json_extract(metadata_json,'$.deletedAt') < ? OR (json_extract(metadata_json,'$.deletedAt') = ? AND id < ?)) ORDER BY json_extract(metadata_json,'$.deletedAt') DESC,id DESC LIMIT ?"
+        : "SELECT id,COALESCE(NULLIF(description,''),title) AS description,assigned_to_name AS assignedToName,category,json_extract(metadata_json,'$.deletedAt') AS deletedAt,COALESCE(json_extract(metadata_json,'$.deletedBy'),json_extract(metadata_json,'$.deletedByName'),'Admin') AS deletedByName FROM recurring_templates WHERE json_extract(metadata_json,'$.deleted')=1 ORDER BY json_extract(metadata_json,'$.deletedAt') DESC,id DESC LIMIT ?";
       const bindsT = cursor ? [cursor.deletedAt, cursor.deletedAt, cursor.id, fetchLimit] : [fetchLimit];
       const templates = await env.DB.prepare(sqlT).bind(...bindsT).all();
       for (const row of templates.results || []) items.push({ ...row, kind: 'recurring-whole' });
 
       const sqlP = cursor
-        ? "SELECT p.id,p.template_id AS templateId,COALESCE(NULLIF(p.description,''),p.title) AS description,p.assigned_to_name AS assignedToName,p.category,p.due_date AS dueDate,p.deleted_at AS deletedAt FROM recurring_period_rows p WHERE p.is_deleted=1 AND p.deleted_at IS NOT NULL AND (p.deleted_at < ? OR (p.deleted_at = ? AND p.id < ?)) AND NOT EXISTS (SELECT 1 FROM recurring_templates t WHERE t.id=p.template_id AND json_extract(t.metadata_json,'$.deleted')=1 AND json_extract(t.metadata_json,'$.deletedAt')=p.deleted_at) ORDER BY p.deleted_at DESC,p.id DESC LIMIT ?"
-        : "SELECT p.id,p.template_id AS templateId,COALESCE(NULLIF(p.description,''),p.title) AS description,p.assigned_to_name AS assignedToName,p.category,p.due_date AS dueDate,p.deleted_at AS deletedAt FROM recurring_period_rows p WHERE p.is_deleted=1 AND p.deleted_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM recurring_templates t WHERE t.id=p.template_id AND json_extract(t.metadata_json,'$.deleted')=1 AND json_extract(t.metadata_json,'$.deletedAt')=p.deleted_at) ORDER BY p.deleted_at DESC,p.id DESC LIMIT ?";
+        ? "SELECT p.id,p.template_id AS templateId,COALESCE(NULLIF(p.description,''),p.title) AS description,p.assigned_to_name AS assignedToName,p.category,p.due_date AS dueDate,p.deleted_at AS deletedAt,COALESCE(NULLIF(p.remark_by,''),'Admin') AS deletedByName FROM recurring_period_rows p WHERE p.is_deleted=1 AND p.deleted_at IS NOT NULL AND (p.deleted_at < ? OR (p.deleted_at = ? AND p.id < ?)) AND NOT EXISTS (SELECT 1 FROM recurring_templates t WHERE t.id=p.template_id AND json_extract(t.metadata_json,'$.deleted')=1 AND json_extract(t.metadata_json,'$.deletedAt')=p.deleted_at) ORDER BY p.deleted_at DESC,p.id DESC LIMIT ?"
+        : "SELECT p.id,p.template_id AS templateId,COALESCE(NULLIF(p.description,''),p.title) AS description,p.assigned_to_name AS assignedToName,p.category,p.due_date AS dueDate,p.deleted_at AS deletedAt,COALESCE(NULLIF(p.remark_by,''),'Admin') AS deletedByName FROM recurring_period_rows p WHERE p.is_deleted=1 AND p.deleted_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM recurring_templates t WHERE t.id=p.template_id AND json_extract(t.metadata_json,'$.deleted')=1 AND json_extract(t.metadata_json,'$.deletedAt')=p.deleted_at) ORDER BY p.deleted_at DESC,p.id DESC LIMIT ?";
       const bindsP = cursor ? [cursor.deletedAt, cursor.deletedAt, cursor.id, fetchLimit] : [fetchLimit];
       const periods = await env.DB.prepare(sqlP).bind(...bindsP).all();
       for (const row of periods.results || []) items.push({ ...row, kind: 'recurring-day' });
@@ -68,10 +71,13 @@ export async function routeTrash(req, env, url, helpers) {
     if (['Completed', 'Verified'].includes(task.status)) return json('Completed or verified tasks cannot be deleted', 409);
     if (['daily', 'weekly', 'monthly'].includes(String(task.category || '').toLowerCase())) return json('Use recurring task deletion', 400);
     await ensureDeletionsTable(env);
+    const deletedBy = url.searchParams.get('deletedBy') || '';
+    const deletedByName = url.searchParams.get('deletedByName') || 'Admin';
     const now = new Date().toISOString();
     const result = await env.DB.batch([
-      env.DB.prepare("INSERT INTO task_deletions(task_id,previous_status,deleted_at) VALUES (?,?,?) ON CONFLICT(task_id) DO UPDATE SET previous_status=excluded.previous_status,deleted_at=excluded.deleted_at").bind(id, task.status, now),
+      env.DB.prepare("INSERT INTO task_deletions(task_id,previous_status,deleted_at,deleted_by,deleted_by_name) VALUES (?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET previous_status=excluded.previous_status,deleted_at=excluded.deleted_at,deleted_by=excluded.deleted_by,deleted_by_name=excluded.deleted_by_name").bind(id, task.status, now, deletedBy, deletedByName),
       env.DB.prepare("UPDATE tasks_current SET status='Deleted',updated_at=? WHERE task_id=? AND status=?").bind(now, id, task.status),
+      env.DB.prepare("UPDATE revisions SET status='rejected',decided_by=?,decided_by_name=?,decided_at=? WHERE task_id=? AND status='pending'").bind(deletedBy || null, deletedByName || 'System', now, id),
     ]);
     if (!Number(result[1]?.meta?.changes)) return json('Task changed; refresh and try again', 409);
     await helpers.adjustTaskCount(env, task, null);

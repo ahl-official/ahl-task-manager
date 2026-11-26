@@ -285,7 +285,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       const entry = `[${marker} - ${timestamp}] ${session.name}: ${cleanRemark}`;
       const notes = task.notes ? `${task.notes}\n${entry}` : entry;
       const status: TaskStatus = action === 'revive' ? 'In Progress' : task.status;
-      updatedTask = await adminUpdateTaskStatus(params.id, status, { notes, revisionStatus: 'none', delayReason: null });
+      const extraUpdates: { notes: string; revisionStatus?: 'none'; delayReason?: null } = { notes };
+      if (action === 'revive') {
+        extraUpdates.revisionStatus = 'none';
+        extraUpdates.delayReason = null;
+      }
+      updatedTask = await adminUpdateTaskStatus(params.id, status, extraUpdates);
       await adminLog('TASK_UPDATED', `${params.id} ${marker.toLowerCase()} by ${session.name}`, {
         taskId: params.id, uid: session.uid, meta: { action },
       });
@@ -336,6 +341,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
           else if (updatedTask.status === 'Delay Requested') parentStatus = 'Shifted (Delay Requested)';
           else if (updatedTask.status === 'Overdue') parentStatus = 'Shifted (Overdue)';
           else if (updatedTask.status === 'Pending Accept') parentStatus = 'Shifted (Pending Accept)';
+          else if (updatedTask.status === 'Dead') parentStatus = 'Dead';
+          else if (updatedTask.status === 'Dead Requested') parentStatus = 'Shifted (Dead Requested)';
 
           await adminUpdateTaskStatus(task.parentTaskId, parentStatus, {
             completedAt: updatedTask.completedAt,
@@ -389,7 +396,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     }
 
     if (task.parentTaskId || task.childTaskId) return NextResponse.json({ success: false, error: 'Shifted tasks must be kept to preserve parent/child tracking; mark Dead instead' }, { status: 409 });
-    const deleted = await adminDeleteTask(params.id);
+    const deleted = await adminDeleteTask(params.id, { uid: session.uid, name: session.name });
     if (!deleted) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
 
     await adminLog('TASK_DELETED', `${params.id} deleted by ${session.name}`, {
