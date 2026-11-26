@@ -154,7 +154,7 @@ function escapeHtml(value: string) {
 }
 
 type WeeklyTaskCount = { uid: string; name: string; department: string; planned: number; active: number; pending: number; completed: number; overdue: number };
-// Keep a bounded set of viewed weeks until explicit refresh or a full browser reload.
+// Keep viewed weeks until explicit refresh or a full browser reload.
 const weeklyReports = createTabCache<{ map: Record<string, MisPersonView>; weekLabel: string; counts: WeeklyTaskCount[] }>(Infinity);
 
 export default function ScoresClient({

@@ -1105,6 +1105,19 @@ export default function ChecklistClient({
 
         {!loading && visibleRows.length > 0 && (
           <div>
+            {pageCursors.length > 1 && !search.trim() && (
+              <nav aria-label="Checklist pages" className="flex flex-wrap justify-center gap-2 border-b border-gray-100 px-4 py-3">
+                {pageCursors.map((cursor, index) => (
+                  <button key={index} type="button" aria-label={`Page ${index + 1}`}
+                    aria-current={pageNumber === index + 1 ? 'page' : undefined}
+                    disabled={loading || isCompleting || isDeleting || Boolean(ticking) || pageNumber === index + 1}
+                    onClick={() => void loadRows(category, startDate, endDate, false, selectedIndividuals, mineOnly, department, index + 1, cursor, false)}
+                    className={cn('btn-secondary min-w-9 py-2', pageNumber === index + 1 && 'border-brand-600 font-bold text-brand-700')}>
+                    {index + 1}
+                  </button>
+                ))}
+              </nav>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 bg-gray-50/90 px-5 py-2.5 text-xs text-gray-600">
                 <label className="flex items-center gap-2 font-medium cursor-pointer select-none">
                   <input
@@ -1367,19 +1380,6 @@ export default function ChecklistClient({
             ))}
           </div>
           </div>
-        )}
-        {pageCursors.length > 1 && !search.trim() && (
-          <nav aria-label="Checklist pages" className="flex flex-wrap justify-center gap-2 px-4 py-4">
-            {pageCursors.map((cursor, index) => (
-              <button key={index} type="button" aria-label={`Page ${index + 1}`}
-                aria-current={pageNumber === index + 1 ? 'page' : undefined}
-                disabled={loading || isCompleting || isDeleting || Boolean(ticking) || pageNumber === index + 1}
-                onClick={() => void loadRows(category, startDate, endDate, false, selectedIndividuals, mineOnly, department, index + 1, cursor, false)}
-                className={cn('btn-secondary min-w-9 py-2', pageNumber === index + 1 && 'border-brand-600 font-bold text-brand-700')}>
-                {index + 1}
-              </button>
-            ))}
-          </nav>
         )}
       </div>
 

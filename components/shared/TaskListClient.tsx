@@ -391,19 +391,19 @@ export default function TaskListClient({
       const isOverdueTask = t.status === 'Overdue' || (Boolean(t.endDate) && indiaDayOffset(today, indiaDateKey(t.endDate!)) < 0 && ['Pending Accept', 'In Progress', 'Delay Requested'].includes(t.status));
       const matchMine = !mineOnly || t.assignedTo === currentUid || (Boolean(currentUserName) && namesEqual(t.assignedToName, currentUserName));
       const matchSearch = matchesTaskSearch(t, search);
-      const recurringDefinition = (recurringDefinitionView || role === 'user') && RECURRING_CATEGORIES.has(normalizeCategory(t.category));
+      const recurringDefinition = (recurringDefinitionView || role === 'user' || RECURRING_CATEGORIES.has(categoryFilter)) && RECURRING_CATEGORIES.has(normalizeCategory(t.category));
       const isAllPending = ['Pending Accept', 'In Progress', 'Delay Requested', 'Overdue', 'Shifted (Pending)', 'Shifted (Pending Accept)', 'Shifted (In Progress)'].includes(t.status);
       const normalStatusMatch = statusFilter === 'all' || (statusFilter === 'All Pending' ? isAllPending : statusFilter === 'Overdue'
           ? isOverdueTask
           : statusFilter === 'Completed'
-            ? ['Completed', 'Verified'].includes(t.status)
+            ? ['Completed', 'Verified', 'Shifted (Completed)', 'Shifted (Verified)'].includes(t.status)
             : (!isOverdueTask && (t.status === statusFilter || normalizeBaseStatus(t.status) === statusFilter)));
       const matchStatus = recurringDefinition
-        ? statusFilter === 'all' || (statusFilter === 'Upcoming' ? Boolean(t.recurringDueDate && t.recurringDueDate >= today) && ['Pending', 'In Progress'].includes(t.recurringStatus || t.status || '')
-          : statusFilter === 'Overdue' ? Boolean(t.recurringDueDate && t.recurringDueDate < today) && ['Pending', 'In Progress'].includes(t.recurringStatus || t.status || '')
-          : statusFilter === 'Completed' ? ['Completed', 'Verified'].includes(t.recurringStatus || t.status || '')
-          : statusFilter === 'In Progress' ? ['Pending', 'In Progress'].includes(t.recurringStatus || t.status || '')
-            : (t.recurringStatus === statusFilter || t.status === statusFilter || (statusFilter === 'All Pending' && ['Pending', 'In Progress'].includes(t.recurringStatus || t.status || ''))))
+        ? statusFilter === 'all' || (statusFilter === 'Upcoming' ? Boolean(t.recurringDueDate && t.recurringDueDate >= today) && ['Pending', 'In Progress', 'Shifted (Pending)', 'Shifted (In Progress)'].includes(t.recurringStatus || t.status || '')
+          : statusFilter === 'Overdue' ? Boolean(t.recurringDueDate && t.recurringDueDate < today) && ['Pending', 'In Progress', 'Shifted (Pending)', 'Shifted (In Progress)'].includes(t.recurringStatus || t.status || '')
+          : statusFilter === 'Completed' ? ['Completed', 'Verified', 'Shifted (Completed)', 'Shifted (Verified)'].includes(t.recurringStatus || t.status || '')
+          : statusFilter === 'In Progress' ? (!Boolean(t.recurringDueDate && t.recurringDueDate < today) && ['Pending', 'In Progress', 'Shifted (Pending)', 'Shifted (In Progress)'].includes(t.recurringStatus || t.status || ''))
+            : (t.recurringStatus === statusFilter || t.status === statusFilter || (statusFilter === 'All Pending' && ['Pending', 'In Progress', 'Shifted (Pending)', 'Shifted (In Progress)'].includes(t.recurringStatus || t.status || ''))))
         : normalStatusMatch;
       const matchPriority = priorityFilter === 'all' || t.priority === priorityFilter;
       const matchDepartmentFilter = departmentFilter === 'all' || matchDepartment(t.department, departmentFilter);
@@ -455,11 +455,17 @@ export default function TaskListClient({
     const isRec = (t: TaskSerialized) => RECURRING_CATEGORIES.has(normalizeCategory(t.category));
     const getRecStatus = (t: TaskSerialized) => t.recurringStatus || t.status;
 
-    const recurringOverdue = (t: TaskSerialized) => isRec(t) && Boolean(t.recurringDueDate && t.recurringDueDate < today) && ['Pending', 'In Progress'].includes(getRecStatus(t));
-    const pending = rows.filter(t => isRec(t) ? getRecStatus(t) === 'Pending' && !recurringOverdue(t) : (t.status === 'Pending Accept' && !isOverdue(t))).length;
-    const inProgress = rows.filter(t => isRec(t) ? getRecStatus(t) === 'In Progress' && !recurringOverdue(t) : ((t.status === 'In Progress' || t.status === 'Delay Requested') && !isOverdue(t))).length;
+    const recurringOverdue = (t: TaskSerialized) => isRec(t) && Boolean(t.recurringDueDate && t.recurringDueDate < today) && ['Pending', 'In Progress', 'Shifted (Pending)', 'Shifted (In Progress)'].includes(getRecStatus(t));
+    const pending = rows.filter(t => isRec(t)
+      ? 0
+      : (['Pending Accept', 'Pending', 'Shifted (Pending)', 'Shifted (Pending Accept)'].includes(t.status) && !isOverdue(t))
+    ).length;
+    const inProgress = rows.filter(t => isRec(t)
+      ? ['Pending', 'In Progress', 'Shifted (Pending)', 'Shifted (In Progress)'].includes(getRecStatus(t)) && !recurringOverdue(t)
+      : ((t.status === 'In Progress' || t.status === 'Delay Requested' || t.status === 'Shifted (In Progress)') && !isOverdue(t))
+    ).length;
     const overdue = rows.filter(t => isRec(t) ? recurringOverdue(t) : isOverdue(t)).length;
-    const completed = rows.filter(t => ['Completed', 'Verified'].includes(isRec(t) ? getRecStatus(t) : t.status)).length;
+    const completed = rows.filter(t => ['Completed', 'Verified', 'Shifted (Completed)', 'Shifted (Verified)'].includes(isRec(t) ? getRecStatus(t) : t.status)).length;
 
     return { pending, inProgress, overdue, completed, total: rows.length };
   }, [taskItems, mineOnly, currentUid, currentUserName, departmentFilter, userFilter, categoryFilter, search, priorityFilter]);
@@ -648,7 +654,7 @@ export default function TaskListClient({
 
           <div className={cn('grid gap-3', role === 'user' ? 'md:grid-cols-2 xl:grid-cols-4' : 'md:grid-cols-2 xl:grid-cols-4')}>
             {justAssignedTasks.map(task => {
-              const recurringDefinition = (recurringDefinitionView || role === 'user') && RECURRING_CATEGORIES.has(normalizeCategory(task.category));
+              const recurringDefinition = (recurringDefinitionView || role === 'user' || RECURRING_CATEGORIES.has(categoryFilter)) && RECURRING_CATEGORIES.has(normalizeCategory(task.category));
               const createdAtMs = new Date(task.createdAt).getTime();
               const isFresh = Date.now() - createdAtMs <= NEW_ASSIGNMENT_WINDOW_MS;
               return (
@@ -882,7 +888,7 @@ export default function TaskListClient({
                 </tr>
               )}
               {filtered.map(task => {
-                const recurringDefinition = (recurringDefinitionView || role === 'user') && RECURRING_CATEGORIES.has(normalizeCategory(task.category));
+                const recurringDefinition = (recurringDefinitionView || role === 'user' || RECURRING_CATEGORIES.has(categoryFilter)) && RECURRING_CATEGORIES.has(normalizeCategory(task.category));
                 const due = getDueBadge(task.endDate, task.status);
                 const scheduled = scheduleMap.get(task.taskId);
                 const today = indiaTodayKey();

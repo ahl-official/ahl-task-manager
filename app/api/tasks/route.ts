@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
   }
 
   const responseHeaders = isFresh ? NO_CACHE_HEADERS : {
-    'Cache-Control': 'private, max-age=30, stale-while-revalidate=120',
+    'Cache-Control': 'private, no-cache, must-revalidate',
   };
 
   try {

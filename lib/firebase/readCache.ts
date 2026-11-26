@@ -7,7 +7,8 @@ type CacheEntry<T> = {
 
 const cache = new Map<string, CacheEntry<any>>();
 
-export const LONG_READ_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour (long cache; manual rescan via Global Refresh Button)
+// Keep server-instance read caches short so writes from another instance become visible promptly.
+export const LONG_READ_CACHE_TTL_MS = 60 * 1000;
 
 export function clearFirestoreReadCache(prefix?: string) {
   for (const key of Array.from(cache.keys())) {
