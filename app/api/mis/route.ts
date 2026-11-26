@@ -21,13 +21,24 @@ async function loadWeekScores(
   week: ReturnType<typeof getMisWeekPeriod>,
   options: { snapshots?: MisWeeklySnapshot[]; preferSnapshot: boolean; fresh?: boolean },
 ): Promise<{ rows: MisPersonScore[]; source: 'snapshot' | 'live' }> {
+  const currentWeek = getMisWeekPeriod();
+  const isPastWeek = week.weekKey < currentWeek.weekKey;
+
   if (options.preferSnapshot) {
     const snapshots = options.snapshots ?? await adminGetMisWeeklySnapshots({ weekKey: week.weekKey, fresh: options.fresh });
-    const withParams = snapshots.filter(row => row.parameters?.length);
-    if (withParams.length) {
-      const rows = await overlayLiveFmsOnScores(withParams, week.weekStart, week.weekEnd, { fresh: options.fresh });
-      if (!options.fresh) misCacheSet(misCacheKey(['live', 'v2-params', week.weekStart, week.weekEnd]), rows, 60_000);
-      return { rows, source: 'snapshot' };
+    if (snapshots.length) {
+      // For past completed weeks, the snapshot is already final and frozen.
+      // Return frozen snapshot directly without re-querying external live Google Sheets!
+      if (isPastWeek && !options.fresh) {
+        return { rows: snapshots, source: 'snapshot' };
+      }
+      const withParams = snapshots.filter(row => row.parameters?.length);
+      if (withParams.length) {
+        const rows = await overlayLiveFmsOnScores(withParams, week.weekStart, week.weekEnd, { fresh: options.fresh });
+        if (!options.fresh) misCacheSet(misCacheKey(['live', 'v2-params', week.weekStart, week.weekEnd]), rows, 60_000);
+        return { rows, source: 'snapshot' };
+      }
+      return { rows: snapshots, source: 'snapshot' };
     }
   }
   return {
@@ -104,7 +115,7 @@ export async function GET(req: NextRequest) {
       const current = getMisWeekPeriod();
       const slots = getMonthWeekSlots(year, month - 1).filter(slot => slot.weekEnd < current.weekStart);
       const snapshots = slots.length
-        ? await adminGetMisWeeklySnapshots({ year, monthName: slots[0].monthName, fresh: true })
+        ? await adminGetMisWeeklySnapshots({ year, monthName: slots[0].monthName, fresh })
         : [];
       const scores: MisPersonScore[] = [];
       // Fetch the month's snapshots once and cap concurrent weekly source reads.
@@ -112,7 +123,7 @@ export async function GET(req: NextRequest) {
         const weeks = await Promise.all(slots.slice(index, index + 2).map(slot => loadWeekScores(slot, {
           snapshots: snapshots.filter(row => row.weekKey === slot.weekKey),
           preferSnapshot: true,
-          fresh: true,
+          fresh,
         })));
         for (const result of weeks) scores.push(...result.rows);
       }

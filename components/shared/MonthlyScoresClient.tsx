@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { createTabCache } from '@/lib/utils/tabCache';
 import { downloadMonthlySummaryTablePdf } from '@/lib/mis/directPdf';
@@ -172,67 +173,102 @@ export default function MonthlyScoresClient({ currentUid }: { currentUid: string
       </div>
 
       {/* Score Legend */}
-      <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs bg-white p-2.5 rounded-lg border border-gray-200">
-        <span className="font-semibold text-gray-600">Row Highlight:</span>
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-100 text-rose-800 border border-rose-300 font-medium">
-          <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
-          Bad Score (Red: &lt; -50% Gap / Under 50%)
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs bg-white p-3 rounded-xl border border-gray-300 shadow-2xs">
+        <span className="font-bold text-gray-900">Score Rating:</span>
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-rose-700 text-white font-bold shadow-2xs">
+          <span className="w-2 h-2 rounded-full bg-white"></span>
+          Bad Score (&lt; -50% Gap / Under 50%)
         </span>
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-100 text-amber-800 border border-amber-300 font-medium">
-          <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-          Mid Score (Orange: -50% to -20% Gap / 50%–79%)
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-amber-600 text-white font-bold shadow-2xs">
+          <span className="w-2 h-2 rounded-full bg-white"></span>
+          Mid Score (-50% to -20% Gap / 50%–79%)
         </span>
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300 font-medium">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-          Good Score (Green: ≥ -20% Gap / 80%+)
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-emerald-700 text-white font-bold shadow-2xs">
+          <span className="w-2 h-2 rounded-full bg-white"></span>
+          Good Score (≥ -20% Gap / 80%+)
         </span>
       </div>
 
-      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+      {error && <p role="alert" className="text-sm text-red-600 font-semibold">{error}</p>}
 
       {/* Main Table */}
-      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div className="overflow-x-auto rounded-xl border border-gray-300 bg-white shadow-sm">
         <table className="min-w-full text-sm">
-          <thead className="bg-gray-100/80 text-left text-gray-700 border-b border-gray-200 font-semibold">
+          <thead className="bg-gray-100 text-left text-gray-900 border-b-2 border-gray-300 font-bold text-xs uppercase tracking-wider">
             <tr>
-              <th className="px-4 py-3 text-center w-12">#</th>
-              <th className="px-4 py-3">Person Name</th>
-              <th className="px-4 py-3">Department</th>
+              <th className="px-4 py-3.5 text-center w-12 text-gray-900">#</th>
+              <th className="px-4 py-3.5 text-gray-900">Person Name</th>
+              <th className="px-4 py-3.5 text-gray-900">Department</th>
               {[1, 2, 3, 4, 5].map(week => (
-                <th key={week} className="px-4 py-3 text-right">Week {week}</th>
+                <th key={week} className="px-4 py-3.5 text-right text-gray-900">Week {week}</th>
               ))}
-              <th className="px-4 py-3 text-right font-bold text-gray-900">Monthly Score</th>
+              <th className="px-4 py-3.5 text-right font-black text-gray-950">Monthly Score</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-200/60">
+          <tbody className="divide-y divide-gray-200">
             {ranked.map((row, index) => {
-              // Highlight whole row based on final monthly score (ms)
-              let rowClass = 'hover:bg-gray-50/80';
+              // Highlight row based on final monthly score (ms)
+              let rowClass = 'hover:bg-gray-100/80 border-l-4 border-l-transparent';
               if (row.ms !== null && row.ms !== undefined) {
                 if (row.ms >= -20) {
-                  // Good score -> Green whole row
-                  rowClass = 'bg-emerald-50/70 hover:bg-emerald-100/80 text-gray-900';
+                  // Good score -> Dark Green Indicator
+                  rowClass = 'bg-emerald-50/50 hover:bg-emerald-100/70 border-l-4 border-l-emerald-600 border-b border-gray-200 text-gray-950';
                 } else if (row.ms >= -50) {
-                  // Mid score -> Orange whole row
-                  rowClass = 'bg-amber-50/70 hover:bg-amber-100/80 text-gray-900';
+                  // Mid score -> Dark Amber/Orange Indicator
+                  rowClass = 'bg-amber-50/50 hover:bg-amber-100/70 border-l-4 border-l-amber-500 border-b border-gray-200 text-gray-950';
                 } else {
-                  // Bad score -> Red whole row
-                  rowClass = 'bg-rose-50/70 hover:bg-rose-100/80 text-gray-900';
+                  // Bad score -> Dark Red Indicator
+                  rowClass = 'bg-rose-50/50 hover:bg-rose-100/70 border-l-4 border-l-rose-600 border-b border-gray-200 text-gray-950';
                 }
               }
 
+              const weekScores = [
+                { score: row.w1, label: row.w1Label },
+                { score: row.w2, label: row.w2Label },
+                { score: row.w3, label: row.w3Label },
+                { score: row.w4, label: row.w4Label },
+                { score: row.w5, label: row.w5Label },
+              ];
+
               return (
-                <tr key={row.uid || `${row.name}:${index}`} className={`${rowClass} transition-colors border-b border-gray-200/40`}>
-                  <td className="px-4 py-3 text-center text-gray-600 text-xs font-semibold">{index + 1}</td>
-                  <td className="px-4 py-3 font-semibold text-gray-900">{row.name}</td>
-                  <td className="px-4 py-3 text-gray-600 text-xs">{row.department || '—'}</td>
-                  {[row.w1Label, row.w2Label, row.w3Label, row.w4Label, row.w5Label].map((value, week) => (
-                    <td key={week} className="px-4 py-3 text-right tabular-nums text-gray-700 font-medium">
-                      {value || '—'}
-                    </td>
-                  ))}
-                  <td className="px-4 py-3 text-right font-bold tabular-nums text-gray-900 text-sm">
-                    {row.msLabel || '—'}
+                <tr key={row.uid || `${row.name}:${index}`} className={`${rowClass} transition-colors`}>
+                  <td className="px-4 py-3 text-center text-gray-800 text-xs font-bold">{index + 1}</td>
+                  <td className="px-4 py-3 font-bold text-gray-950 text-sm">{row.name}</td>
+                  <td className="px-4 py-3 text-gray-700 text-xs font-semibold">{row.department || '—'}</td>
+                  {weekScores.map((item, wIndex) => {
+                    const { score, label } = item;
+                    if (score === null || score === undefined || !label || label === '—') {
+                      return (
+                        <td key={wIndex} className="px-4 py-3 text-right text-gray-400 font-medium">
+                          —
+                        </td>
+                      );
+                    }
+                    const pillClass = score >= -20
+                      ? 'bg-emerald-700 text-white font-bold'
+                      : score >= -50
+                      ? 'bg-amber-600 text-white font-bold'
+                      : 'bg-rose-700 text-white font-bold';
+
+                    return (
+                      <td key={wIndex} className="px-4 py-3 text-right">
+                        <span className={`inline-flex items-center justify-center min-w-[3.75rem] px-2 py-0.5 rounded-md text-xs font-bold ${pillClass} shadow-2xs`}>
+                          {label}
+                        </span>
+                      </td>
+                    );
+                  })}
+                  <td className="px-4 py-3 text-right">
+                    {row.ms === null || row.ms === undefined || !row.msLabel || row.msLabel === '—' ? (
+                      <span className="text-gray-400 font-semibold">—</span>
+                    ) : (
+                      <span className={cn(
+                        'inline-flex items-center justify-center min-w-[4.75rem] px-3 py-1 rounded-lg text-xs font-black text-white shadow-xs',
+                        row.ms >= -20 ? 'bg-emerald-800 ring-2 ring-emerald-600' : row.ms >= -50 ? 'bg-amber-700 ring-2 ring-amber-500' : 'bg-rose-800 ring-2 ring-rose-600'
+                      )}>
+                        {row.msLabel}
+                      </span>
+                    )}
                   </td>
                 </tr>
               );
