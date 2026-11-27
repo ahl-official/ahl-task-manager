@@ -417,7 +417,7 @@ export async function POST(req: NextRequest) {
     // Collect coordinator / admin numbers to notify (ensuring no duplicate sends to checker or assignee)
     const isExcludedPhone = (phone?: string | null) => {
       const digits = String(phone || '').replace(/\D/g, '');
-      return !digits || digits.endsWith('9820188505');
+      return !digits || digits.endsWith('9820188505') || digits.endsWith('9892012240');
     };
 
     const coordinatorNumbers = new Set<string>();

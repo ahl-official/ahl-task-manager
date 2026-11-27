@@ -35,10 +35,12 @@ export function isMisDeliveryExcluded(user?: { uid?: string | null; name?: strin
   if (!user) return false;
   if (user.isActive === false) return true;
   const name = normalizePersonName(user.name);
+  const digits = String(user.waNumber || '').replace(/\D/g, '');
   return (
     isVinittUser(user) ||
     user.uid === 'user-vishal-sir' ||
     name === 'vishal' ||
-    name.startsWith('vishal ')
+    name.startsWith('vishal ') ||
+    digits.endsWith('9892012240')
   );
 }
