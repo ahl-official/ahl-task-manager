@@ -415,12 +415,17 @@ export async function POST(req: NextRequest) {
     ).catch(err => console.error('[Tasks API] Assignee notification failed', err));
 
     // Collect coordinator / admin numbers to notify (ensuring no duplicate sends to checker or assignee)
+    const isExcludedPhone = (phone?: string | null) => {
+      const digits = String(phone || '').replace(/\D/g, '');
+      return !digits || digits.endsWith('9820188505');
+    };
+
     const coordinatorNumbers = new Set<string>();
-    if (task.handoffWa && task.handoffWa !== task.assignedToWa) {
+    if (task.handoffWa && task.handoffWa !== task.assignedToWa && !isExcludedPhone(task.handoffWa)) {
       coordinatorNumbers.add(task.handoffWa);
     }
 
-    // For Open Salon automation tasks, send to all active admins (excluding Vinitt & Vishal)
+    // ONLY Open Salon automation tasks broadcast to all active admins (Consultation tasks do NOT broadcast)
     if (isOpenSalonTask) {
       const activeAdmins = allUsers.filter((u: AHLUser) =>
         u.isActive !== false &&
@@ -429,7 +434,7 @@ export async function POST(req: NextRequest) {
         Boolean(u.waNumber)
       );
       for (const admin of activeAdmins) {
-        if (admin.waNumber && admin.waNumber !== task.assignedToWa) {
+        if (admin.waNumber && admin.waNumber !== task.assignedToWa && !isExcludedPhone(admin.waNumber)) {
           coordinatorNumbers.add(admin.waNumber);
         }
       }
@@ -437,7 +442,7 @@ export async function POST(req: NextRequest) {
 
     // Notify coordinator WA if configured
     const coordinatorWa = process.env.COORDINATOR_WA || '';
-    if (coordinatorWa && coordinatorWa !== task.assignedToWa) {
+    if (coordinatorWa && coordinatorWa !== task.assignedToWa && !isExcludedPhone(coordinatorWa)) {
       coordinatorNumbers.add(coordinatorWa);
     }
 
