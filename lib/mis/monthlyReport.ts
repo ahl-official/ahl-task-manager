@@ -112,13 +112,19 @@ export async function generateAndSendMonthlyMisReports(input?: {
     console.error('[MIS monthly] adminGetAllUsers failed', err);
     return [];
   });
-  const waByName = new Map(users.map(user => [normalizePersonName(user.name), user.waNumber]));
+  const byUid = new Map(users.map(u => [u.uid, u]));
+  const byName = new Map(users.map(u => [normalizePersonName(u.name), u]));
 
   let sent = 0;
   const errors: string[] = [];
 
   for (const report of reports) {
-    if (isMisDeliveryExcluded(report)) {
+    const user = (report.uid ? byUid.get(report.uid) : undefined) ?? byName.get(normalizePersonName(report.name));
+    if (!user || user.isActive === false) {
+      console.log(`[MIS monthly] Skipped deactivated/unknown recipient (${report.name})`);
+      continue;
+    }
+    if (isMisDeliveryExcluded(user) || isMisDeliveryExcluded(report)) {
       console.log(`[MIS monthly] Skipped excluded recipient (${report.name})`);
       continue;
     }
@@ -126,7 +132,7 @@ export async function generateAndSendMonthlyMisReports(input?: {
       continue;
     }
 
-    const phone = report.waNumber || waByName.get(normalizePersonName(report.name)) || '';
+    const phone = report.waNumber || user.waNumber || '';
     if (!phone) {
       const msg = `${report.name}: no WhatsApp number`;
       errors.push(msg);

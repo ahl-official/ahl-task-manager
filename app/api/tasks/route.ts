@@ -149,7 +149,7 @@ export async function POST(req: NextRequest) {
   let session = isAutomation
     ? {
       uid: 'automation-system',
-      name: 'Consultation Automation',
+      name: 'Automation',
       waNumber: '',
       role: 'admin' as const,
       department: 'Management',

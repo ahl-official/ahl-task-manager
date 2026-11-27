@@ -31,8 +31,9 @@ export function isVinittUser(user?: { uid?: string | null; name?: string | null;
 }
 
 /** Exclude named recipients only from automated MIS delivery, not score storage or display. */
-export function isMisDeliveryExcluded(user?: { uid?: string | null; name?: string | null; waNumber?: string | null } | null): boolean {
+export function isMisDeliveryExcluded(user?: { uid?: string | null; name?: string | null; waNumber?: string | null; isActive?: boolean | null } | null): boolean {
   if (!user) return false;
+  if (user.isActive === false) return true;
   const name = normalizePersonName(user.name);
   return (
     isVinittUser(user) ||

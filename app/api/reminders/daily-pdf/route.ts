@@ -7,7 +7,7 @@ import { adminGetAllUsers } from '@/lib/firebase/users';
 import { adminLog } from '@/lib/firebase/scores';
 import { isOpenOneTimeTask, taskEndDateKey } from '@/lib/reminders/oneTime';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
-import { isVinittUser } from '@/lib/utils/names';
+import { isVinittUser, isMisDeliveryExcluded } from '@/lib/utils/names';
 import { automatedWhatsAppDisabled, sendWhatsAppFile } from '@/lib/waha';
 import { buildDailyPendingTasksPdf } from '@/lib/reminders/pendingTasksPdf';
 import type { Task } from '@/types';
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
 
     const todayKey = indiaTodayKey();
     const activeUsers = users.filter(user => {
-      if (user.isActive === false || isVinittUser(user)) return false;
+      if (user.isActive === false || isMisDeliveryExcluded(user)) return false;
       const digits = String(user.waNumber || '').replace(/\D/g, '');
       return digits.length >= 10;
     });

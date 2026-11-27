@@ -5,7 +5,8 @@
 import { createSign } from 'crypto';
 import { hasGoogleSheetsAuth } from '@/lib/google/sheets';
 import { parseSheetDate } from '@/lib/utils/indiaDate';
-import { isMisDeliveryExcluded } from '@/lib/utils/names';
+import { isMisDeliveryExcluded, normalizePersonName } from '@/lib/utils/names';
+import { adminGetAllUsers } from '@/lib/firebase/users';
 import { sendWhatsAppPdfFromDriveLink, automatedWhatsAppDisabled } from '@/lib/waha';
 
 export const DEFAULT_MIS_REPORT_SPREADSHEET_ID = '1seVqJ5xPqva1Si6CXDpuZSePvP40PDO2fzJSJfss8GU';
@@ -364,6 +365,9 @@ export async function generateAndSendReports(input?: { dryRun?: boolean; onlyNam
     if (name && phone) nameToPhone[String(name)] = String(phone).trim();
   }
 
+  const users = await adminGetAllUsers().catch(() => []);
+  const usersByName = new Map(users.map(u => [normalizePersonName(u.name), u]));
+
   const now = new Date();
   const currentMonth = MONTH_NAMES[now.getMonth()];
   const templateId = misDocTemplateId();
@@ -388,7 +392,13 @@ export async function generateAndSendReports(input?: { dryRun?: boolean; onlyNam
       skipped += 1;
       continue;
     }
-    if (isMisDeliveryExcluded({ name: String(name), waNumber: String(nameToPhone[String(name)] || '') })) {
+    const matchedUser = usersByName.get(normalizePersonName(name));
+    if (matchedUser && matchedUser.isActive === false) {
+      console.log(`[MIS appsScript] Skipped deactivated recipient (${name})`);
+      skipped += 1;
+      continue;
+    }
+    if (isMisDeliveryExcluded({ name: String(name), waNumber: String(nameToPhone[String(name)] || ''), isActive: matchedUser?.isActive })) {
       console.log(`[MIS appsScript] Skipped excluded recipient (${name})`);
       skipped += 1;
       continue;

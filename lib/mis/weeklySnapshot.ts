@@ -357,13 +357,19 @@ export async function generateAndSendWeeklyMisPdfReports(input?: {
   const { sendWhatsAppFile } = await import('@/lib/waha');
 
   const users = await adminGetAllUsers().catch(() => []);
-  const waByName = new Map(users.map(u => [normalizePersonName(u.name), u.waNumber]));
+  const byUid = new Map(users.map(u => [u.uid, u]));
+  const byName = new Map(users.map(u => [normalizePersonName(u.name), u]));
 
   let sent = 0;
   const errors: string[] = [];
 
   for (const score of scores) {
-    if (isMisDeliveryExcluded(score)) {
+    const user = (score.uid ? byUid.get(score.uid) : undefined) ?? byName.get(normalizePersonName(score.name));
+    if (!user || user.isActive === false) {
+      console.log(`[MIS weekly] Skipped deactivated/unknown recipient (${score.name})`);
+      continue;
+    }
+    if (isMisDeliveryExcluded(user) || isMisDeliveryExcluded(score)) {
       console.log(`[MIS weekly] Skipped excluded recipient (${score.name})`);
       continue;
     }
@@ -372,7 +378,7 @@ export async function generateAndSendWeeklyMisPdfReports(input?: {
       continue;
     }
 
-    const phone = score.waNumber || waByName.get(normalizePersonName(score.name)) || '';
+    const phone = score.waNumber || user.waNumber || '';
     if (!phone) {
       errors.push(`${score.name}: no WhatsApp number`);
       continue;

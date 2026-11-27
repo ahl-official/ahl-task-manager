@@ -10,7 +10,7 @@ import {
   indiaHourNow,
   oneTimeHighPriority,
 } from '@/lib/reminders/oneTime';
-import { isVinittUser } from '@/lib/utils/names';
+import { isVinittUser, isMisDeliveryExcluded } from '@/lib/utils/names';
 import { automatedWhatsAppDisabled, sendWhatsApp, msgHighPriorityRedBall } from '@/lib/waha';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 
@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
   try {
     const users = await adminGetAllUsers();
     const activeUsers = users.filter(user => {
-      if (user.isActive === false || isVinittUser(user)) return false;
+      if (user.isActive === false || isMisDeliveryExcluded(user)) return false;
       const digits = String(user.waNumber || '').replace(/\D/g, '');
       return digits.length >= 10;
     });

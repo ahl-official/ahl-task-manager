@@ -12,7 +12,7 @@ import {
 } from '@/lib/reminders/oneTime';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { formatDate } from '@/lib/utils';
-import { isVinittUser } from '@/lib/utils/names';
+import { isVinittUser, isMisDeliveryExcluded } from '@/lib/utils/names';
 import { automatedWhatsAppDisabled, sendWhatsApp, msgDailyHighPriorityTasks, msgDailyTasksDueToday } from '@/lib/waha';
 import type { Task } from '@/types';
 
@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
   try {
     const users = await adminGetAllUsers();
     const activeUsers = users.filter(user => {
-      if (user.isActive === false || isVinittUser(user)) return false;
+      if (user.isActive === false || isMisDeliveryExcluded(user)) return false;
       const digits = String(user.waNumber || '').replace(/\D/g, '');
       return digits.length >= 10;
     });

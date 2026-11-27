@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { adminGetAllUsers } from '@/lib/firebase/users';
 import { getRecurringChecklist } from '@/lib/cloudflare/recurring';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
-import { namesEqual, isVinittUser } from '@/lib/utils/names';
+import { namesEqual, isVinittUser, isMisDeliveryExcluded } from '@/lib/utils/names';
 import { automatedWhatsAppDisabled, sendWhatsApp, msgUnifiedRecurringReminder } from '@/lib/waha';
 
 
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
   try {
     const users = await adminGetAllUsers();
     const activeUsers = users.filter(u => {
-      if (u.isActive === false || isVinittUser(u)) return false;
+      if (u.isActive === false || isMisDeliveryExcluded(u)) return false;
       const digits = String(u.waNumber || '').replace(/\D/g, '');
       return digits.length >= 10;
     });
