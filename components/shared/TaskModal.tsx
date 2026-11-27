@@ -362,7 +362,6 @@ export default function TaskModal({ task, onClose, role, currentUid, onUpdate, o
           {/* Details grid */}
           <div className="grid grid-cols-2 gap-2 sm:gap-3">
             <Detail icon={User} label="Assigned To" value={task.assignedToName} />
-            <Detail icon={User} label="Created By" value={task.createdByName || '—'} />
             <Detail
               icon={User}
               label="Checker (Handoff)"
