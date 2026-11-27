@@ -13,6 +13,7 @@ import {
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { formatDate } from '@/lib/utils';
 import { isVinittUser, isMisDeliveryExcluded } from '@/lib/utils/names';
+import { getAllNotificationPreferences, isNotificationEnabled } from '@/lib/reminders/preferences';
 import { automatedWhatsAppDisabled, sendWhatsApp, msgDailyHighPriorityTasks, msgDailyTasksDueToday } from '@/lib/waha';
 import type { Task } from '@/types';
 
@@ -41,9 +42,12 @@ export async function GET(req: NextRequest) {
   const errors: string[] = [];
 
   try {
-    const users = await adminGetAllUsers();
+    const [users, allPrefs] = await Promise.all([
+      adminGetAllUsers(),
+      getAllNotificationPreferences(),
+    ]);
     const activeUsers = users.filter(user => {
-      if (user.isActive === false || isVinittUser(user)) return false;
+      if (!isNotificationEnabled(user, 'morningReminder', allPrefs)) return false;
       const digits = String(user.waNumber || '').replace(/\D/g, '');
       return digits.length >= 10;
     });

@@ -29,6 +29,7 @@ import { hasCloudflareApi } from '@/lib/cloudflare/api';
 import { createRecurringTemplate } from '@/lib/cloudflare/recurring';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { normalizePersonName, isMisDeliveryExcluded } from '@/lib/utils/names';
+import { getAllNotificationPreferences, isNotificationEnabled } from '@/lib/reminders/preferences';
 
 
 export const dynamic = 'force-dynamic';
@@ -427,10 +428,12 @@ export async function POST(req: NextRequest) {
 
     // ONLY Open Salon automation tasks broadcast to all active admins (Consultation tasks do NOT broadcast)
     if (isOpenSalonTask) {
+      const allPrefs = await getAllNotificationPreferences().catch(() => ({}));
       const activeAdmins = allUsers.filter((u: AHLUser) =>
         u.isActive !== false &&
         u.role === 'admin' &&
         !isMisDeliveryExcluded(u) &&
+        isNotificationEnabled(u, 'openSalonAlerts', allPrefs) &&
         Boolean(u.waNumber)
       );
       for (const admin of activeAdmins) {

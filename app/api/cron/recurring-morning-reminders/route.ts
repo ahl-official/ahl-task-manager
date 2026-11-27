@@ -6,6 +6,7 @@ import { adminGetAllUsers } from '@/lib/firebase/users';
 import { getRecurringChecklist } from '@/lib/cloudflare/recurring';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { namesEqual, isVinittUser, isMisDeliveryExcluded } from '@/lib/utils/names';
+import { getAllNotificationPreferences, isNotificationEnabled } from '@/lib/reminders/preferences';
 import { automatedWhatsAppDisabled, sendWhatsApp, msgUnifiedRecurringReminder } from '@/lib/waha';
 
 
@@ -27,9 +28,12 @@ export async function GET(req: NextRequest) {
   const errors: Array<{ name: string; error: string }> = [];
 
   try {
-    const users = await adminGetAllUsers();
+    const [users, allPrefs] = await Promise.all([
+      adminGetAllUsers(),
+      getAllNotificationPreferences(),
+    ]);
     const activeUsers = users.filter(u => {
-      if (u.isActive === false || isVinittUser(u)) return false;
+      if (!isNotificationEnabled(u, 'morningReminder', allPrefs)) return false;
       const digits = String(u.waNumber || '').replace(/\D/g, '');
       return digits.length >= 10;
     });

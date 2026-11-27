@@ -8,6 +8,7 @@ import { adminLog } from '@/lib/firebase/scores';
 import { isOpenOneTimeTask, taskEndDateKey } from '@/lib/reminders/oneTime';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 import { isVinittUser, isMisDeliveryExcluded } from '@/lib/utils/names';
+import { getAllNotificationPreferences, isNotificationEnabled } from '@/lib/reminders/preferences';
 import { automatedWhatsAppDisabled, sendWhatsAppFile } from '@/lib/waha';
 import { buildDailyPendingTasksPdf } from '@/lib/reminders/pendingTasksPdf';
 import type { Task } from '@/types';
@@ -35,11 +36,14 @@ export async function GET(req: NextRequest) {
   const errors: string[] = [];
 
   try {
-    const users = await adminGetAllUsers();
+    const [users, allPrefs] = await Promise.all([
+      adminGetAllUsers(),
+      getAllNotificationPreferences(),
+    ]);
 
     const todayKey = indiaTodayKey();
     const activeUsers = users.filter(user => {
-      if (user.isActive === false || isVinittUser(user)) return false;
+      if (!isNotificationEnabled(user, 'dailyPdf', allPrefs)) return false;
       const digits = String(user.waNumber || '').replace(/\D/g, '');
       return digits.length >= 10;
     });

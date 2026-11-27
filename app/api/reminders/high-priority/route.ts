@@ -11,6 +11,7 @@ import {
   oneTimeHighPriority,
 } from '@/lib/reminders/oneTime';
 import { isVinittUser, isMisDeliveryExcluded } from '@/lib/utils/names';
+import { getAllNotificationPreferences, isNotificationEnabled } from '@/lib/reminders/preferences';
 import { automatedWhatsAppDisabled, sendWhatsApp, msgHighPriorityRedBall } from '@/lib/waha';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
 
@@ -41,9 +42,12 @@ export async function GET(req: NextRequest) {
   const errors: string[] = [];
 
   try {
-    const users = await adminGetAllUsers();
+    const [users, allPrefs] = await Promise.all([
+      adminGetAllUsers(),
+      getAllNotificationPreferences(),
+    ]);
     const activeUsers = users.filter(user => {
-      if (user.isActive === false || isMisDeliveryExcluded(user)) return false;
+      if (!isNotificationEnabled(user, 'highPriority', allPrefs)) return false;
       const digits = String(user.waNumber || '').replace(/\D/g, '');
       return digits.length >= 10;
     });
