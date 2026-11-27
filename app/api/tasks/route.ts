@@ -393,6 +393,37 @@ export async function POST(req: NextRequest) {
       task.taskId,
     ).catch(err => console.error('[Tasks API] Handoff notification failed', err));
 
+    // For Zenoti automation tasks, notify BOTH Yusra and Tejal
+    const isZenotiTask = isAutomation && (() => {
+      const src = String(body.source || body.automationType || body.automationName || '').toLowerCase();
+      if (src.includes('zenoti') || src.includes('open salon')) return true;
+      const desc = String(body.description || '').toLowerCase();
+      const notes = String(body.notes || '').toLowerCase();
+      return notes.includes('open salon') || notes.includes('zenoti') || notes.includes('fixing payment status') ||
+             desc.includes('open salon') || desc.includes('zenoti') ||
+             (desc.includes('fixing on') && desc.includes('order invoice'));
+    })();
+
+    if (isZenotiTask) {
+      const tejalUser = allUsers.find((u: AHLUser) => u.isActive !== false && (u.uid === 'user-tejal' || normalizePersonName(u.name) === 'tejal'));
+      const yusraUser = allUsers.find((u: AHLUser) => u.isActive !== false && (u.uid === 'user-yusra' || normalizePersonName(u.name) === 'yusra'));
+      const extraNumbers = [tejalUser?.waNumber, yusraUser?.waNumber]
+        .filter((wa): wa is string => Boolean(wa && wa !== task.handoffWa && wa !== task.assignedToWa));
+
+      for (const wa of Array.from(new Set(extraNumbers))) {
+        await sendWhatsApp(
+          wa,
+          msgCoordinatorNotification({
+            taskId:         task.taskId,
+            description:    task.description,
+            assignedToName: task.assignedToName,
+            priority:       task.priority,
+          }),
+          task.taskId,
+        ).catch(err => console.error('[Tasks API] Zenoti extra admin notification failed', err));
+      }
+    }
+
     // Notify coordinator WA if configured
     const coordinatorWa = process.env.COORDINATOR_WA || '';
     if (coordinatorWa && coordinatorWa !== task.handoffWa) {
