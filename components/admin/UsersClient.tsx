@@ -357,19 +357,20 @@ export default function UsersClient({
     ? departments.filter(d => d.name.toLowerCase().includes(deptSearch.trim().toLowerCase()))
     : departments;
 
-  // Filter WhatsApp notification table
+  // Filter WhatsApp notification table (strictly active users only - never show deactivated users)
+  const activeUsers = users.filter(user => user.isActive !== false);
   const notifSearchTerms = notifSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const visibleNotifUsers = notifSearchTerms.length
-    ? users.filter(user => {
+    ? activeUsers.filter(user => {
         const fields = [user.name, user.department, user.uid, user.waNumber, roleLabel(normalizeRole(user.role) as any)];
         const searchable = fields.join(' ').toLowerCase();
         return notifSearchTerms.every(term => searchable.includes(term));
       })
-    : users;
+    : activeUsers;
 
-  // Helper to count members in a department
+  // Helper to count active members in a department
   const getDeptMemberCount = (deptName: string) => {
-    return users.filter(u => u.department?.trim().toLowerCase() === deptName.trim().toLowerCase()).length;
+    return users.filter(u => u.isActive !== false && u.department?.trim().toLowerCase() === deptName.trim().toLowerCase()).length;
   };
 
   return (
