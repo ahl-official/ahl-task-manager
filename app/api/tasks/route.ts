@@ -28,7 +28,7 @@ import { getPersonalTimelyTasks, mergePersonalDashboardTasks } from '@/lib/utils
 import { hasCloudflareApi } from '@/lib/cloudflare/api';
 import { createRecurringTemplate } from '@/lib/cloudflare/recurring';
 import { indiaTodayKey } from '@/lib/utils/indiaDate';
-import { normalizePersonName } from '@/lib/utils/names';
+import { normalizePersonName, isMisDeliveryExcluded } from '@/lib/utils/names';
 
 
 export const dynamic = 'force-dynamic';
@@ -159,6 +159,38 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   try {
     const body = await req.json();
+
+    const desc = String(body.description || '').toLowerCase();
+    const notes = String(body.notes || '').toLowerCase();
+    const src = String(body.source || body.automationType || body.automationName || '').toLowerCase();
+
+    const isOpenSalonTask = isAutomation && (
+      src.includes('zenoti') ||
+      src.includes('open salon') ||
+      notes.includes('open salon') ||
+      notes.includes('zenoti') ||
+      notes.includes('fixing payment status') ||
+      desc.includes('open salon') ||
+      desc.includes('zenoti') ||
+      (desc.includes('fixing on') && desc.includes('order invoice'))
+    );
+
+    const isConsultationTask = isAutomation && !isOpenSalonTask && (
+      src.includes('consultation') ||
+      desc.includes('visited for consultation') ||
+      desc.includes('has not booked the order') ||
+      body.department === 'Consultant'
+    );
+
+    if (isAutomation) {
+      if (isOpenSalonTask) {
+        session.name = 'Open Salon Automation';
+      } else if (isConsultationTask) {
+        session.name = 'Consultation Automation';
+      } else {
+        session.name = body.createdByName || 'Automation';
+      }
+    }
 
     const [creator, allUsers] = await Promise.all([
       isAutomation ? Promise.resolve(null) : adminGetUserByUid(session.uid).catch(() => null),
@@ -382,53 +414,36 @@ export async function POST(req: NextRequest) {
       task.taskId,
     ).catch(err => console.error('[Tasks API] Assignee notification failed', err));
 
-    await sendWhatsApp(
-      task.handoffWa,
-      msgCoordinatorNotification({
-        taskId:         task.taskId,
-        description:    task.description,
-        assignedToName: task.assignedToName,
-        priority:       task.priority,
-      }),
-      task.taskId,
-    ).catch(err => console.error('[Tasks API] Handoff notification failed', err));
+    // Collect coordinator / admin numbers to notify (ensuring no duplicate sends to checker or assignee)
+    const coordinatorNumbers = new Set<string>();
+    if (task.handoffWa && task.handoffWa !== task.assignedToWa) {
+      coordinatorNumbers.add(task.handoffWa);
+    }
 
-    // For Zenoti automation tasks, notify BOTH Yusra and Tejal
-    const isZenotiTask = isAutomation && (() => {
-      const src = String(body.source || body.automationType || body.automationName || '').toLowerCase();
-      if (src.includes('zenoti') || src.includes('open salon')) return true;
-      const desc = String(body.description || '').toLowerCase();
-      const notes = String(body.notes || '').toLowerCase();
-      return notes.includes('open salon') || notes.includes('zenoti') || notes.includes('fixing payment status') ||
-             desc.includes('open salon') || desc.includes('zenoti') ||
-             (desc.includes('fixing on') && desc.includes('order invoice'));
-    })();
-
-    if (isZenotiTask) {
-      const tejalUser = allUsers.find((u: AHLUser) => u.isActive !== false && (u.uid === 'user-tejal' || normalizePersonName(u.name) === 'tejal'));
-      const yusraUser = allUsers.find((u: AHLUser) => u.isActive !== false && (u.uid === 'user-yusra' || normalizePersonName(u.name) === 'yusra'));
-      const extraNumbers = [tejalUser?.waNumber, yusraUser?.waNumber]
-        .filter((wa): wa is string => Boolean(wa && wa !== task.handoffWa && wa !== task.assignedToWa));
-
-      for (const wa of Array.from(new Set(extraNumbers))) {
-        await sendWhatsApp(
-          wa,
-          msgCoordinatorNotification({
-            taskId:         task.taskId,
-            description:    task.description,
-            assignedToName: task.assignedToName,
-            priority:       task.priority,
-          }),
-          task.taskId,
-        ).catch(err => console.error('[Tasks API] Zenoti extra admin notification failed', err));
+    // For Open Salon automation tasks, send to all active admins (excluding Vinitt & Vishal)
+    if (isOpenSalonTask) {
+      const activeAdmins = allUsers.filter((u: AHLUser) =>
+        u.isActive !== false &&
+        u.role === 'admin' &&
+        !isMisDeliveryExcluded(u) &&
+        Boolean(u.waNumber)
+      );
+      for (const admin of activeAdmins) {
+        if (admin.waNumber && admin.waNumber !== task.assignedToWa) {
+          coordinatorNumbers.add(admin.waNumber);
+        }
       }
     }
 
     // Notify coordinator WA if configured
     const coordinatorWa = process.env.COORDINATOR_WA || '';
-    if (coordinatorWa && coordinatorWa !== task.handoffWa) {
+    if (coordinatorWa && coordinatorWa !== task.assignedToWa) {
+      coordinatorNumbers.add(coordinatorWa);
+    }
+
+    for (const wa of coordinatorNumbers) {
       await sendWhatsApp(
-        coordinatorWa,
+        wa,
         msgCoordinatorNotification({
           taskId:         task.taskId,
           description:    task.description,
@@ -436,7 +451,7 @@ export async function POST(req: NextRequest) {
           priority:       task.priority,
         }),
         task.taskId,
-      ).catch(err => console.error('[Tasks API] Coordinator notification failed', err));
+      ).catch(err => console.error('[Tasks API] Coordinator/Admin notification failed', err));
     }
 
     // The Cloudflare create route already records TASK_CREATED.
