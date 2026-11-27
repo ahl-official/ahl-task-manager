@@ -441,7 +441,7 @@ export async function POST(req: NextRequest) {
       coordinatorNumbers.add(coordinatorWa);
     }
 
-    for (const wa of coordinatorNumbers) {
+    for (const wa of Array.from(coordinatorNumbers)) {
       await sendWhatsApp(
         wa,
         msgCoordinatorNotification({
