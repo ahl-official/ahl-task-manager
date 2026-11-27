@@ -105,6 +105,12 @@ export default function UsersClient({
   }
 
   async function toggleWaPreference(uid: string, key: keyof UserNotificationPrefs, currentVal: boolean, userName: string) {
+    const targetUser = users.find(u => u.uid === uid);
+    if (key === 'openSalonAlerts' && normalizeRole(targetUser?.role) !== 'admin') {
+      toast.error('Open Salon alerts are broadcast to Admins only');
+      return;
+    }
+
     const newVal = !currentVal;
     const saveKey = `${uid}-${key}`;
     setSavingPrefKey(saveKey);
@@ -723,6 +729,7 @@ export default function UsersClient({
                     </tr>
                   )}
                   {visibleNotifUsers.map(user => {
+                    const isAdmin = normalizeRole(user.role) === 'admin';
                     const prefs = waPreferences[user.uid] || {
                       dailyPdf: false,
                       morningReminder: false,
@@ -732,8 +739,10 @@ export default function UsersClient({
                     };
 
                     const renderToggle = (key: keyof UserNotificationPrefs, label: string) => {
-                      const enabled = Boolean(prefs[key]);
+                      const isNonAdminOpenSalon = key === 'openSalonAlerts' && !isAdmin;
+                      const enabled = isNonAdminOpenSalon ? false : Boolean(prefs[key]);
                       const isSaving = savingPrefKey === `${user.uid}-${key}`;
+                      const isDisabled = isSaving || user.isActive === false || isNonAdminOpenSalon;
 
                       return (
                         <div className="flex flex-col items-center justify-center">
@@ -741,13 +750,17 @@ export default function UsersClient({
                             type="button"
                             role="switch"
                             aria-checked={enabled}
-                            disabled={isSaving || user.isActive === false}
+                            disabled={isDisabled}
                             onClick={() => toggleWaPreference(user.uid, key, enabled, user.name)}
                             className={cn(
-                              'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 disabled:opacity-40 disabled:cursor-not-allowed',
+                              'relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 disabled:opacity-40 disabled:cursor-not-allowed',
                               enabled ? 'bg-emerald-500' : 'bg-gray-200',
                             )}
-                            title={`${label}: ${enabled ? 'Enabled' : 'Disabled'}`}
+                            title={
+                              isNonAdminOpenSalon
+                                ? 'Open Salon alerts are broadcast to Admins only'
+                                : `${label}: ${enabled ? 'Enabled' : 'Disabled'}`
+                            }
                           >
                             <span
                               className={cn(
@@ -756,6 +769,11 @@ export default function UsersClient({
                               )}
                             />
                           </button>
+                          {isNonAdminOpenSalon && (
+                            <span className="text-[9px] text-gray-400 font-medium mt-0.5 select-none leading-none">
+                              Admin only
+                            </span>
+                          )}
                         </div>
                       );
                     };

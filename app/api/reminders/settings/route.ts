@@ -28,12 +28,13 @@ export async function GET() {
     for (const user of allUsers) {
       const defaults = getDefaultPreferences(user);
       const custom = storedPrefs[user.uid] || {};
+      const isAdmin = user.role === 'admin';
       resolvedPrefs[user.uid] = {
         dailyPdf: custom.dailyPdf ?? defaults.dailyPdf,
         morningReminder: custom.morningReminder ?? defaults.morningReminder,
         highPriority: custom.highPriority ?? defaults.highPriority,
         misReports: custom.misReports ?? defaults.misReports,
-        openSalonAlerts: custom.openSalonAlerts ?? defaults.openSalonAlerts,
+        openSalonAlerts: isAdmin ? (custom.openSalonAlerts ?? defaults.openSalonAlerts) : false,
       };
     }
 

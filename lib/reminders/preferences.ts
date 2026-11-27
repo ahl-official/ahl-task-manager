@@ -96,6 +96,10 @@ export function isNotificationEnabled(
   allPrefs?: AllNotificationPreferences,
 ): boolean {
   if (user.isActive === false) return false;
+  // Open Salon alerts are strictly restricted to active operational Admins
+  if (type === 'openSalonAlerts' && user.role !== 'admin') {
+    return false;
+  }
   const uid = user.uid || '';
   const userPrefs = allPrefs?.[uid];
 
