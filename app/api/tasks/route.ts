@@ -203,9 +203,10 @@ export async function POST(req: NextRequest) {
       body.handoffUid = match.user.uid;
     }
 
-    // ONLY for automated tasks, set default checker to Tejal
+    // ONLY for automated tasks, set default checker to Yusra
     if (session.uid === 'automation-system') {
-      body.handoffUid = body.handoffUid || 'user-tejal';
+      const yusraUser = allUsers.find((u: AHLUser) => u.isActive !== false && (u.uid === 'user-yusra' || normalizePersonName(u.name) === 'yusra'));
+      body.handoffUid = body.handoffUid || (yusraUser ? yusraUser.uid : 'user-yusra');
     } else {
       body.handoffUid = body.handoffUid || session.uid;
     }
