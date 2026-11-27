@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
   try {
     const users = await adminGetAllUsers();
     const activeUsers = users.filter(u => {
-      if (u.isActive === false || isMisDeliveryExcluded(u)) return false;
+      if (u.isActive === false || isVinittUser(u)) return false;
       const digits = String(u.waNumber || '').replace(/\D/g, '');
       return digits.length >= 10;
     });

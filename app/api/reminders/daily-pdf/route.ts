@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
 
     const todayKey = indiaTodayKey();
     const activeUsers = users.filter(user => {
-      if (user.isActive === false || isMisDeliveryExcluded(user)) return false;
+      if (user.isActive === false || isVinittUser(user)) return false;
       const digits = String(user.waNumber || '').replace(/\D/g, '');
       return digits.length >= 10;
     });
