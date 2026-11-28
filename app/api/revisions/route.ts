@@ -8,7 +8,7 @@ import {
   serializeRevision,
 } from '@/lib/firebase/revisions';
 import { adminGetTask, adminGetTasksByIds, serializeTask } from '@/lib/firebase/tasks';
-import { adminGetAllUsers } from '@/lib/firebase/users';
+import { adminGetAllUsers, adminGetUserByUid } from '@/lib/firebase/users';
 import { hydrateTasksWithUsers } from '@/lib/utils/taskHydration';
 import { adminDb } from '@/lib/firebase/admin';
 import { adminLog } from '@/lib/firebase/scores';
@@ -185,17 +185,20 @@ export async function POST(req: NextRequest) {
       }).catch(() => {});
     } else {
       // Notify handoff for date extension
-      await sendWhatsApp(
-        task.handoffWa,
-        msgRevisionRequested({
-          taskId:          task.taskId,
-          description:     task.description,
-          requestedByName: session.name,
-          requestedDate:   formatDate(requestedDate),
-          reason:          cleanReason,
-        }),
-        taskId,
-      ).catch(() => {});
+      const checker = await adminGetUserByUid(task.handoffUid).catch(() => null);
+      if (!checker || checker.isActive !== false) {
+        await sendWhatsApp(
+          task.handoffWa,
+          msgRevisionRequested({
+            taskId:          task.taskId,
+            description:     task.description,
+            requestedByName: session.name,
+            requestedDate:   formatDate(requestedDate),
+            reason:          cleanReason,
+          }),
+          taskId,
+        ).catch(() => {});
+      }
 
       await adminLog('REVISION_REQUESTED_PORTAL', `Revision requested for ${taskId} by ${session.name}`, {
         taskId, uid: session.uid,
@@ -353,14 +356,17 @@ export async function PATCH(req: NextRequest) {
         });
       } catch {}
 
-      await sendWhatsApp(
-        task.assignedToWa,
-        msgRevisionApproved({
-          taskId:  task.taskId,
-          newDate: formatDate(revision.requestedDate.toDate().toISOString()),
-        }),
-        taskId,
-      ).catch(()=>{});
+      const assigneeUser = await adminGetUserByUid(task.assignedTo).catch(() => null);
+      if (!assigneeUser || assigneeUser.isActive !== false) {
+        await sendWhatsApp(
+          task.assignedToWa,
+          msgRevisionApproved({
+            taskId:  task.taskId,
+            newDate: formatDate(revision.requestedDate.toDate().toISOString()),
+          }),
+          taskId,
+        ).catch(()=>{});
+      }
 
       await adminLog('REVISION_DECIDED_PORTAL', `Revision approved for ${taskId} by ${session.name}`, {
         taskId, uid: session.uid,
@@ -394,11 +400,14 @@ export async function PATCH(req: NextRequest) {
         });
       } catch {}
 
-      await sendWhatsApp(
-        task.assignedToWa,
-        msgRevisionRejected({ taskId: task.taskId }),
-        taskId,
-      ).catch(()=>{});
+      const assigneeUser = await adminGetUserByUid(task.assignedTo).catch(() => null);
+      if (!assigneeUser || assigneeUser.isActive !== false) {
+        await sendWhatsApp(
+          task.assignedToWa,
+          msgRevisionRejected({ taskId: task.taskId }),
+          taskId,
+        ).catch(()=>{});
+      }
 
       await adminLog('REVISION_DECIDED_PORTAL', `Revision rejected for ${taskId} by ${session.name}`, {
         taskId, uid: session.uid,

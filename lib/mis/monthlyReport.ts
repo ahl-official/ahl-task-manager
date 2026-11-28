@@ -108,10 +108,14 @@ export async function generateAndSendMonthlyMisReports(input?: {
     console.warn('[MIS monthly] no weekly rows for this month — weekly cron may have failed or store is empty');
   }
 
-  const users = await adminGetAllUsers().catch(err => {
-    console.error('[MIS monthly] adminGetAllUsers failed', err);
-    return [];
-  });
+  const { getAllNotificationPreferences, isNotificationEnabled } = await import('@/lib/reminders/preferences');
+  const [users, allPrefs] = await Promise.all([
+    adminGetAllUsers().catch(err => {
+      console.error('[MIS monthly] adminGetAllUsers failed', err);
+      return [];
+    }),
+    getAllNotificationPreferences().catch(() => ({})),
+  ]);
   const byUid = new Map(users.map(u => [u.uid, u]));
   const byName = new Map(users.map(u => [normalizePersonName(u.name), u]));
 
@@ -120,8 +124,8 @@ export async function generateAndSendMonthlyMisReports(input?: {
 
   for (const report of reports) {
     const user = (report.uid ? byUid.get(report.uid) : undefined) ?? byName.get(normalizePersonName(report.name));
-    if (!user || user.isActive === false) {
-      console.log(`[MIS monthly] Skipped deactivated/unknown recipient (${report.name})`);
+    if (!user || user.isActive === false || !isNotificationEnabled(user, 'misReports', allPrefs)) {
+      console.log(`[MIS monthly] Skipped deactivated/disabled recipient (${report.name})`);
       continue;
     }
     if (isMisDeliveryExcluded(user) || isMisDeliveryExcluded(report)) {

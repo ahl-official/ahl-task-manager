@@ -355,8 +355,12 @@ export async function generateAndSendWeeklyMisPdfReports(input?: {
   const { adminGetAllUsers } = await import('@/lib/firebase/users');
   const { buildWeeklyMisPdfAsync, weeklyMisPdfFilename } = await import('@/lib/mis/pdfReport');
   const { sendWhatsAppFile } = await import('@/lib/waha');
+  const { getAllNotificationPreferences, isNotificationEnabled } = await import('@/lib/reminders/preferences');
 
-  const users = await adminGetAllUsers().catch(() => []);
+  const [users, allPrefs] = await Promise.all([
+    adminGetAllUsers().catch(() => []),
+    getAllNotificationPreferences().catch(() => ({})),
+  ]);
   const byUid = new Map(users.map(u => [u.uid, u]));
   const byName = new Map(users.map(u => [normalizePersonName(u.name), u]));
 
@@ -365,8 +369,8 @@ export async function generateAndSendWeeklyMisPdfReports(input?: {
 
   for (const score of scores) {
     const user = (score.uid ? byUid.get(score.uid) : undefined) ?? byName.get(normalizePersonName(score.name));
-    if (!user || user.isActive === false) {
-      console.log(`[MIS weekly] Skipped deactivated/unknown recipient (${score.name})`);
+    if (!user || user.isActive === false || !isNotificationEnabled(user, 'misReports', allPrefs)) {
+      console.log(`[MIS weekly] Skipped deactivated/disabled recipient (${score.name})`);
       continue;
     }
     if (isMisDeliveryExcluded(user) || isMisDeliveryExcluded(score)) {

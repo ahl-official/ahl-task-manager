@@ -56,7 +56,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         method: 'POST', body: JSON.stringify({ action, actorUid: session.uid, actorRole: session.role })
       }))!;
       if (action === 'complete' && !['Completed', 'Verified'].includes(task.status) && !isAdmin && task.handoffWa && task.handoffWa !== task.assignedToWa) {
-        await sendWhatsApp(task.handoffWa, msgTaskCompleted({ taskId: task.taskId, description: task.description, assignedToName: task.assignedToName }), task.taskId).catch(() => { });
+        const checkerUser = await adminGetUserByUid(task.handoffUid).catch(() => null);
+        if (!checkerUser || checkerUser.isActive !== false) {
+          await sendWhatsApp(task.handoffWa, msgTaskCompleted({ taskId: task.taskId, description: task.description, assignedToName: task.assignedToName }), task.taskId).catch(() => { });
+        }
       }
       await adminLog('TASK_UPDATED', params.id + ' ' + action + ' by ' + session.name, { taskId: params.id, uid: session.uid }).catch(() => { });
       updateTaskInReadCache(params.id, result);
@@ -149,16 +152,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       }
 
       if (!isAdmin && !isRecurring && task.handoffWa && task.handoffWa !== task.assignedToWa) {
-        // Notify handoff to verify
-        await sendWhatsApp(
-          task.handoffWa,
-          msgTaskCompleted({
-            taskId: task.taskId,
-            description: task.description,
-            assignedToName: task.assignedToName,
-          }),
-          task.taskId,
-        );
+        const checkerUser = await adminGetUserByUid(task.handoffUid).catch(() => null);
+        if (!checkerUser || checkerUser.isActive !== false) {
+          // Notify handoff to verify
+          await sendWhatsApp(
+            task.handoffWa,
+            msgTaskCompleted({
+              taskId: task.taskId,
+              description: task.description,
+              assignedToName: task.assignedToName,
+            }),
+            task.taskId,
+          );
+        }
       }
 
       await adminLog('TASK_DONE', `${params.id} completed by ${session.name}`, {

@@ -365,7 +365,11 @@ export async function generateAndSendReports(input?: { dryRun?: boolean; onlyNam
     if (name && phone) nameToPhone[String(name)] = String(phone).trim();
   }
 
-  const users = await adminGetAllUsers().catch(() => []);
+  const { getAllNotificationPreferences, isNotificationEnabled } = await import('@/lib/reminders/preferences');
+  const [users, allPrefs] = await Promise.all([
+    adminGetAllUsers().catch(() => []),
+    getAllNotificationPreferences().catch(() => ({})),
+  ]);
   const usersByName = new Map(users.map(u => [normalizePersonName(u.name), u]));
 
   const now = new Date();
@@ -393,8 +397,8 @@ export async function generateAndSendReports(input?: { dryRun?: boolean; onlyNam
       continue;
     }
     const matchedUser = usersByName.get(normalizePersonName(name));
-    if (matchedUser && matchedUser.isActive === false) {
-      console.log(`[MIS appsScript] Skipped deactivated recipient (${name})`);
+    if (matchedUser && (matchedUser.isActive === false || !isNotificationEnabled(matchedUser, 'misReports', allPrefs))) {
+      console.log(`[MIS appsScript] Skipped deactivated/disabled recipient (${name})`);
       skipped += 1;
       continue;
     }
