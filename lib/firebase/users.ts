@@ -204,6 +204,40 @@ export async function adminDeleteUser(uid: string): Promise<void> {
     return;
   }
 
+  // Mark open / pending tasks for this user as Dead
+  try {
+    const tasksSnap = await adminDb.collection('tasks')
+      .where('assignedTo', '==', uid)
+      .get();
+
+    if (!tasksSnap.empty) {
+      const now = AdminTimestamp.now();
+      const batch = adminDb.batch();
+      let count = 0;
+      for (const doc of tasksSnap.docs) {
+        const data = doc.data();
+        if (!['Completed', 'Verified', 'Dead'].includes(data.status)) {
+          const existingNotes = data.notes ? `${data.notes} | ` : '';
+          batch.update(doc.ref, {
+            status: 'Dead',
+            updatedAt: now,
+            notes: `${existingNotes}[User deleted] Task automatically marked dead`,
+          });
+          count++;
+          if (count >= 400) {
+            await batch.commit();
+            count = 0;
+          }
+        }
+      }
+      if (count > 0) {
+        await batch.commit();
+      }
+    }
+  } catch (err) {
+    console.warn('[adminDeleteUser] Failed to mark open tasks as Dead in Firestore:', err);
+  }
+
   let ref = adminDb.collection(COL).doc(uid);
   const snap = await ref.get();
 

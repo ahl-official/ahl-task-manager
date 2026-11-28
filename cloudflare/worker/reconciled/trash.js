@@ -114,7 +114,7 @@ export async function routeTrash(req, env, url, helpers) {
       const metadata = JSON.parse(template.metadata_json || '{}');
       if (!metadata.deleted || !metadata.deletedAt) return json('Recurring task is not deleted', 409);
       const deletedAt = metadata.deletedAt;
-      const affected = await env.DB.prepare('SELECT assigned_to,assigned_to_name,due_date,period_key FROM recurring_period_rows WHERE template_id=? AND is_deleted=1 AND deleted_at=? AND due_date<?').bind(id, deletedAt, new Date().toISOString().slice(0, 10)).all();
+      const affected = await env.DB.prepare('SELECT assigned_to,assigned_to_name,due_date,period_key FROM recurring_period_rows WHERE template_id=? AND (is_deleted=1 OR status=\'Deleted\') AND due_date<?').bind(id, new Date().toISOString().slice(0, 10)).all();
       delete metadata.deleted;
       delete metadata.deletedAt;
       delete metadata.deletedFrom;
@@ -125,7 +125,7 @@ export async function routeTrash(req, env, url, helpers) {
       if (sourceBefore?.status === 'Deleted') await ensureDeletionsTable(env);
       const statements = [
         env.DB.prepare('UPDATE recurring_templates SET is_active=?,metadata_json=?,updated_at=? WHERE id=?').bind(wasActive ? 1 : 0, JSON.stringify(metadata), now, id),
-        env.DB.prepare('UPDATE recurring_period_rows SET is_deleted=0,deleted_at=NULL,updated_at=? WHERE template_id=? AND is_deleted=1 AND deleted_at=?').bind(now, id, deletedAt),
+        env.DB.prepare("UPDATE recurring_period_rows SET is_deleted=0,deleted_at=NULL,status=CASE WHEN status='Deleted' THEN 'Pending' ELSE status END,updated_at=? WHERE template_id=? AND (is_deleted=1 OR status='Deleted')").bind(now, id),
       ];
       if (sourceBefore?.status === 'Deleted') statements.push(env.DB.prepare("UPDATE tasks_current SET status=(SELECT previous_status FROM task_deletions WHERE task_id=?),updated_at=? WHERE task_id=? AND status='Deleted' AND EXISTS(SELECT 1 FROM task_deletions WHERE task_id=?)").bind(id, now, id, id));
       const result = await env.DB.batch(statements);

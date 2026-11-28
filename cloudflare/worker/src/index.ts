@@ -368,11 +368,17 @@ async function routeUsers(req: Request, env: Env, url: URL) {
   if (url.pathname === '/users' && req.method === 'DELETE') {
     const uid = url.searchParams.get('uid');
     if (!uid) return json({ success: false, error: 'User id is required' }, { status: 400 });
+    const now = nowIso();
+    // Keep task history, but automatically mark any open / pending tasks assigned to the deleted user as Dead
+    await env.DB.prepare(
+      "UPDATE tasks_current SET status = 'Dead', updated_at = ?, notes = CASE WHEN notes IS NULL OR notes = '' THEN '[User deleted] Task automatically marked dead' ELSE notes || ' | [User deleted] Task automatically marked dead' END WHERE assigned_to = ? AND status NOT IN ('Completed', 'Verified', 'Dead')"
+    ).bind(now, uid).run();
     await env.DB.batch([
-      env.DB.prepare('DELETE FROM tasks_current WHERE assigned_to = ?').bind(uid),
       env.DB.prepare('DELETE FROM scores WHERE uid = ?').bind(uid),
       env.DB.prepare('DELETE FROM users WHERE uid = ?').bind(uid),
     ]);
+    await env.DB.prepare('DELETE FROM task_counts_summary WHERE assigned_to = ?').bind(uid).run();
+    await log(env, 'USER_DELETED', `User ${uid} deleted; pending tasks marked Dead`, { uid }).catch(() => {});
     return json({ success: true });
   }
 

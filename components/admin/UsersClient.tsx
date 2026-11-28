@@ -329,7 +329,7 @@ export default function UsersClient({
   }
 
   async function deleteUser(user: any) {
-    if (!confirm(`Permanently delete ${user.name}? This cannot be undone.`)) return;
+    if (!confirm(`Permanently delete ${user.name}? Any pending tasks assigned to this user will be marked Dead, and completed tasks will remain in history.`)) return;
 
     setLoading(`delete-${user.uid}`);
     try {
